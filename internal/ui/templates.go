@@ -270,6 +270,11 @@ const tplList = `
     <a class="btn btn-sm" href="/ui/{{lower (str .Entity.Kind)}}/{{lower .Entity.Name}}/excel{{filterQuery .Params}}" style="background:#16a34a;color:#fff" title="Скачать Excel">Excel ↓</a>
   </div>
 </div>
+<form method="GET" style="display:flex;gap:8px;margin-bottom:12px;max-width:460px">
+  <input type="text" name="q" value="{{.Params.Search}}" placeholder="Поиск..." style="flex:1;padding:7px 12px;border:1px solid #e2e8f0;border-radius:6px;font-size:14px" oninput="clearTimeout(window._srch);window._srch=setTimeout(()=>this.form.submit(),320)">
+  {{if .Params.Search}}<a class="btn btn-sm" href="?" style="background:#e2e8f0;color:#475569;align-self:center">✕</a>{{end}}
+  {{if $.CurrentSubsystem}}<input type="hidden" name="subsystem" value="{{$.CurrentSubsystem}}">{{end}}
+</form>
 {{if .Breadcrumbs}}
 <nav class="breadcrumb">
   <a href="/ui/{{lower (str .Entity.Kind)}}/{{lower .Entity.Name}}{{if $.CurrentSubsystem}}?subsystem={{$.CurrentSubsystem}}{{end}}">Корень</a>
@@ -410,10 +415,20 @@ const tplList = `
 </tr>{{end}}
 </tbody></table>
 {{else}}
-<p class="empty">Записей нет — <a href="/ui/{{lower (str .Entity.Kind)}}/{{lower .Entity.Name}}/new">создать первую</a></p>
+<p class="empty">{{if .Params.Search}}Ничего не найдено по запросу «{{.Params.Search}}» — <a href="?">сбросить поиск</a>{{else}}Записей нет — <a href="/ui/{{lower (str .Entity.Kind)}}/{{lower .Entity.Name}}/new">создать первую</a>{{end}}</p>
 {{end}}
 {{end}}
-</div></main>
+</div>
+{{if gt .TotalPages 1}}
+<div style="display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap">
+  {{if .HasPrev}}<a class="btn btn-secondary btn-sm" href="?page={{.PrevPage}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">← Назад</a>{{end}}
+  <span style="color:#64748b;font-size:13px">Стр. {{.Page}} из {{.TotalPages}} ({{.Total}} записей)</span>
+  {{if .HasNext}}<a class="btn btn-secondary btn-sm" href="?page={{.NextPage}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">Вперёд →</a>{{end}}
+</div>
+{{else if gt .Total 0}}
+<div style="color:#94a3b8;font-size:12px;margin-top:8px">Всего: {{.Total}}</div>
+{{end}}
+</main>
 <script>
 var _isAdmin={{if .IsAdmin}}true{{else}}false{{end}};
 var _listSel=null;

@@ -10,12 +10,15 @@ import (
 	"github.com/ivantit66/onebase/internal/metadata"
 )
 
-// ListParams controls filtering and sorting for List queries.
+// ListParams controls filtering, search, sorting and pagination for List queries.
 type ListParams struct {
 	Filters   map[string]FilterValue
 	Sort      string // field Name (empty = default sort by id)
 	Dir       string // "asc" or "desc"
 	ParentStr string // "" = no filter; "root" = parent IS NULL; "<uuid>" = parent = uuid
+	Search    string // full-text search: ILIKE across all string fields
+	Limit     int    // 0 = no limit
+	Offset    int    // for pagination
 }
 
 // FilterValue holds a filter for one field.
@@ -260,10 +263,28 @@ func (db *DB) List(ctx context.Context, entityName string, entity *metadata.Enti
 		}
 	}
 
-	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), table)
-	if len(whereParts) > 0 {
-		query += " WHERE " + strings.Join(whereParts, " AND ")
+	// Full-text search across all string fields
+	if params.Search != "" {
+		var searchParts []string
+		for _, f := range entity.Fields {
+			if f.Type == metadata.FieldTypeString && f.RefEntity == "" {
+				col := metadata.ColumnName(f)
+				searchParts = append(searchParts, fmt.Sprintf("LOWER(%s::text) LIKE LOWER($%d)", col, argIdx))
+			}
+		}
+		if len(searchParts) > 0 {
+			whereParts = append(whereParts, "("+strings.Join(searchParts, " OR ")+")")
+			args = append(args, "%"+params.Search+"%")
+			argIdx++
+		}
 	}
+
+	baseQuery := fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), table)
+	whereClause := ""
+	if len(whereParts) > 0 {
+		whereClause = " WHERE " + strings.Join(whereParts, " AND ")
+	}
+	query := baseQuery + whereClause
 
 	// sorting
 	if entity.Hierarchical && params.Sort == "" {
@@ -290,6 +311,10 @@ func (db *DB) List(ctx context.Context, entityName string, entity *metadata.Enti
 			orderDir = "DESC"
 		}
 		query += fmt.Sprintf(" ORDER BY %s %s", orderCol, orderDir)
+	}
+
+	if params.Limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d OFFSET %d", params.Limit, params.Offset)
 	}
 
 	rows, err := db.pool.Query(ctx, query, args...)
@@ -333,6 +358,85 @@ func (db *DB) List(ctx context.Context, entityName string, entity *metadata.Enti
 		result = append(result, row)
 	}
 	return result, rows.Err()
+}
+
+// CountList returns the total number of rows matching the given params (ignoring Limit/Offset).
+func (db *DB) CountList(ctx context.Context, entityName string, entity *metadata.Entity, params ListParams) (int, error) {
+	table := metadata.TableName(entityName)
+	var whereParts []string
+	var args []any
+	argIdx := 1
+
+	if entity.Hierarchical && params.ParentStr != "" {
+		if params.ParentStr == "root" {
+			whereParts = append(whereParts, "parent_id IS NULL")
+		} else if pID, err := uuid.Parse(params.ParentStr); err == nil {
+			whereParts = append(whereParts, fmt.Sprintf("parent_id = $%d", argIdx))
+			args = append(args, pID)
+			argIdx++
+		}
+	}
+
+	for _, f := range entity.Fields {
+		fv, ok := params.Filters[f.Name]
+		if !ok {
+			continue
+		}
+		col := metadata.ColumnName(f)
+		switch {
+		case f.Type == metadata.FieldTypeDate:
+			if fv.From != "" {
+				whereParts = append(whereParts, fmt.Sprintf("%s >= $%d", col, argIdx))
+				args = append(args, fv.From)
+				argIdx++
+			}
+			if fv.To != "" {
+				whereParts = append(whereParts, fmt.Sprintf("%s <= $%d", col, argIdx))
+				args = append(args, fv.To)
+				argIdx++
+			}
+		case f.RefEntity != "":
+			if fv.Value != "" {
+				whereParts = append(whereParts, fmt.Sprintf("%s = $%d", col, argIdx))
+				if id, err := uuid.Parse(fv.Value); err == nil {
+					args = append(args, id)
+				} else {
+					args = append(args, fv.Value)
+				}
+				argIdx++
+			}
+		default:
+			if fv.Value != "" {
+				whereParts = append(whereParts, fmt.Sprintf("LOWER(%s::text) LIKE LOWER($%d)", col, argIdx))
+				args = append(args, "%"+fv.Value+"%")
+				argIdx++
+			}
+		}
+	}
+
+	if params.Search != "" {
+		var searchParts []string
+		for _, f := range entity.Fields {
+			if f.Type == metadata.FieldTypeString && f.RefEntity == "" {
+				col := metadata.ColumnName(f)
+				searchParts = append(searchParts, fmt.Sprintf("LOWER(%s::text) LIKE LOWER($%d)", col, argIdx))
+			}
+		}
+		if len(searchParts) > 0 {
+			whereParts = append(whereParts, "("+strings.Join(searchParts, " OR ")+")")
+			args = append(args, "%"+params.Search+"%")
+		}
+	}
+
+	q := fmt.Sprintf("SELECT COUNT(*) FROM %s", table)
+	if len(whereParts) > 0 {
+		q += " WHERE " + strings.Join(whereParts, " AND ")
+	}
+	var count int
+	if err := db.pool.QueryRow(ctx, q, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count %s: %w", entityName, err)
+	}
+	return count, nil
 }
 
 // GetTablePartRows returns rows of a tablepart for a given parent id, ordered by строка.

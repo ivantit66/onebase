@@ -69,6 +69,8 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	total, _ := s.store.CountList(r.Context(), entity.Name, entity, params)
+
 	rows, err := s.store.List(r.Context(), entity.Name, entity, params)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -89,6 +91,16 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	isAdmin := user == nil || user.IsAdmin
 
+	// Pagination info
+	page := 1
+	if params.Offset > 0 && params.Limit > 0 {
+		page = params.Offset/params.Limit + 1
+	}
+	totalPages := 1
+	if params.Limit > 0 && total > 0 {
+		totalPages = (total + params.Limit - 1) / params.Limit
+	}
+
 	s.render(w, r, "page-list", map[string]any{
 		"Entity":           entity,
 		"Rows":             rows,
@@ -99,6 +111,13 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 		"ParentStr":        parentStr,
 		"TreeView":         treeView,
 		"TreeRows":         treeRows,
+		"Total":            total,
+		"Page":             page,
+		"TotalPages":       totalPages,
+		"HasPrev":          page > 1,
+		"HasNext":          page < totalPages,
+		"PrevPage":         page - 1,
+		"NextPage":         page + 1,
 	})
 }
 
@@ -1089,14 +1108,30 @@ func parseTablePartRows(r *http.Request, entity *metadata.Entity) map[string][]m
 	return result
 }
 
-// parseListParams reads filter and sort URL params.
+const defaultPageSize = 100
+
+// parseListParams reads filter, search, sort and pagination URL params.
 func parseListParams(r *http.Request, entity *metadata.Entity) storage.ListParams {
 	q := r.URL.Query()
 	params := storage.ListParams{
 		Filters: make(map[string]storage.FilterValue),
 		Sort:    q.Get("sort"),
 		Dir:     q.Get("dir"),
+		Search:  q.Get("q"),
 	}
+
+	// Pagination
+	limit := defaultPageSize
+	if l, err := strconv.Atoi(q.Get("limit")); err == nil && l > 0 && l <= 1000 {
+		limit = l
+	}
+	page := 1
+	if p, err := strconv.Atoi(q.Get("page")); err == nil && p > 1 {
+		page = p
+	}
+	params.Limit = limit
+	params.Offset = (page - 1) * limit
+
 	for _, f := range entity.Fields {
 		switch f.Type {
 		case metadata.FieldTypeDate:
