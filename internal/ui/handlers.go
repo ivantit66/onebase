@@ -507,7 +507,7 @@ func (s *Server) postDocument(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	http.Redirect(w, r, listURL(entity), http.StatusSeeOther)
+	http.Redirect(w, r, "/ui/"+strings.ToLower(string(entity.Kind))+"/"+entity.Name+"/"+id.String(), http.StatusSeeOther)
 }
 
 // unpostDocument clears movements and sets posted=false.
