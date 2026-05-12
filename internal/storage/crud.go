@@ -563,6 +563,9 @@ func (db *DB) SetPosted(ctx context.Context, entityName string, id uuid.UUID, po
 // fieldValue extracts the value for a field from the fields map, handling reference UUID strings.
 func fieldValue(f metadata.Field, fields map[string]any) any {
 	v := fields[f.Name]
+	if v == nil {
+		v = fields[strings.ToLower(f.Name)]
+	}
 	if f.RefEntity != "" {
 		if v == nil {
 			return nil
