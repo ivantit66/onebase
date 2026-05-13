@@ -8,71 +8,25 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/ivantit66/onebase/internal/storage"
 )
 
-// MigrateContent fixes known content issues in stored YAML files.
-// Currently: replaces old snake_case field references in report queries
-// (e.g. "тип_контрагента" → "ТипКонтрагента") that no longer match the DB column names.
-func (r *Repo) MigrateContent(ctx context.Context) error {
-	rows, err := r.pool.Query(ctx,
-		`SELECT path, content FROM _onebase_config WHERE path LIKE 'reports/%'`)
-	if err != nil {
-		return nil // table may not exist yet
-	}
-	defer rows.Close()
-
-	type update struct {
-		path    string
-		content []byte
-	}
-	var updates []update
-	for rows.Next() {
-		var path string
-		var content []byte
-		if err := rows.Scan(&path, &content); err != nil {
-			return err
-		}
-		text := string(content)
-		// Fix: old report had тип_контрагента (snake_case) in WHERE clause
-		// but the DB column is now типконтрагента (after ColumnName normalisation).
-		if strings.Contains(text, "тип_контрагента") {
-			text = strings.ReplaceAll(text, "тип_контрагента", "ТипКонтрагента")
-			updates = append(updates, update{path, []byte(text)})
-		}
-	}
-	rows.Close()
-
-	for _, u := range updates {
-		if _, err := r.pool.Exec(ctx,
-			`UPDATE _onebase_config SET content=$1, updated_at=now() WHERE path=$2`,
-			u.content, u.path); err != nil {
-			return fmt.Errorf("configdb: fix content %s: %w", u.path, err)
-		}
-	}
-	return nil
-}
-
 type Repo struct {
-	pool *pgxpool.Pool
+	db *storage.DB
 }
 
-// New wires the configdb repository to the storage layer. The underlying
-// pgxpool.Pool is kept inside the repo for now (Этап 1) — Этап 3 will switch
-// internal queries to the storage.DB abstraction so SQLite can be plugged in.
 func New(db *storage.DB) *Repo {
-	return &Repo{pool: db.Pool()}
+	return &Repo{db: db}
 }
 
 func (r *Repo) EnsureSchema(ctx context.Context) error {
-	_, err := r.pool.Exec(ctx, `
+	d := r.db.Dialect()
+	_, err := r.db.Exec(ctx, fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS _onebase_config (
 			path TEXT PRIMARY KEY,
-			content BYTEA NOT NULL,
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-		)`)
+			content %s NOT NULL,
+			updated_at %s NOT NULL DEFAULT %s
+		)`, d.TypeBytes(), d.TypeTimestamp(), d.CurrentTimestampTZ()))
 	if err != nil {
 		return fmt.Errorf("configdb: create table: %w", err)
 	}
@@ -80,15 +34,16 @@ func (r *Repo) EnsureSchema(ctx context.Context) error {
 }
 
 func (r *Repo) ImportFromDir(ctx context.Context, dir string) error {
-	if _, err := r.pool.Exec(ctx, `DELETE FROM _onebase_config`); err != nil {
+	d := r.db.Dialect()
+	if _, err := r.db.Exec(ctx, `DELETE FROM _onebase_config`); err != nil {
 		return fmt.Errorf("configdb: clear: %w", err)
 	}
 
-	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	return filepath.WalkDir(dir, func(path string, de fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
+		if de.IsDir() {
 			return nil
 		}
 		rel, err := filepath.Rel(dir, path)
@@ -102,17 +57,29 @@ func (r *Repo) ImportFromDir(ctx context.Context, dir string) error {
 			return fmt.Errorf("configdb: read %s: %w", rel, err)
 		}
 
-		_, err = r.pool.Exec(ctx, `
+		_, err = r.db.Exec(ctx, fmt.Sprintf(`
 			INSERT INTO _onebase_config (path, content, updated_at)
-			VALUES ($1, $2, now())
-			ON CONFLICT (path) DO UPDATE SET content = EXCLUDED.content, updated_at = now()
-		`, rel, content)
+			VALUES (%s, %s, %s)
+			ON CONFLICT (path) DO UPDATE SET content = EXCLUDED.content, updated_at = %s
+		`, d.Placeholder(1), d.Placeholder(2), d.Now(), d.Now()), rel, content)
 		return err
 	})
 }
 
+// SaveFile upserts a single config file entry.
+func (r *Repo) SaveFile(ctx context.Context, path string, content []byte) error {
+	d := r.db.Dialect()
+	_, err := r.db.Exec(ctx, fmt.Sprintf(`
+		INSERT INTO _onebase_config (path, content, updated_at)
+		VALUES (%s, %s, %s)
+		ON CONFLICT (path) DO UPDATE SET content = EXCLUDED.content, updated_at = %s`,
+		d.Placeholder(1), d.Placeholder(2), d.Now(), d.Now()),
+		path, content)
+	return err
+}
+
 func (r *Repo) ExportToDir(ctx context.Context, dir string) error {
-	rows, err := r.pool.Query(ctx, `SELECT path, content FROM _onebase_config ORDER BY path`)
+	rows, err := r.db.Query(ctx, `SELECT path, content FROM _onebase_config ORDER BY path`)
 	if err != nil {
 		return fmt.Errorf("configdb: query: %w", err)
 	}
@@ -137,6 +104,46 @@ func (r *Repo) ExportToDir(ctx context.Context, dir string) error {
 
 func (r *Repo) IsEmpty(ctx context.Context) (bool, error) {
 	var count int
-	err := r.pool.QueryRow(ctx, `SELECT count(*) FROM _onebase_config`).Scan(&count)
+	err := r.db.QueryRow(ctx, `SELECT count(*) FROM _onebase_config`).Scan(&count)
 	return count == 0, err
+}
+
+// MigrateContent fixes known content issues in stored YAML files.
+func (r *Repo) MigrateContent(ctx context.Context) error {
+	d := r.db.Dialect()
+	rows, err := r.db.Query(ctx,
+		`SELECT path, content FROM _onebase_config WHERE path LIKE 'reports/%'`)
+	if err != nil {
+		return nil // table may not exist yet
+	}
+	defer rows.Close()
+
+	type update struct {
+		path    string
+		content []byte
+	}
+	var updates []update
+	for rows.Next() {
+		var path string
+		var content []byte
+		if err := rows.Scan(&path, &content); err != nil {
+			return err
+		}
+		text := string(content)
+		if strings.Contains(text, "тип_контрагента") {
+			text = strings.ReplaceAll(text, "тип_контрагента", "ТипКонтрагента")
+			updates = append(updates, update{path, []byte(text)})
+		}
+	}
+	rows.Close()
+
+	for _, u := range updates {
+		if _, err := r.db.Exec(ctx, fmt.Sprintf(
+			`UPDATE _onebase_config SET content=%s, updated_at=%s WHERE path=%s`,
+			d.Placeholder(1), d.Now(), d.Placeholder(2),
+		), u.content, u.path); err != nil {
+			return fmt.Errorf("configdb: fix content %s: %w", u.path, err)
+		}
+	}
+	return nil
 }

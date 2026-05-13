@@ -251,7 +251,12 @@ func (r *Runner) MigrateBase(ctx context.Context, base *Base) (string, error) {
 		return "", err
 	}
 
-	args := []string{"migrate", "--db", base.DB}
+	var args []string
+	if base.DBType == "sqlite" {
+		args = []string{"migrate", "--sqlite", base.DBPath}
+	} else {
+		args = []string{"migrate", "--db", base.DB}
+	}
 	if base.ConfigSource == "file" {
 		args = append(args, "--project", base.Path)
 	} else {

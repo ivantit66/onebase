@@ -33,7 +33,7 @@ func (h *handler) configExportZip(w http.ResponseWriter, r *http.Request) {
 		}
 		defer db.Close()
 
-		rows, qerr := db.Pool().Query(r.Context(), `SELECT path, content FROM _onebase_config ORDER BY path`)
+		rows, qerr := db.Query(r.Context(), `SELECT path, content FROM _onebase_config ORDER BY path`)
 		if qerr != nil {
 			http.Error(w, qerr.Error(), 500)
 			return

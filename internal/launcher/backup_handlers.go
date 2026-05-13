@@ -1,4 +1,4 @@
-﻿package launcher
+package launcher
 
 import (
 	"archive/zip"
@@ -39,7 +39,7 @@ func (h *handler) loadBackupDirSetting(b *Base) string {
 		}
 		defer db.Close()
 		var content []byte
-		if err := db.Pool().QueryRow(context.Background(),
+		if err := db.QueryRow(context.Background(),
 			"SELECT content FROM _onebase_config WHERE path='config/app.yaml'").Scan(&content); err != nil {
 			return ""
 		}
@@ -164,11 +164,7 @@ func (h *handler) backupSettings(w http.ResponseWriter, r *http.Request) {
 			saveErr = cerr
 		} else {
 			defer db.Close()
-			_, saveErr = db.Pool().Exec(r.Context(), `
-				INSERT INTO _onebase_config (path, content, updated_at)
-				VALUES ($1, $2, now())
-				ON CONFLICT (path) DO UPDATE SET content=EXCLUDED.content, updated_at=now()
-			`, "config/app.yaml", out)
+			saveErr = cfgUpsert(r.Context(), db, "config/app.yaml", out)
 		}
 	} else {
 		dir := filepath.Join(b.Path, "config")
@@ -299,7 +295,7 @@ func (h *handler) backupFullExport(w http.ResponseWriter, r *http.Request) {
 		db, cerr := OpenDB(r.Context(), b)
 		if cerr == nil {
 			defer db.Close()
-			rows, qerr := db.Pool().Query(r.Context(), `SELECT path, content FROM _onebase_config ORDER BY path`)
+			rows, qerr := db.Query(r.Context(), `SELECT path, content FROM _onebase_config ORDER BY path`)
 			if qerr == nil {
 				defer rows.Close()
 				for rows.Next() {
