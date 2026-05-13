@@ -688,14 +688,23 @@ function modTab(el, panelId) {
 // ── Layout Editor ─────────────────────────────────────────────────
 var _led={};
 function initLayoutEditor(n){
-  var ta=document.getElementById('yaml-src-'+n);
+  var ta=document.getElementById('ta-mkt-'+n);
   if(!ta||!window.jsyaml)return;
-  try{var d=jsyaml.parse(ta.value);}catch(e){return;}
+  var d=null;
+  try{d=jsyaml.parse(ta.value);}catch(e){}
+  if(!d)d={areas:{}};
   _led[n]={data:d,sel:null};
   renderLayoutEditor(n);
 }
 function renderLayoutEditor(n){
   var s=_led[n];if(!s)return;
+  // sync to YAML textarea
+  if(window.jsyaml){var y=jsyaml.dump(s.data,{lineWidth:-1,quotingType:'"'});
+    var ta=document.getElementById('ta-mkt-'+n);
+    if(ta)ta.value=y;
+    var src=document.getElementById('yaml-src-'+n);
+    if(src)src.value=y;
+  }
   var d=s.data,areas=d.areas||{},h='<div style="font-family:Arial,sans-serif;font-size:12px">';
   var aNames=Object.keys(areas);
   for(var ai=0;ai<aNames.length;ai++){
@@ -770,38 +779,6 @@ function updateCellProp(n,prop,val){
   else{c[prop]=val;}
   renderLayoutEditor(n);
 }
-function switchLayoutTab(n,mode){
-  var tabs=['editor','preview','yaml'];
-  // sync: serialize editor data to YAML before leaving editor
-  if(window.jsyaml&&_led[n]){
-    var y=jsyaml.dump(_led[n].data,{lineWidth:-1,quotingType:'"'});
-    var ta=document.getElementById('ta-mkt-'+n);
-    var pre=document.getElementById('pre-mkt-'+n);
-    if(ta)ta.value=y;
-    if(pre)pre.textContent=y;
-    var src=document.getElementById('yaml-src-'+n);
-    if(src)src.value=y;
-  }
-  // sync: parse YAML back before leaving yaml tab
-  if(mode!=='yaml'&&window.jsyaml){
-    var ta2=document.getElementById('ta-mkt-'+n);
-    if(ta2&&ta2.value){
-      try{
-        var d=jsyaml.parse(ta2.value);
-        if(_led[n])_led[n].data=d;
-      }catch(e){}
-    }
-  }
-  for(var i=0;i<tabs.length;i++){
-    var el=document.getElementById('ltab-'+tabs[i]+'-'+n);
-    if(el)el.style.display=tabs[i]===mode?'block':'none';
-  }
-  var tabBtns=document.querySelectorAll('#mkt-'+n+' .ltab');
-  for(var j=0;j<tabBtns.length;j++){
-    tabBtns[j].classList.toggle('active',tabBtns[j].getAttribute('data-tab')===mode);
-  }
-  if(mode==='editor'&&_led[n])renderLayoutEditor(n);
-}
 function applyYaml(n){
   var ta=document.getElementById('ta-mkt-'+n);
   if(!ta)return;
@@ -849,9 +826,9 @@ function delLayoutRow(n,a,ri){
 }
 // Init layout editors on load
 (function(){
-  var tas=document.querySelectorAll('[id^="yaml-src-"]');
+  var tas=document.querySelectorAll('[id^="ta-mkt-"]');
   for(var i=0;i<tas.length;i++){
-    var n=tas[i].id.replace('yaml-src-','');
+    var n=tas[i].id.replace('ta-mkt-','');
     setTimeout(function(nn){return function(){initLayoutEditor(nn);};}(n),100);
   }
 })();
@@ -2569,40 +2546,33 @@ const cfgTabTree = `{{define "tab-tree"}}
     <form method="POST" action="/bases/{{$.Base.ID}}/configurator/layout" onsubmit="return saveLayoutEditor('{{.Name}}')">
       <input type="hidden" name="layout_name" value="{{.Name}}">
       <textarea id="yaml-src-{{.Name}}" name="source" style="display:none">{{.LayoutYAML}}</textarea>
-      <div class="ltabs" style="display:flex;border-bottom:2px solid #e2e8f0;margin:10px 0 0;gap:0">
-        <div class="ltab active" data-tab="editor" onclick="switchLayoutTab('{{.Name}}','editor')">Редактор</div>
-        <div class="ltab" data-tab="preview" onclick="switchLayoutTab('{{.Name}}','preview')">Предпросмотр</div>
-        <div class="ltab" data-tab="yaml" onclick="switchLayoutTab('{{.Name}}','yaml')">YAML</div>
+      <div style="display:flex;gap:8px;margin:4px 0 8px;flex-wrap:wrap">
+        <button type="button" class="btn-save" onclick="addLayoutArea('{{.Name}}')" style="font-size:12px;padding:4px 10px">+ Область</button>
       </div>
-      <div id="ltab-editor-{{.Name}}" class="ltab-content" style="display:block;padding-top:8px">
-        <div style="display:flex;gap:8px;margin:4px 0 8px;flex-wrap:wrap">
-          <button type="button" class="btn-save" onclick="addLayoutArea('{{.Name}}')" style="font-size:12px;padding:4px 10px">+ Область</button>
+      <div style="display:flex;gap:0;border:1px solid #d1d5db;border-radius:6px;overflow:hidden">
+        <div style="flex:1;min-width:0;border-right:1px solid #d1d5db;display:flex;flex-direction:column">
+          <div style="background:#f1f5f9;padding:4px 10px;font-size:11px;font-weight:600;color:#64748b;border-bottom:1px solid #d1d5db">YAML</div>
+          <textarea id="ta-mkt-{{.Name}}" style="width:100%;min-height:300px;padding:8px;border:none;outline:none;font-family:monospace;font-size:12px;resize:vertical;tab-size:2"
+                    onblur="applyYaml('{{.Name}}')">{{.LayoutYAML}}</textarea>
         </div>
-        <div id="veditor-{{.Name}}"></div>
-        <div id="vprops-{{.Name}}" style="display:none;background:#f0f8ff;border:1px solid #b0d0f0;border-radius:4px;padding:10px;margin-top:8px">
-          <div style="font-weight:bold;margin-bottom:6px;font-size:12px">Свойства ячейки</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px">
-            <div><label>Текст</label><br><input id="vp-text-{{.Name}}" style="width:100%;padding:3px" oninput="updateCellProp('{{.Name}}','text',this.value)"></div>
-            <div><label>Параметр</label><br><input id="vp-param-{{.Name}}" style="width:100%;padding:3px" oninput="updateCellProp('{{.Name}}','parameter',this.value)"></div>
-            <div><label><input type="checkbox" id="vp-bold-{{.Name}}" onchange="updateCellProp('{{.Name}}','bold',this.checked)"> Жирный</label></div>
-            <div><label><input type="checkbox" id="vp-italic-{{.Name}}" onchange="updateCellProp('{{.Name}}','italic',this.checked)"> Курсив</label></div>
-            <div><label>Выравнивание</label><br><select id="vp-align-{{.Name}}" style="width:100%;padding:3px" onchange="updateCellProp('{{.Name}}','align',this.value)">
-              <option value="">По умолчанию</option><option value="left">Лево</option><option value="center">Центр</option><option value="right">Право</option>
-            </select></div>
-            <div><label>Фон</label><br><input type="color" id="vp-bg-{{.Name}}" style="width:100%;height:28px" oninput="updateCellProp('{{.Name}}','backColor',this.value)"></div>
-            <div><label>Объединить (colspan)</label><br><input type="number" id="vp-colspan-{{.Name}}" min="1" max="10" style="width:60px;padding:3px" oninput="updateCellProp('{{.Name}}','colspan',parseInt(this.value)||0)"></div>
-            <div><label>Цвет текста</label><br><input type="color" id="vp-fg-{{.Name}}" style="width:100%;height:28px" oninput="updateCellProp('{{.Name}}','textColor',this.value)"></div>
-          </div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+          <div style="background:#f1f5f9;padding:4px 10px;font-size:11px;font-weight:600;color:#64748b;border-bottom:1px solid #d1d5db">Макет</div>
+          <div id="veditor-{{.Name}}" style="padding:8px;min-height:300px;overflow:auto"></div>
         </div>
       </div>
-      <div id="ltab-preview-{{.Name}}" class="ltab-content" style="display:none;padding:12px;background:#fff;border:1px solid #e2e8f0;border-radius:0 0 6px 6px">
-        {{.LayoutPreview}}
-      </div>
-      <div id="ltab-yaml-{{.Name}}" class="ltab-content" style="display:none;padding-top:8px">
-        <div class="code-wrap">
-          <pre class="os-code" id="pre-mkt-{{.Name}}" onclick="startEdit('mkt-{{.Name}}')">{{.LayoutYAML}}</pre>
-          <textarea class="os-edit" id="ta-mkt-{{.Name}}" style="display:none"
-                    onblur="endEdit('mkt-{{.Name}}');applyYaml('{{.Name}}')">{{.LayoutYAML}}</textarea>
+      <div id="vprops-{{.Name}}" style="display:none;background:#f0f8ff;border:1px solid #b0d0f0;border-radius:4px;padding:10px;margin-top:8px">
+        <div style="font-weight:bold;margin-bottom:6px;font-size:12px">Свойства ячейки</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px">
+          <div><label>Текст</label><br><input id="vp-text-{{.Name}}" style="width:100%;padding:3px" oninput="updateCellProp('{{.Name}}','text',this.value)"></div>
+          <div><label>Параметр</label><br><input id="vp-param-{{.Name}}" style="width:100%;padding:3px" oninput="updateCellProp('{{.Name}}','parameter',this.value)"></div>
+          <div><label><input type="checkbox" id="vp-bold-{{.Name}}" onchange="updateCellProp('{{.Name}}','bold',this.checked)"> Жирный</label></div>
+          <div><label><input type="checkbox" id="vp-italic-{{.Name}}" onchange="updateCellProp('{{.Name}}','italic',this.checked)"> Курсив</label></div>
+          <div><label>Выравнивание</label><br><select id="vp-align-{{.Name}}" style="width:100%;padding:3px" onchange="updateCellProp('{{.Name}}','align',this.value)">
+            <option value="">По умолчанию</option><option value="left">Лево</option><option value="center">Центр</option><option value="right">Право</option>
+          </select></div>
+          <div><label>Фон</label><br><input type="color" id="vp-bg-{{.Name}}" style="width:100%;height:28px" oninput="updateCellProp('{{.Name}}','backColor',this.value)"></div>
+          <div><label>Объединить (colspan)</label><br><input type="number" id="vp-colspan-{{.Name}}" min="1" max="10" style="width:60px;padding:3px" oninput="updateCellProp('{{.Name}}','colspan',parseInt(this.value)||0)"></div>
+          <div><label>Цвет текста</label><br><input type="color" id="vp-fg-{{.Name}}" style="width:100%;height:28px" oninput="updateCellProp('{{.Name}}','textColor',this.value)"></div>
         </div>
       </div>
       <div class="module-save-row">
