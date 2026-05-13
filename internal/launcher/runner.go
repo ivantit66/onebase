@@ -15,8 +15,9 @@ import (
 )
 
 type managedProc struct {
-	cmd  *exec.Cmd
-	port int
+	cmd       *exec.Cmd
+	port      int
+	startedAt time.Time
 }
 
 // Runner tracks running base processes.
@@ -79,7 +80,7 @@ func (r *Runner) Start(base *Base) error {
 		return fmt.Errorf("runner: start: %w", err)
 	}
 
-	r.procs[base.ID] = &managedProc{cmd: cmd, port: base.Port}
+	r.procs[base.ID] = &managedProc{cmd: cmd, port: base.Port, startedAt: time.Now()}
 
 	go func() {
 		cmd.Wait()
@@ -215,6 +216,17 @@ func waitPortFree(port int, timeout time.Duration) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+// StartedAt returns when the process for baseID was started.
+// The second return value is false if the base is not running.
+func (r *Runner) StartedAt(baseID string) (time.Time, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if mp, ok := r.procs[baseID]; ok {
+		return mp.startedAt, true
+	}
+	return time.Time{}, false
 }
 
 func (r *Runner) IsRunning(baseID string) bool {

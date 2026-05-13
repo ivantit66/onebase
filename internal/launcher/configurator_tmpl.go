@@ -88,6 +88,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;font-size:13px;background:#f0f2f5;h
 .cfg-item.sel{background:#e8eeff;color:#1a4a80;font-weight:600;border-left-color:#1a4a80}
 .cfg-item .ic{font-size:13px;flex-shrink:0}
 .cfg-item .bp{background:#dbeafe;color:#1d4ed8;font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;margin-left:2px}
+.cfg-dirty{color:#e8b400;font-weight:700;margin-left:4px;font-size:14px;cursor:help}
 
 .cfg-right{flex:1;overflow-y:auto;padding:16px}
 
@@ -2260,9 +2261,9 @@ const cfgTabTree = `{{define "tab-tree"}}
 {{/* ── Left panel ── */}}
 <div class="cfg-left" id="cfg-sidebar">
 <button class="sidebar-toggle" id="sidebar-toggle" onclick="toggleSidebar()" title="Свернуть дерево">◀</button>
-  <div class="cfg-group">Конфигурация</div>
+  <div class="cfg-group">Конфигурация{{if .ConfigDirty}}<span class="cfg-dirty" title="Конфигурация на диске изменилась с момента запуска базы. Перезапустите базу, чтобы изменения применились.">*</span>{{end}}</div>
   <div class="cfg-item" data-id="panel-app" onclick="selItem(this)">
-    <span class="ic">⚙</span>{{if .AppName}}{{.AppName}}{{else}}Без названия{{end}}
+    <span class="ic">⚙</span>{{if .AppName}}{{.AppName}}{{else}}Без названия{{end}}{{if .ConfigDirty}}<span class="cfg-dirty" title="Конфигурация на диске изменилась с момента запуска базы. Перезапустите базу, чтобы изменения применились.">*</span>{{end}}
   </div>
 
   <details open class="cfg-tree"><summary class="cfg-group cfg-group-hd"><span>Справочники</span><span class="cfg-add-btn" onclick="event.stopPropagation();cfgNewObj('catalog')" title="Добавить справочник">+</span></summary>

@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/go-chi/chi/v5"
@@ -196,6 +198,11 @@ type configuratorData struct {
 	BackupSettings backupSettings
 	// session token for passing to UI server (bootstrap auth)
 	SessionToken string
+	// IsRunning: процесс базы запущен сейчас
+	IsRunning bool
+	// ConfigDirty: на диске есть изменения конфигурации новее, чем запуск базы
+	// — пользователю нужно перезапустить базу, чтобы применить.
+	ConfigDirty bool
 }
 
 type backupFile struct {
@@ -304,8 +311,48 @@ func (h *handler) configuratorConvert(w http.ResponseWriter, r *http.Request) {
 
 // ── data loading ──────────────────────────────────────────────────────────────
 
+// configDirtyAfter возвращает true, если в rootDir есть .os/.yaml/.yml файл
+// с mtime новее threshold. Используется для отображения «звёздочки» в дереве
+// метаданных — конфигурация на диске изменилась с момента запуска базы.
+func configDirtyAfter(rootDir string, threshold time.Time) bool {
+	dirty := false
+	filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			base := filepath.Base(path)
+			if base == "backups" || base == ".git" || base == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext != ".os" && ext != ".yaml" && ext != ".yml" {
+			return nil
+		}
+		info, ierr := d.Info()
+		if ierr != nil {
+			return nil
+		}
+		if info.ModTime().After(threshold) {
+			dirty = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return dirty
+}
+
 func (h *handler) loadCfgData(ctx context.Context, b *Base, tab string) *configuratorData {
 	data := &configuratorData{Base: b, Tab: tab, PlatformVer: version.String(), UIServerURL: fmt.Sprintf("http://localhost:%d", b.Port), DSNMasked: maskDSN(b.DB)}
+
+	if startedAt, ok := h.runner.StartedAt(b.ID); ok {
+		data.IsRunning = true
+		if b.ConfigSource == "file" {
+			data.ConfigDirty = configDirtyAfter(b.Path, startedAt)
+		}
+	}
 
 	var proj *project.Project
 	var err error
