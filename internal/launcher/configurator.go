@@ -1,4 +1,4 @@
-package launcher
+﻿package launcher
 
 import (
 	"context"
@@ -109,10 +109,12 @@ type cfgParam struct {
 }
 
 type cfgReport struct {
-	Name   string
-	Title  string
-	Query  string
-	Params []cfgParam
+	Name        string
+	Title       string
+	Query       string
+	ChartProc   string
+	ChartSource string
+	Params      []cfgParam
 }
 
 type cfgModule struct {
@@ -530,8 +532,13 @@ func (h *handler) loadCfgData(ctx context.Context, b *Base, tab string) *configu
 		})
 	}
 
+	repSources := readReportSources(proj.Dir)
+
 	for _, rep := range proj.Reports {
-		rv := cfgReport{Name: rep.Name, Title: rep.Title, Query: rep.Query}
+		rv := cfgReport{Name: rep.Name, Title: rep.Title, Query: rep.Query, ChartProc: rep.ChartProc}
+		if src, ok := repSources[strings.ToLower(rep.Name)]; ok {
+			rv.ChartSource = src
+		}
 		for _, p := range rep.Params {
 			rv.Params = append(rv.Params, cfgParam{Name: p.Name, Type: p.Type, Label: p.Label})
 		}
@@ -778,6 +785,26 @@ func readOSSources(dir string) (sources, postingSources map[string]string) {
 		}
 	}
 	return
+}
+
+func readReportSources(dir string) map[string]string {
+	result := make(map[string]string)
+	entries, err := os.ReadDir(filepath.Join(dir, "src"))
+	if err != nil {
+		return result
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".rep.os") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, "src", e.Name()))
+		if err != nil {
+			continue
+		}
+		base := strings.ToLower(strings.TrimSuffix(e.Name(), ".rep.os"))
+		result[base] = string(raw)
+	}
+	return result
 }
 
 func readModuleAndProcSources(dir string) (moduleSources, procSources map[string]string) {
@@ -1826,6 +1853,8 @@ func (h *handler) configuratorSaveReport(w http.ResponseWriter, r *http.Request)
 	repName := r.FormValue("report_name")
 	query := r.FormValue("query")
 	title := strings.TrimSpace(r.FormValue("title"))
+	chartProc := strings.TrimSpace(r.FormValue("chart_proc"))
+	chartSource := r.FormValue("chart_source")
 
 	type saveParam struct {
 		Name  string `yaml:"name"`
@@ -1837,6 +1866,7 @@ func (h *handler) configuratorSaveReport(w http.ResponseWriter, r *http.Request)
 		Title  string      `yaml:"title,omitempty"`
 		Params []saveParam `yaml:"params,omitempty"`
 		Query  string      `yaml:"query"`
+		ChartProc string      `yaml:"chart_proc,omitempty"`
 	}
 
 	// Parse params from form: param.0.name, param.0.type, param.0.label, ...
@@ -1861,6 +1891,7 @@ func (h *handler) configuratorSaveReport(w http.ResponseWriter, r *http.Request)
 			rep.Title = title
 		}
 		rep.Params = newParams
+		rep.ChartProc = chartProc
 		return yaml.Marshal(&rep)
 	}
 
@@ -1920,6 +1951,12 @@ func (h *handler) configuratorSaveReport(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// Save chart .rep.os source if provided
+	if chartSource != "" && b.ConfigSource == "file" {
+		os.MkdirAll(filepath.Join(b.Path, "src"), 0o755)
+		repOSPath := filepath.Join(b.Path, "src", repName+".rep.os")
+		saveErr = os.WriteFile(repOSPath, []byte(chartSource), 0o644)
+	}
 	data := h.loadCfgData(r.Context(), b, "tree")
 	if saveErr != nil {
 		data.Error = "Ошибка сохранения: " + saveErr.Error()

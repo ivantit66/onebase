@@ -1,4 +1,4 @@
-package launcher
+﻿package launcher
 
 import "html/template"
 
@@ -2614,6 +2614,18 @@ const cfgTabTree = `{{define "tab-tree"}}
         <textarea class="os-edit" id="ta-rep-{{.Name}}" name="query"
                   style="display:none"
                   onblur="endEdit('rep-{{.Name}}')">{{.Query}}</textarea>
+      </div>
+      <div class="fg" style="margin-top:12px">
+        <label>Процедура диаграммы (chart_proc)</label>
+        <input type="text" name="chart_proc" value="{{.ChartProc}}" placeholder="СформироватьДиаграмму">
+      </div>
+      <div class="section-hd" style="margin-top:8px">Код диаграммы (.rep.os) <span class="edit-hint">(кликните для редактирования)</span></div>
+      <div class="code-wrap">
+        <pre class="os-code clickable-code" id="pre-repchart-{{.Name}}"
+             onclick="startEdit('repchart-{{.Name}}')">{{.ChartSource}}</pre>
+        <textarea class="os-edit" id="ta-repchart-{{.Name}}" name="chart_source"
+                  style="display:none"
+                  onblur="endEdit('repchart-{{.Name}}')">{{.ChartSource}}</textarea>
       </div>
       <div class="module-save-row">
         <button class="btn-save" type="submit">Сохранить</button>
