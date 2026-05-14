@@ -92,6 +92,15 @@ const tplQueryConsole = `
 <div id="qc-editor" style="height:260px;border:1px solid #e2e8f0;border-radius:6px"></div>
 </div>
 
+<!-- Parameters (always visible) -->
+<div class="card" style="margin-bottom:12px" id="qc-params-card">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+  <h3 style="margin:0">Параметры</h3>
+  <button onclick="qcDetectParams()" style="background:#dbeafe;color:#1d4ed8;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:12px">Заполнить из запроса</button>
+</div>
+<div id="qc-params" style="font-size:13px"><span style="color:#94a3b8">Нажмите «Заполнить из запроса» или введите вручную</span></div>
+</div>
+
 <!-- Results -->
 <div class="card" id="qc-results-card" style="display:none">
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -161,17 +170,27 @@ function qcToggleBuilder() {
 
 function qcExec() {
   var code = window.qcEditor.getValue();
+  // Auto-detect params from query if panel is empty
+  var hasParams = document.querySelectorAll('.qc-param-row').length > 0;
+  if (!hasParams) qcDetectParams();
+  // Collect params
   var params = {};
+  var emptyParams = [];
   document.querySelectorAll('.qc-param-row').forEach(function(row) {
     var k = row.querySelector('.qc-pk').value.trim();
     var v = row.querySelector('.qc-pv').value;
+    var t = row.dataset.type || 'string';
     if (k) {
-      // Try parse as number
-      var n = Number(v);
-      if (v !== '' && !isNaN(n) && v.trim() !== '') params[k] = n;
+      if (v === '') { emptyParams.push(k); return; }
+      if (t === 'number') { var n = Number(v); params[k] = isNaN(n) ? v : n; }
       else params[k] = v;
     }
   });
+  if (emptyParams.length > 0) {
+    document.getElementById('qc-error').style.display = '';
+    document.getElementById('qc-error').querySelector('pre').textContent = 'Заполните параметры: ' + emptyParams.join(', ');
+    return;
+  }
   document.getElementById('qc-status').textContent = 'Выполнение...';
   fetch('/ui/dev/query-exec', {
     method: 'POST',
@@ -216,6 +235,60 @@ function qcClear() {
   if (window.qcEditor) window.qcEditor.setValue('ВЫБРАТЬ *\nИЗ ');
   document.getElementById('qc-results-card').style.display = 'none';
   document.getElementById('qc-error').style.display = 'none';
+  document.getElementById('qc-params').innerHTML = '<span style="color:#94a3b8">Нажмите «Заполнить из запроса» или введите вручную</span>';
+}
+
+function qcDetectParams() {
+  var code = window.qcEditor.getValue();
+  var re = /&([А-Яа-яёЁA-Za-z_]\w*)/g;
+  var found = {};
+  var m;
+  while ((m = re.exec(code)) !== null) { found[m[1]] = true; }
+  var names = Object.keys(found);
+  if (!names.length) {
+    document.getElementById('qc-params').innerHTML = '<span style="color:#94a3b8">Параметры не найдены</span>';
+    return;
+  }
+  // Ask backend to detect types
+  fetch('/ui/dev/query-analyze', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({query: code})
+  }).then(function(r){ return r.json(); }).then(function(data) {
+    var types = data.paramTypes || {};
+    var existing = {};
+    document.querySelectorAll('.qc-param-row').forEach(function(row) {
+      var k = row.querySelector('.qc-pk').value.trim();
+      existing[k] = row.querySelector('.qc-pv').value;
+    });
+    var html = '';
+    names.forEach(function(name) {
+      var t = types[name] || 'string';
+      var prev = existing[name] || '';
+      var hint = t === 'uuid' ? 'UUID' : t === 'number' ? 'Число' : t === 'date' ? 'Дата' : 'Строка';
+      html += '<div class="qc-param-row" data-type="'+t+'" style="display:flex;gap:8px;align-items:center;margin-bottom:6px">'
+        + '<span style="width:140px;font-size:13px;font-weight:600;color:#334155">&amp;'+escHtml(name)+'</span>'
+        + '<span style="font-size:11px;color:#94a3b8;width:60px">'+hint+'</span>'
+        + '<input class="qc-pv" value="'+escHtml(prev)+'" placeholder="значение" style="flex:1;font-size:13px;border:1px solid #e2e8f0;border-radius:4px;padding:4px 8px">'
+        + '</div>';
+    });
+    document.getElementById('qc-params').innerHTML = html;
+  }).catch(function() {
+    // Fallback: just show string params without type info
+    var html = '';
+    names.forEach(function(name) {
+      var prev = '';
+      document.querySelectorAll('.qc-param-row').forEach(function(row) {
+        if (row.querySelector('.qc-pk') && row.querySelector('.qc-pk').value.trim() === name) prev = row.querySelector('.qc-pv').value;
+      });
+      html += '<div class="qc-param-row" data-type="string" style="display:flex;gap:8px;align-items:center;margin-bottom:6px">'
+        + '<span style="width:140px;font-size:13px;font-weight:600;color:#334155">&amp;'+escHtml(name)+'</span>'
+        + '<span style="font-size:11px;color:#94a3b8;width:60px">Строка</span>'
+        + '<input class="qc-pv" value="'+escHtml(prev)+'" placeholder="значение" style="flex:1;font-size:13px;border:1px solid #e2e8f0;border-radius:4px;padding:4px 8px">'
+        + '</div>';
+    });
+    document.getElementById('qc-params').innerHTML = html;
+  });
 }
 
 function escHtml(s) {

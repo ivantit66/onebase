@@ -126,6 +126,7 @@ func (s *Server) Mount(r chi.Router) {
 	// Developer tools
 	r.Get("/ui/dev/query-console", s.queryConsolePage)
 	r.Post("/ui/dev/query-exec", s.queryConsoleExec)
+	r.Post("/ui/dev/query-analyze", s.queryConsoleAnalyze)
 	r.Get("/ui/dev/code-console", s.codeConsolePage)
 	r.Post("/ui/dev/code-exec", s.codeConsoleExec)
 
