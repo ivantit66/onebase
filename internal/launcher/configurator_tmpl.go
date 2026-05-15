@@ -791,12 +791,12 @@ function _ldColgroup(d){
 }
 function renderLayoutEditor(n){
   var s=_led[n];if(!s)return;
-  // sync to YAML textarea (skip on first init to preserve original content)
-  if(window.jsyaml&&!s.init){var y=jsyaml.dump(s.data,{lineWidth:-1,quotingType:'"'});
+  // always sync YAML textarea from in-memory state (except on very first init
+  // where we preserve the server-rendered content to show original formatting)
+  if(window.jsyaml&&!s.init){
+    var y=jsyaml.dump(s.data,{lineWidth:-1,quotingType:'"'});
     var ta=document.getElementById('ta-mkt-'+n);
     if(ta)ta.value=y;
-    var src=document.getElementById('yaml-src-'+n);
-    if(src)src.value=y;
   }
   if(s.init)s.init=false;
   var d=s.data,areas=d.areas||{},h='<div style="font-family:Arial,sans-serif;font-size:12px">';
@@ -924,22 +924,27 @@ function updateCellProp(n,prop,val){
 function applyYaml(n){
   var ta=document.getElementById('ta-mkt-'+n);
   if(!ta)return;
-  try{var d=jsyaml.parse(ta.value);}catch(e){return;}
-  if(_led[n])_led[n].data=d;
+  var d=null;
+  try{d=jsyaml.parse(ta.value);}catch(e){return;}
+  if(!d||typeof d!=='object')return; // invalid YAML — keep current state
+  if(!d.areas)d.areas={};
+  if(!_led[n])_led[n]={data:d,sel:null};
+  else _led[n].data=d;
+  // re-render designer without syncing YAML back (avoid cursor jump)
+  _led[n].init=true;
   renderLayoutEditor(n);
 }
+// Debounced YAML sync — fires while user is typing in the textarea
+var _yamlTimers={};
+function scheduleYamlSync(n){
+  if(_yamlTimers[n])clearTimeout(_yamlTimers[n]);
+  _yamlTimers[n]=setTimeout(function(){applyYaml(n);},400);
+}
 function saveLayoutEditor(n){
-  // sync textarea to in-memory state (handles case where blur didn't fire yet)
+  // ta-mkt-{n} has name="source" and is submitted directly.
+  // Flush any pending debounced sync first so the textarea is current.
+  if(_yamlTimers[n]){clearTimeout(_yamlTimers[n]);delete _yamlTimers[n];}
   applyYaml(n);
-  var src=document.getElementById('yaml-src-'+n);
-  if(!src)return true;
-  var s=_led[n];
-  if(s){
-    src.value=jsyaml.dump(s.data,{lineWidth:-1,quotingType:'"'});
-  }else{
-    var ta=document.getElementById('ta-mkt-'+n);
-    if(ta)src.value=ta.value;
-  }
   return true;
 }
 function addLayoutArea(n){
@@ -982,33 +987,8 @@ function delLayoutRow(n,a,ri){
   s.sel=null;
   renderLayoutEditor(n);
 }
-// ── Tabs & toolbar operations ─────────────────────────────────────
-function ldSelectTab(n,tab,el){
-  ['designer','yaml','preview'].forEach(function(t){
-    var pane=document.getElementById('lpane-'+t+'-'+n);
-    if(pane)pane.style.display=(t===tab)?'block':'none';
-  });
-  var tabs=document.querySelectorAll('#ltabs-'+n+' .ltab');
-  for(var i=0;i<tabs.length;i++){
-    var active=tabs[i].getAttribute('data-tab')===tab;
-    tabs[i].style.background=active?'#fff':'#f1f5f9';
-    tabs[i].style.color=active?'#1a4a80':'#64748b';
-    tabs[i].style.fontWeight=active?'600':'400';
-  }
-  if(tab==='preview'){
-    // Refresh preview from current state (in case YAML was edited last).
-    var ta=document.getElementById('ta-mkt-'+n);
-    if(ta){try{var d=jsyaml.parse(ta.value);if(d&&_led[n])_led[n].data=d;}catch(e){}}
-    renderPreviewOnly(n);
-  }else if(tab==='yaml'){
-    // Sync YAML textarea from current data.
-    var s=_led[n];
-    if(s&&window.jsyaml){
-      var y=jsyaml.dump(s.data,{lineWidth:-1,quotingType:'"'});
-      var ta2=document.getElementById('ta-mkt-'+n);if(ta2)ta2.value=y;
-    }
-  }
-}
+// ── Toolbar operations ─────────────────────────────────────────────
+// ldSelectTab kept for backward compat; split-view has no tabs.
 function _ldSel(n){
   var s=_led[n];if(!s||!s.sel)return null;
   var ar=(s.data.areas||{})[s.sel.area];
@@ -2992,7 +2972,6 @@ const cfgTabTree = `{{define "tab-tree"}}
     <div class="panel-title">&#x1F4D0; Макет: {{.Name}}</div>
     <form method="POST" action="/bases/{{$.Base.ID}}/configurator/layout" onsubmit="return saveLayoutEditor('{{.Name}}')">
       <input type="hidden" name="layout_name" value="{{.Name}}">
-      <textarea id="yaml-src-{{.Name}}" name="source" style="display:none">{{.LayoutYAML}}</textarea>
 
       {{/* Toolbar: structural operations */}}
       <div style="display:flex;gap:6px;margin:4px 0 8px;flex-wrap:wrap;align-items:center">
@@ -3007,24 +2986,20 @@ const cfgTabTree = `{{define "tab-tree"}}
         <button type="button" onclick="ldSplit('{{.Name}}')"      style="font-size:12px;padding:4px 10px;background:#fff;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer">Разъединить</button>
       </div>
 
-      {{/* Tabs */}}
-      <div id="ltabs-{{.Name}}" style="display:flex;gap:0;border-bottom:1px solid #d1d5db;margin-bottom:0">
-        <div class="ltab ltab-active" data-tab="designer" onclick="ldSelectTab('{{.Name}}','designer',this)" style="padding:6px 14px;cursor:pointer;border:1px solid #d1d5db;border-bottom:none;background:#fff;font-size:12px;font-weight:600;color:#1a4a80">Конструктор</div>
-        <div class="ltab"             data-tab="yaml"     onclick="ldSelectTab('{{.Name}}','yaml',this)"     style="padding:6px 14px;cursor:pointer;border:1px solid #d1d5db;border-bottom:none;background:#f1f5f9;font-size:12px;color:#64748b;margin-left:-1px">YAML</div>
-        <div class="ltab"             data-tab="preview"  onclick="ldSelectTab('{{.Name}}','preview',this)"  style="padding:6px 14px;cursor:pointer;border:1px solid #d1d5db;border-bottom:none;background:#f1f5f9;font-size:12px;color:#64748b;margin-left:-1px">Предпросмотр</div>
-      </div>
-
-      {{/* Tab panes */}}
-      <div style="border:1px solid #d1d5db;border-top:none;border-radius:0 0 6px 6px;overflow:hidden">
-        <div id="lpane-designer-{{.Name}}" class="lpane" style="display:block">
-          <div id="veditor-{{.Name}}" style="padding:8px;min-height:300px;overflow:auto;background:#fff">{{if .LayoutPreview}}{{.LayoutPreview}}{{else}}<p style="color:#999;font-size:12px">Нет данных. Нажмите «+ Область» или перейдите на вкладку YAML.</p>{{end}}</div>
-        </div>
-        <div id="lpane-yaml-{{.Name}}" class="lpane" style="display:none">
-          <textarea id="ta-mkt-{{.Name}}" style="width:100%;min-height:300px;padding:8px;border:none;outline:none;font-family:monospace;font-size:12px;resize:vertical;tab-size:2;background:#fff"
+      {{/* Split view: YAML editor (left) + visual designer (right) */}}
+      <div style="display:flex;border:1px solid #d1d5db;border-radius:0 0 6px 6px;overflow:hidden;min-height:340px">
+        {{/* Left pane: YAML */}}
+        <div style="flex:0 0 42%;border-right:1px solid #d1d5db;display:flex;flex-direction:column;min-width:0">
+          <div style="background:#f8fafc;border-bottom:1px solid #e2e8f0;padding:3px 10px;font-size:11px;font-weight:600;color:#64748b;flex-shrink:0;letter-spacing:.03em">YAML</div>
+          <textarea id="ta-mkt-{{.Name}}" name="source"
+                    style="flex:1;padding:8px;border:none;outline:none;font-family:'Cascadia Code','Consolas',monospace;font-size:11px;resize:none;tab-size:2;background:#fafbfc;min-height:300px;width:100%;box-sizing:border-box;line-height:1.5"
+                    oninput="scheduleYamlSync('{{.Name}}')"
                     onblur="applyYaml('{{.Name}}')">{{.LayoutYAML}}</textarea>
         </div>
-        <div id="lpane-preview-{{.Name}}" class="lpane" style="display:none">
-          <div id="vpreview-{{.Name}}" style="padding:8px;min-height:300px;overflow:auto;background:#fff"></div>
+        {{/* Right pane: Visual designer */}}
+        <div style="flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden">
+          <div style="background:#f8fafc;border-bottom:1px solid #e2e8f0;padding:3px 10px;font-size:11px;font-weight:600;color:#64748b;flex-shrink:0;letter-spacing:.03em">Конструктор</div>
+          <div id="veditor-{{.Name}}" style="flex:1;padding:8px;overflow:auto;background:#fff">{{if .LayoutPreview}}{{.LayoutPreview}}{{else}}<p style="color:#999;font-size:12px">Нет данных. Нажмите «+ Область» для начала.</p>{{end}}</div>
         </div>
       </div>
 
