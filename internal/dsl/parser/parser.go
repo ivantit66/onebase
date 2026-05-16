@@ -101,7 +101,7 @@ func (p *Parser) parseProcedure() (*ast.ProcedureDecl, error) {
 // isBlockEnd returns true for tokens that end a block from the outside.
 func isBlockEnd(t token.Type) bool {
 	switch t {
-	case token.EOF, token.ELSE, token.ENDIF, token.ENDDO, token.ENDPROCEDURE, token.ENDFUNCTION,
+	case token.EOF, token.ELSE, token.ELSEIF, token.ENDIF, token.ENDDO, token.ENDPROCEDURE, token.ENDFUNCTION,
 		token.EXCEPT, token.ENDTRY:
 		return true
 	}
@@ -165,6 +165,22 @@ func (p *Parser) parseIf() (*ast.IfStmt, error) {
 	if err != nil {
 		return nil, err
 	}
+	var elseIfs []ast.ElseIfBranch
+	for p.cur.Type == token.ELSEIF {
+		p.advance() // consume ElseIf
+		elifCond, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(token.THEN); err != nil {
+			return nil, err
+		}
+		elifBody, err := p.parseBlock(token.ENDIF)
+		if err != nil {
+			return nil, err
+		}
+		elseIfs = append(elseIfs, ast.ElseIfBranch{Cond: elifCond, Body: elifBody})
+	}
 	var els []ast.Stmt
 	if p.cur.Type == token.ELSE {
 		p.advance()
@@ -177,7 +193,7 @@ func (p *Parser) parseIf() (*ast.IfStmt, error) {
 		return nil, err
 	}
 	p.consumeSemi()
-	return &ast.IfStmt{Cond: cond, Then: then, Else: els}, nil
+	return &ast.IfStmt{Cond: cond, Then: then, ElseIfs: elseIfs, Else: els}, nil
 }
 
 func (p *Parser) parseForEach() (*ast.ForEachStmt, error) {
@@ -274,6 +290,14 @@ func (p *Parser) parseVarDecl() (*ast.VarDecl, error) {
 	return &ast.VarDecl{Name: nameTok}, nil
 }
 
+func isCompoundAssign(t token.Type) bool {
+	switch t {
+	case token.PLUS_ASSIGN, token.MINUS_ASSIGN, token.STAR_ASSIGN, token.SLASH_ASSIGN:
+		return true
+	}
+	return false
+}
+
 // parseExprOrAssign disambiguates assignment vs expression statement.
 // "left = right;" is assignment only when left is a simple Ident, MemberExpr or IndexExpr.
 func (p *Parser) parseExprOrAssign() (ast.Stmt, error) {
@@ -291,7 +315,20 @@ func (p *Parser) parseExprOrAssign() (ast.Stmt, error) {
 				return nil, err
 			}
 			p.consumeSemi()
-			return &ast.AssignStmt{Target: left, Value: val}, nil
+			return &ast.AssignStmt{Target: left, Op: token.ASSIGN, Value: val}, nil
+		}
+		if isCompoundAssign(p.cur.Type) {
+			switch left.(type) {
+			case *ast.Ident, *ast.MemberExpr, *ast.IndexExpr:
+				op := p.cur.Type
+				p.advance()
+				val, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				p.consumeSemi()
+				return &ast.AssignStmt{Target: left, Op: op, Value: val}, nil
+			}
 		}
 	}
 
@@ -468,6 +505,34 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 		return expr, nil
 	case token.NEW:
 		return p.parseNew()
+	case token.QUESTION:
+		tok := p.cur
+		p.advance() // consume ?
+		if _, err := p.expect(token.LPAREN); err != nil {
+			return nil, err
+		}
+		cond, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(token.COMMA); err != nil {
+			return nil, err
+		}
+		trueVal, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(token.COMMA); err != nil {
+			return nil, err
+		}
+		falseVal, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(token.RPAREN); err != nil {
+			return nil, err
+		}
+		return &ast.TernaryExpr{Tok: tok, Cond: cond, True: trueVal, False: falseVal}, nil
 	case token.IDENT:
 		tok := p.cur
 		p.advance()

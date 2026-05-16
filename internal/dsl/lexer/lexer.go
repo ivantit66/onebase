@@ -80,10 +80,22 @@ func (l *Lexer) NextToken() token.Token {
 	case ']':
 		return l.tok(token.RBRACKET, "]", line, col)
 	case '+':
+		if l.pos < len(l.input) && l.peek() == '=' {
+			l.next()
+			return l.tok(token.PLUS_ASSIGN, "+=", line, col)
+		}
 		return l.tok(token.PLUS, "+", line, col)
 	case '-':
+		if l.pos < len(l.input) && l.peek() == '=' {
+			l.next()
+			return l.tok(token.MINUS_ASSIGN, "-=", line, col)
+		}
 		return l.tok(token.MINUS, "-", line, col)
 	case '*':
+		if l.pos < len(l.input) && l.peek() == '=' {
+			l.next()
+			return l.tok(token.STAR_ASSIGN, "*=", line, col)
+		}
 		return l.tok(token.STAR, "*", line, col)
 	case '/':
 		if l.pos < len(l.input) && l.peek() == '/' {
@@ -91,6 +103,10 @@ func (l *Lexer) NextToken() token.Token {
 				l.next()
 			}
 			return l.NextToken()
+		}
+		if l.pos < len(l.input) && l.peek() == '=' {
+			l.next()
+			return l.tok(token.SLASH_ASSIGN, "/=", line, col)
 		}
 		return l.tok(token.SLASH, "/", line, col)
 	case '=':

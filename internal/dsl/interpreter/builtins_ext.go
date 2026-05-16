@@ -1,0 +1,127 @@
+package interpreter
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// isBlankVal checks if a value is considered empty (nil, "", 0, false, empty collection).
+func isBlankVal(v any) bool {
+	if v == nil {
+		return true
+	}
+	switch t := v.(type) {
+	case string:
+		return t == ""
+	case float64:
+		return t == 0
+	case bool:
+		return !t
+	case []any:
+		return len(t) == 0
+	case *Array:
+		return len(t.items) == 0
+	case *Map:
+		return len(t.keys) == 0
+	}
+	return false
+}
+
+// formatValue implements Формат(value, formatString) with minimal format support.
+func fmtBuiltin(args []any) (string, error) {
+	if len(args) < 2 {
+		return fmt.Sprintf("%v", args[0]), nil
+	}
+	val := args[0]
+	fmtStr := strings.ToLower(strArg(args, 1))
+
+	// Date formatting
+	if strings.Contains(fmtStr, "дф=") || strings.Contains(fmtStr, "df=") {
+		if t, ok := val.(time.Time); ok {
+			pattern := extractFormatParam(fmtStr, "дф=")
+			if pattern == "" {
+				pattern = extractFormatParam(fmtStr, "df=")
+			}
+			return formatDate(t, pattern), nil
+		}
+	}
+
+	// Number formatting
+	if f, ok := toFloat(val); ok {
+		decimals := 2
+		if d := extractFormatParam(fmtStr, "чдц="); d != "" {
+			if n, err := strconv.Atoi(d); err == nil {
+				decimals = n
+			}
+		}
+		sep := " "
+		if s := extractFormatParam(fmtStr, "чрг="); s != "" {
+			sep = s
+		}
+		return formatNumber(f, decimals, sep), nil
+	}
+
+	return fmt.Sprintf("%v", val), nil
+}
+
+// extractFormatParam extracts a parameter value from a format string like "ЧДЦ=2; ЧРГ=' '"
+func extractFormatParam(fmtStr, key string) string {
+	idx := strings.Index(fmtStr, key)
+	if idx < 0 {
+		return ""
+	}
+	rest := fmtStr[idx+len(key):]
+	// Skip optional quote
+	if len(rest) > 0 && rest[0] == '\'' {
+		rest = rest[1:]
+		end := strings.Index(rest, "'")
+		if end >= 0 {
+			return rest[:end]
+		}
+	}
+	// Read until ; or end
+	end := strings.Index(rest, ";")
+	if end >= 0 {
+		return rest[:end]
+	}
+	return rest
+}
+
+// formatDate converts a 1C-style date pattern to Go format and formats.
+func formatDate(t time.Time, pattern string) string {
+	// Convert 1C patterns to Go
+	goFmt := pattern
+	goFmt = strings.ReplaceAll(goFmt, "yyyy", "2006")
+	goFmt = strings.ReplaceAll(goFmt, "yy", "06")
+	goFmt = strings.ReplaceAll(goFmt, "MM", "01")
+	goFmt = strings.ReplaceAll(goFmt, "dd", "02")
+	return t.Format(goFmt)
+}
+
+// formatNumber formats a float with given decimal places and thousands separator.
+func formatNumber(f float64, decimals int, sep string) string {
+	s := strconv.FormatFloat(f, 'f', decimals, 64)
+	parts := strings.Split(s, ".")
+	intPart := parts[0]
+	if sep != "" && len(intPart) > 3 {
+		sign := ""
+		if intPart[0] == '-' {
+			sign = "-"
+			intPart = intPart[1:]
+		}
+		var buf []byte
+		for i, c := range intPart {
+			if i > 0 && (len(intPart)-i)%3 == 0 {
+				buf = append(buf, sep...)
+			}
+			buf = append(buf, byte(c))
+		}
+		intPart = sign + string(buf)
+	}
+	if len(parts) > 1 {
+		return intPart + "." + parts[1]
+	}
+	return intPart
+}

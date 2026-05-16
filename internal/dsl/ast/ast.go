@@ -23,15 +23,22 @@ type ProcedureDecl struct {
 }
 
 type IfStmt struct {
+	Cond    Expr
+	Then    []Stmt
+	ElseIfs []ElseIfBranch
+	Else    []Stmt
+}
+
+type ElseIfBranch struct {
 	Cond Expr
-	Then []Stmt
-	Else []Stmt
+	Body []Stmt
 }
 
 type ExprStmt struct{ X Expr }
 
 type AssignStmt struct {
 	Target Expr
+	Op     token.Type // ASSIGN (=), PLUS_ASSIGN (+=), etc.
 	Value  Expr
 }
 
@@ -109,6 +116,14 @@ type UnaryExpr struct {
 	Operand Expr
 }
 
+// TernaryExpr — ?(cond, trueVal, falseVal)
+type TernaryExpr struct {
+	Tok   token.Token
+	Cond  Expr
+	True  Expr
+	False Expr
+}
+
 // TryStmt — Попытка ... Исключение ... КонецПопытки
 type TryStmt struct {
 	Tok    token.Token
@@ -141,6 +156,7 @@ func (*NewExpr) nodeType() string       { return "NewExpr" }
 func (*IndexExpr) nodeType() string     { return "IndexExpr" }
 func (*BoolLit) nodeType() string       { return "BoolLit" }
 func (*UnaryExpr) nodeType() string     { return "UnaryExpr" }
+func (*TernaryExpr) nodeType() string { return "TernaryExpr" }
 func (*TryStmt) nodeType() string       { return "TryStmt" }
 func (*BreakStmt) nodeType() string     { return "BreakStmt" }
 func (*ContinueStmt) nodeType() string  { return "ContinueStmt" }
@@ -166,3 +182,4 @@ func (*NewExpr) exprNode()    {}
 func (*IndexExpr) exprNode()  {}
 func (*BoolLit) exprNode()    {}
 func (*UnaryExpr) exprNode()  {}
+func (*TernaryExpr) exprNode() {}

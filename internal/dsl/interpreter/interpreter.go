@@ -183,8 +183,18 @@ func (i *Interpreter) execStmt(s ast.Stmt, e *env) {
 		cond := i.evalExpr(v.Cond, e)
 		if truthy(cond) {
 			i.execBlock(v.Then, e.child())
-		} else if len(v.Else) > 0 {
-			i.execBlock(v.Else, e.child())
+		} else {
+			matched := false
+			for _, elif := range v.ElseIfs {
+				if truthy(i.evalExpr(elif.Cond, e)) {
+					i.execBlock(elif.Body, e.child())
+					matched = true
+					break
+				}
+			}
+			if !matched && len(v.Else) > 0 {
+				i.execBlock(v.Else, e.child())
+			}
 		}
 	case *ast.ForEachStmt:
 		coll := i.evalExpr(v.Collection, e)
@@ -224,6 +234,10 @@ func (i *Interpreter) execStmt(s ast.Stmt, e *env) {
 		}
 	case *ast.AssignStmt:
 		val := i.evalExpr(v.Value, e)
+		if v.Op != token.ASSIGN && v.Op != 0 {
+			old := i.evalExpr(v.Target, e)
+			val = applyCompoundOp(v.Op, old, val)
+		}
 		i.assign(v.Target, val, e)
 	case *ast.ExprStmt:
 		i.evalExpr(v.X, e)
@@ -317,6 +331,11 @@ func (i *Interpreter) evalExpr(expr ast.Expr, e *env) any {
 		return i.evalNew(v, e)
 	case *ast.UnaryExpr:
 		return i.evalUnary(v, e)
+	case *ast.TernaryExpr:
+		if truthy(i.evalExpr(v.Cond, e)) {
+			return i.evalExpr(v.True, e)
+		}
+		return i.evalExpr(v.False, e)
 	case *ast.BinaryExpr:
 		return i.evalBinary(v, e)
 	case *ast.CallExpr:
@@ -589,4 +608,29 @@ func toFloat(v any) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+// applyCompoundOp computes the result of a compound assignment operator.
+func applyCompoundOp(op token.Type, old, val any) any {
+	lf, lok := toFloat(old)
+	rf, rok := toFloat(val)
+	if lok && rok {
+		switch op {
+		case token.PLUS_ASSIGN:
+			return lf + rf
+		case token.MINUS_ASSIGN:
+			return lf - rf
+		case token.STAR_ASSIGN:
+			return lf * rf
+		case token.SLASH_ASSIGN:
+			if rf != 0 {
+				return lf / rf
+			}
+			return float64(0)
+		}
+	}
+	if op == token.PLUS_ASSIGN {
+		return fmt.Sprintf("%v", old) + fmt.Sprintf("%v", val)
+	}
+	return val
 }

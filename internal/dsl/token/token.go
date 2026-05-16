@@ -19,6 +19,7 @@ const (
 	IF
 	THEN
 	ELSE
+	ELSEIF
 	ENDIF
 	VAR
 	FOR
@@ -51,6 +52,13 @@ const (
 	STAR   // *
 	SLASH  // /
 
+	PLUS_ASSIGN  // +=
+	MINUS_ASSIGN // -=
+	STAR_ASSIGN  // *=
+	SLASH_ASSIGN // /=
+
+	QUESTION // ?
+
 	DOT
 	COMMA
 	SEMICOLON
@@ -69,6 +77,7 @@ var keywords = map[string]Type{
 	"if":           IF,
 	"then":         THEN,
 	"else":         ELSE,
+	"elseif":       ELSEIF,
 	"endif":        ENDIF,
 	"var":          VAR,
 	"for":          FOR,
@@ -86,6 +95,7 @@ var keywords = map[string]Type{
 	"если":           IF,
 	"тогда":          THEN,
 	"иначе":          ELSE,
+	"иначеесли":      ELSEIF,
 	"конецесли":      ENDIF,
 	"перем":          VAR,
 	"для":            FOR,
@@ -165,6 +175,8 @@ func (t Type) String() string {
 		return "Then"
 	case ELSE:
 		return "Else"
+	case ELSEIF:
+		return "ElseIf"
 	case ENDIF:
 		return "EndIf"
 	case VAR:
@@ -229,6 +241,16 @@ func (t Type) String() string {
 		return "*"
 	case SLASH:
 		return "/"
+	case PLUS_ASSIGN:
+		return "+="
+	case MINUS_ASSIGN:
+		return "-="
+	case STAR_ASSIGN:
+		return "*="
+	case SLASH_ASSIGN:
+		return "/="
+	case QUESTION:
+		return "?"
 	case DOT:
 		return "."
 	case COMMA:
