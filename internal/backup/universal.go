@@ -502,7 +502,7 @@ func ImportUniversal(
 	// Import data/ tables (application tables).
 	dataDir := filepath.Join(tmpDir, "data")
 	if _, err := os.Stat(dataDir); err == nil {
-		if err := importDir(ctx, db, dataDir, report); err != nil {
+		if err := importDir(ctx, db, dataDir, report, nil); err != nil {
 			return report, fmt.Errorf("import data: %w", err)
 		}
 	}
@@ -510,7 +510,7 @@ func ImportUniversal(
 	// Import system/ tables.
 	sysDir := filepath.Join(tmpDir, "system")
 	if _, err := os.Stat(sysDir); err == nil {
-		if err := importDir(ctx, db, sysDir, report); err != nil {
+		if err := importDir(ctx, db, sysDir, report, nil); err != nil {
 			return report, fmt.Errorf("import system: %w", err)
 		}
 	}
@@ -651,7 +651,7 @@ func migrateSchema(ctx context.Context, db *storage.DB, configDest, cfgFileDir s
 }
 
 // importDir walks a directory of .jsonl files and imports each into the DB.
-func importDir(ctx context.Context, db *storage.DB, dir string, report *ImportReport) error {
+func importDir(ctx context.Context, db *storage.DB, dir string, report *ImportReport, skip map[string]bool) error {
 	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
@@ -662,6 +662,10 @@ func importDir(ctx context.Context, db *storage.DB, dir string, report *ImportRe
 		// Derive table name from filename: "Номенклатура.jsonl" → "номенклатура"
 		base := filepath.Base(path)
 		tableName := strings.TrimSuffix(base, ".jsonl")
+
+		if skip[strings.ToLower(tableName)] {
+			return nil
+		}
 
 		n, err := importTableJSONL(ctx, db, tableName, path)
 		if err != nil {

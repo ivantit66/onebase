@@ -1,0 +1,15 @@
+name: Демо
+description: Роль для демо-доступа — чтение и создание без удаления
+permissions:
+  catalogs:
+    Контрагент: [read, write]
+    Номенклатура: [read, write]
+    Склад: [read, write]
+  documents:
+    РеализацияТоваров: [read, write, post, unpost]
+    ПоступлениеТоваров: [read, write, post, unpost]
+  registers:
+    Взаиморасчеты: [read]
+    ОстаткиТоваров: [read]
+  reports:
+    ОстаткиТоваров: [run]

@@ -26,6 +26,8 @@ type Config struct {
 	Logo          string // path to logo file (png/svg/jpg)
 	Mailer        *mailer.Mailer
 	MaxFileSizeMB int // 0 = use default 50
+	DemoMode      bool
+	DemoMessage   string
 }
 
 type Server struct {

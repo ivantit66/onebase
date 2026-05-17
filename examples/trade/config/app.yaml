@@ -17,3 +17,12 @@ version: "1.0"
 # attachments:
 #   max_file_size_mb: 50
 #   allowed_types: [pdf, png, jpg, docx, xlsx]
+
+# Демо-режим: жёлтый баннер + автосброс данных по расписанию
+# Перед включением: создайте бэкап эталонного состояния через конфигуратор
+# и укажите путь к нему в reset_backup.
+# demo:
+#   enabled: true
+#   reset_backup: backups/demo_initial.obz   # путь относительно папки проекта
+#   reset_schedule: "0 2 * * *"              # каждую ночь в 02:00
+#   message: "Данные сбрасываются каждую ночь в 02:00"

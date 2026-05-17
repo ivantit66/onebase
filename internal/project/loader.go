@@ -67,6 +67,14 @@ type AttachmentsConfig struct {
 	AllowedTypes  []string `yaml:"allowed_types"`
 }
 
+// DemoConfig holds demo-mode settings from app.yaml section "demo".
+type DemoConfig struct {
+	Enabled       bool   `yaml:"enabled"`
+	ResetBackup   string `yaml:"reset_backup"`   // путь к .obz относительно директории проекта
+	ResetSchedule string `yaml:"reset_schedule"`  // cron, по умолчанию "0 2 * * *"
+	Message       string `yaml:"message"`         // текст баннера
+}
+
 // AppConfig holds the optional config/app.yaml metadata.
 type AppConfig struct {
 	Name        string             `yaml:"name"`
@@ -74,6 +82,7 @@ type AppConfig struct {
 	Logo        string             `yaml:"logo,omitempty"`
 	Email       *EmailConfig       `yaml:"email,omitempty"`
 	Attachments *AttachmentsConfig `yaml:"attachments,omitempty"`
+	Demo        *DemoConfig        `yaml:"demo,omitempty"`
 }
 
 // LoadConfig reads config/app.yaml from the project directory.

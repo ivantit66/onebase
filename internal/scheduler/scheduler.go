@@ -46,6 +46,37 @@ func (s *Scheduler) SetMailer(m *mailer.Mailer) {
 	s.mailer = m
 }
 
+// RegisterGoJob добавляет нативное Go-задание в планировщик.
+// Результат записывается в _scheduled_runs как обычное задание.
+func (s *Scheduler) RegisterGoJob(name, title, schedule string, fn func(ctx context.Context) error) error {
+	_, err := s.cron.AddFunc(schedule, func() {
+		ctx := context.Background()
+		start := time.Now()
+		runID, _ := s.db.InsertScheduledRun(ctx, name, start)
+		runErr := fn(ctx)
+		elapsed := time.Since(start).Milliseconds()
+		status, errStr := "success", ""
+		if runErr != nil {
+			status = "error"
+			errStr = runErr.Error()
+			s.log.Error("go job failed", "job", name, "err", runErr)
+		} else {
+			s.log.Info("go job done", "job", name, "ms", elapsed)
+		}
+		s.db.UpdateScheduledRun(ctx, runID, status, "", errStr, elapsed)
+	})
+	if err != nil {
+		return fmt.Errorf("scheduler: RegisterGoJob %s: %w", name, err)
+	}
+	s.jobs = append(s.jobs, &metadata.ScheduledJob{
+		Name:     name,
+		Title:    title,
+		Schedule: schedule,
+		Enabled:  true,
+	})
+	return nil
+}
+
 func (s *Scheduler) LoadJobs(jobs []*metadata.ScheduledJob) error {
 	s.jobs = jobs
 	for _, job := range jobs {

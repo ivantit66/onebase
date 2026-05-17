@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/ivantit66/onebase/internal/api"
 	"github.com/ivantit66/onebase/internal/auth"
+	"github.com/ivantit66/onebase/internal/backup"
 	"github.com/ivantit66/onebase/internal/configdb"
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
 	"github.com/ivantit66/onebase/internal/launcher"
@@ -185,6 +186,31 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	sched := scheduler.New(db, reg, interp)
 	if err := sched.LoadJobs(proj.ScheduledJobs); err != nil {
 		return fmt.Errorf("scheduler: %w", err)
+	}
+
+	if appCfg != nil && appCfg.Demo != nil && appCfg.Demo.Enabled {
+		uiCfg.DemoMode = true
+		msg := appCfg.Demo.Message
+		if msg == "" {
+			msg = "Данные сбрасываются каждую ночь в 02:00"
+		}
+		uiCfg.DemoMessage = msg
+
+		schedule := appCfg.Demo.ResetSchedule
+		if schedule == "" {
+			schedule = "0 2 * * *"
+		}
+		backupPath := ""
+		if appCfg.Demo.ResetBackup != "" {
+			backupPath = filepath.Join(dir, appCfg.Demo.ResetBackup)
+		}
+		dbRef := db // capture
+		if err := sched.RegisterGoJob("DemoReset", "Сброс демо-данных", schedule, func(ctx context.Context) error {
+			_, err := backup.DemoReset(ctx, dbRef, backupPath)
+			return err
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: demo reset job: %v\n", err)
+		}
 	}
 
 	if appCfg != nil && appCfg.Email != nil {

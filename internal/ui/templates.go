@@ -302,6 +302,11 @@ const tplNav = `
     </div>
   </div>
 </header>
+{{if .Cfg.DemoMode}}
+<div style="background:#f59e0b;color:#fff;text-align:center;padding:6px 16px;font-size:13px;font-weight:600;letter-spacing:.02em">
+  ⚠️ ДЕМО-РЕЖИМ{{if .Cfg.DemoMessage}} — {{.Cfg.DemoMessage}}{{end}}
+</div>
+{{end}}
 {{if .Subsystems}}
 <nav class="subsys-bar">
   {{range .Subsystems}}<a href="/ui/?subsystem={{.Name}}" class="{{if eq .Name $.CurrentSubsystem}}active{{end}}">{{.Title}}</a>{{end}}
