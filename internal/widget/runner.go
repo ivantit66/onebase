@@ -371,6 +371,7 @@ func (r *Runner) runQuery(ctx context.Context, w *metadata.Widget) ([]map[string
 		Registers:   r.Reg.Registers(),
 		InfoRegs:    r.Reg.InfoRegisters(),
 		AccountRegs: r.Reg.AccountRegisters(),
+		Dialect:     r.Store.Dialect(),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("compile: %w", err)

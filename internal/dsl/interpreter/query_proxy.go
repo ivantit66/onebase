@@ -7,11 +7,13 @@ import (
 
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/query"
+	"github.com/ivantit66/onebase/internal/storage"
 )
 
 // QueryDB is the minimal storage interface needed by queryProxy.
 type QueryDB interface {
 	QueryAll(ctx context.Context, sql string, args ...any) ([]map[string]any, error)
+	Dialect() storage.Dialect
 }
 
 // QueryRegistry is the minimal registry interface needed by queryProxy.
@@ -86,6 +88,7 @@ func (q *queryProxy) execute() *Array {
 		Registers:   q.reg.Registers(),
 		InfoRegs:    q.reg.InfoRegisters(),
 		AccountRegs: q.reg.AccountRegisters(),
+		Dialect:     q.db.Dialect(),
 	})
 	if err != nil {
 		panic(userError{Msg: "Ошибка запроса: " + err.Error()})
