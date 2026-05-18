@@ -2,7 +2,9 @@ package launcher
 
 import "html/template"
 
-var tmpl = template.Must(template.New("root").Parse(tplLauncherHead + tplIndex + tplForm + tplConfigResult))
+var tmpl = template.Must(template.New("root").Funcs(template.FuncMap{
+	"maskDSN": maskDSN,
+}).Parse(tplLauncherHead + tplIndex + tplForm + tplConfigResult))
 
 const tplLauncherHead = `
 {{define "lhead"}}<!DOCTYPE html>
@@ -128,7 +130,7 @@ const tplIndex = `
     <div class="base-sub">
       {{if eq .ConfigSource "file"}}📁 {{.Path}}{{else}}🗄 В базе данных{{end}}
     </div>
-    <div class="base-sub">{{.DB}} · :{{.Port}}</div>
+    <div class="base-sub">{{maskDSN .DB}} · :{{.Port}}</div>
   </div>
 </div>
 {{end}}
