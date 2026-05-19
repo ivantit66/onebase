@@ -333,6 +333,9 @@ func KnownBuiltinNames() map[string]struct{} {
 	for k := range builtins {
 		names[k] = struct{}{}
 	}
+	// special context variables
+	names["this"] = struct{}{}
+	names["этотобъект"] = struct{}{}
 	// runtime-injected via buildDSLVars / buildDSLVarsWithMessages
 	for _, k := range []string{
 		"сообщить", "message",

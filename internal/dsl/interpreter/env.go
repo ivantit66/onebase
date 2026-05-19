@@ -52,10 +52,11 @@ func (e *env) child() *env {
 }
 
 func (e *env) get(name string) (any, bool) {
-	if name == "this" {
+	low := strings.ToLower(name)
+	if low == "this" || low == "этотобъект" {
 		return e.this, true
 	}
-	name = strings.ToLower(name)
+	name = low
 	if v, ok := e.vars[name]; ok {
 		return v, true
 	}
