@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -44,4 +45,40 @@ func (o *Object) Get(name string) any {
 
 func (o *Object) Set(name string, v any) {
 	o.Fields[strings.ToLower(name)] = v
+}
+
+// GetRefUUID — реализует тот же интерфейс, что и *interpreter.Ref.
+// Нужно для записи Object в reference:*-колонки регистра без
+// двойной диспетчеризации в storage (см. замечание #17 и
+// «unsupported type runtime.Object, a struct» при проведении).
+func (o *Object) GetRefUUID() string {
+	if o == nil {
+		return ""
+	}
+	return o.ID.String()
+}
+
+// String — display-имя объекта для записи в string-колонки регистра
+// и DSL-функцию Строка(). Берём первое непустое поле «Наименование»
+// (учётный стандарт 1С), иначе короткий префикс UUID. Без metadata
+// мы не знаем «первого строкового поля», поэтому полагаемся на
+// конвенцию имени поля.
+func (o *Object) String() string {
+	if o == nil {
+		return ""
+	}
+	for _, k := range []string{"наименование", "name", "номер", "number"} {
+		if v, ok := o.Fields[k]; ok && v != nil {
+			s := strings.TrimSpace(fmt.Sprint(v))
+			if s != "" {
+				return s
+			}
+		}
+	}
+	// fallback — короткий хвост UUID, чтобы не путаться при отладке
+	id := o.ID.String()
+	if len(id) >= 8 {
+		return o.Type + ":" + id[:8]
+	}
+	return o.Type + ":" + id
 }
