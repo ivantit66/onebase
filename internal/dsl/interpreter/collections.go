@@ -188,6 +188,21 @@ func (m *Map) findIdx(key any) int {
 			return i
 		}
 	}
+	// Fallback: Ref.Name vs plain string (query auto-resolves references to names)
+	if ref, ok := key.(*Ref); ok {
+		for i, k := range m.keys {
+			if s, ok2 := k.(string); ok2 && s == ref.Name {
+				return i
+			}
+		}
+	}
+	if s, ok := key.(string); ok {
+		for i, k := range m.keys {
+			if ref, ok2 := k.(*Ref); ok2 && ref.Name == s {
+				return i
+			}
+		}
+	}
 	return -1
 }
 
