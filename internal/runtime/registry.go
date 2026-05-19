@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -168,6 +170,11 @@ func (r *Registry) GetPrintForms(entityName string) []*printform.PrintForm {
 }
 
 // LoadDSLPrintForms registers DSL (.os) print forms indexed by entity name.
+// Замечание #10: при коллизии «один и тот же name для одного и того же
+// document» с YAML-формой .os перебивает YAML, а YAML удаляется из реестра.
+// В лог печатается warning, чтобы автор конфигурации понимал, что
+// дубликат игнорируется. Должен вызываться ПОСЛЕ Load (где регистрируются
+// YAML-формы); проверка идёт под одной блокировкой.
 func (r *Registry) LoadDSLPrintForms(forms []*printform.DSLPrintForm) {
 	m := make(map[string][]*printform.DSLPrintForm)
 	for _, f := range forms {
@@ -176,6 +183,30 @@ func (r *Registry) LoadDSLPrintForms(forms []*printform.DSLPrintForm) {
 	}
 	r.mu.Lock()
 	r.dslPrintForms = m
+	// Дедуп YAML/.os коллизий: удаляем YAML, если есть .os с тем же именем.
+	for entityKey, dslList := range m {
+		yamlList := r.printForms[entityKey]
+		if len(yamlList) == 0 {
+			continue
+		}
+		var kept []*printform.PrintForm
+		for _, yf := range yamlList {
+			collides := false
+			for _, df := range dslList {
+				if strings.EqualFold(yf.Name, df.Name) {
+					collides = true
+					fmt.Fprintf(os.Stderr,
+						"warning: print form %q for %s — YAML и .os коллизия, используется .os (LayoutPath=%s); YAML-вариант игнорируется\n",
+						yf.Name, yf.Document, df.LayoutPath)
+					break
+				}
+			}
+			if !collides {
+				kept = append(kept, yf)
+			}
+		}
+		r.printForms[entityKey] = kept
+	}
 	r.mu.Unlock()
 }
 
