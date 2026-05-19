@@ -262,6 +262,50 @@ func TestCompile_InfoReg_Direct(t *testing.T) {
 	}
 }
 
+func TestCompile_Balances_RefDim_Aliased(t *testing.T) {
+	// Register with a reference dimension — ColumnName returns "номенклатура_id".
+	// The VT subquery must alias it back to "номенклатура" so DSL code like
+	// Стр.Номенклатура resolves correctly, and outer WHERE uses the logical name.
+	reg := &metadata.Register{
+		Name: "ПартииТоваров",
+		Dimensions: []metadata.Field{
+			{Name: "Номенклатура", RefEntity: "Номенклатура"},
+			{Name: "ДатаПоставки"},
+		},
+		Resources: []metadata.Field{
+			{Name: "Количество"},
+			{Name: "Сумма"},
+		},
+	}
+	src := `ВЫБРАТЬ Номенклатура, КоличествоОстаток
+ИЗ РегистрНакопления.ПартииТоваров.Остатки()
+ГДЕ Номенклатура В (&СписокНом)`
+
+	r, err := query.Compile(src, query.CompileOpts{
+		Params:    map[string]any{"СписокНом": []any{"uuid-1", "uuid-2"}},
+		Registers: []*metadata.Register{reg},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := r.SQL
+	// VT subquery must alias the _id column back to the logical field name.
+	if !strings.Contains(sql, "номенклатура_id AS номенклатура") {
+		t.Errorf("expected 'номенклатура_id AS номенклатура' in VT subquery, got:\n%s", sql)
+	}
+	// GROUP BY must use the actual DB column name.
+	if !strings.Contains(sql, "GROUP BY номенклатура_id") {
+		t.Errorf("expected 'GROUP BY номенклатура_id', got:\n%s", sql)
+	}
+	// Outer WHERE must reference the aliased DSL name, not _id.
+	if !strings.Contains(sql, "WHERE номенклатура IN") {
+		t.Errorf("expected outer 'WHERE номенклатура IN', got:\n%s", sql)
+	}
+	if strings.Contains(sql, "WHERE номенклатура_id IN") {
+		t.Errorf("outer WHERE should use aliased 'номенклатура', not 'номенклатура_id', got:\n%s", sql)
+	}
+}
+
 func TestCompile_MissingRegister_Error(t *testing.T) {
 	src := `ВЫБРАТЬ Ном ИЗ РегистрНакопления.Неизвестный.Остатки()`
 	_, err := query.Compile(src, query.CompileOpts{})

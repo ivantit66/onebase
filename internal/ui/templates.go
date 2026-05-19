@@ -15,6 +15,18 @@ var tmpl = template.Must(template.New("root").Funcs(template.FuncMap{
 	"lower": strings.ToLower,
 	"str":   func(v any) string { if v == nil { return "" }; return fmt.Sprintf("%v", v) },
 	"add":   func(a, b int) int { return a + b },
+	// refID extracts UUID from a *Ref (implements GetRefUUID), otherwise returns fmt.Sprintf.
+	// Used in TP row templates so the "selected" comparison works after enrichTPRowsWithRefs.
+	"refID": func(v any) string {
+		if v == nil {
+			return ""
+		}
+		type uuidGetter interface{ GetRefUUID() string }
+		if rp, ok := v.(uuidGetter); ok {
+			return rp.GetRefUUID()
+		}
+		return fmt.Sprintf("%v", v)
+	},
 	"isRef":  func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "reference:") },
 	"isEnum": func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "enum:") },
 	"fmtDate": func(v any) string {
@@ -887,7 +899,7 @@ const tplForm = `
             <select name="tp.{{$tpName}}.{{$i}}.{{$fn}}" style="flex:1">
               <option value="">— выбрать —</option>
               {{range index $tpRef $fn}}
-              <option value="{{index . "id"}}" {{if eq (str (index . "id")) (str (index $row $fn))}}selected{{end}}>{{index . "_label"}}</option>
+              <option value="{{index . "id"}}" {{if eq (str (index . "id")) (refID (index $row $fn))}}selected{{end}}>{{index . "_label"}}</option>
               {{end}}
             </select>
             <button type="button" onclick="openRefPicker(this.parentElement.querySelector('select'))" style="padding:4px 8px;border:1px solid #e2e8f0;border-radius:5px;background:#f8fafc;cursor:pointer;font-size:12px;flex-shrink:0" title="Выбрать из списка">...</button>

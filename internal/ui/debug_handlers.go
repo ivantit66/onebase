@@ -206,6 +206,9 @@ func (s *Server) debugGlobalEvaluate(w http.ResponseWriter, r *http.Request) {
 		result := sess.Evaluate(req.Expr, func(expr string) (any, error) {
 			return standaloneEval(s, expr)
 		})
+		// Convert Value to a string so JSON-marshaling never silently drops
+		// unexported fields (e.g. *Map, *Array) — client always gets a readable string.
+		result.Value = debugger.FormatValue(result.Value)
 		writeJSON(w, 200, result)
 		return
 	}
@@ -220,7 +223,7 @@ func (s *Server) debugGlobalEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, debugger.EvaluateResult{
-		Value: val,
+		Value: debugger.FormatValue(val),
 		Type:  debugger.GetTypeName(val),
 	})
 }

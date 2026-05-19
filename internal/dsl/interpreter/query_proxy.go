@@ -125,7 +125,7 @@ func (q *queryProxy) execute() *Array {
 	}
 	rows, err := q.db.QueryAll(q.ctx, res.SQL, res.Args...)
 	if err != nil {
-		panic(userError{Msg: "Ошибка выполнения SQL: " + err.Error()})
+		panic(userError{Msg: "Ошибка выполнения SQL: " + err.Error() + "\nSQL: " + res.SQL})
 	}
 	arr := &Array{}
 	for _, row := range rows {

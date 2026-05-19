@@ -393,14 +393,24 @@ func (tr *translator) addParam(name string) string {
 		if len(items) == 0 {
 			return "NULL"
 		}
-		placeholders := make([]string, 0, len(items))
+		var placeholders []string
 		for _, item := range items {
+			// Skip nil and empty strings — they'd cause cast mismatch (uuid = text)
+			if item == nil {
+				continue
+			}
+			if s, ok := item.(string); ok && s == "" {
+				continue
+			}
 			tr.args = append(tr.args, item)
 			ph := d.Placeholder(len(tr.args))
 			if d.Name() == "postgres" {
 				ph += castSuffix(d, item)
 			}
 			placeholders = append(placeholders, ph)
+		}
+		if len(placeholders) == 0 {
+			return "NULL"
 		}
 		return strings.Join(placeholders, ", ")
 	}
@@ -526,6 +536,23 @@ func dimCols(dims []metadata.Field) []string {
 		names[i] = metadata.ColumnName(d)
 	}
 	return names
+}
+
+// dimSelCols returns SELECT list entries for dimension fields, aliasing
+// reference columns (e.g. "номенклатура_id AS номенклатура") so that outer
+// queries and DSL code can reference dimensions by their logical names.
+func dimSelCols(dims []metadata.Field) []string {
+	result := make([]string, len(dims))
+	for i, d := range dims {
+		col := metadata.ColumnName(d)
+		name := strings.ToLower(d.Name)
+		if col != name {
+			result[i] = col + " AS " + name
+		} else {
+			result[i] = col
+		}
+	}
+	return result
 }
 
 // buildAccumVT generates a SQL subquery for an accumulation register virtual table.
@@ -681,10 +708,11 @@ func (tr *translator) genAccountTurnovers(ar *metadata.AccountRegister, args [][
 func (tr *translator) genBalances(reg *metadata.Register, args [][]tok) (string, string, error) {
 	tableName := metadata.RegisterTableName(reg.Name)
 	alias := "остатки_" + strings.ToLower(reg.Name)
-	dims := dimCols(reg.Dimensions)
+	dims := dimCols(reg.Dimensions)        // actual col names for GROUP BY / WHERE
+	selDims := dimSelCols(reg.Dimensions)  // aliased names for SELECT
 
 	var cols []string
-	cols = append(cols, dims...)
+	cols = append(cols, selDims...)
 	for _, r := range reg.Resources {
 		col := strings.ToLower(r.Name)
 		cols = append(cols,
@@ -724,9 +752,10 @@ func (tr *translator) genTurnovers(reg *metadata.Register, args [][]tok) (string
 	tableName := metadata.RegisterTableName(reg.Name)
 	alias := "обороты_" + strings.ToLower(reg.Name)
 	dims := dimCols(reg.Dimensions)
+	selDims := dimSelCols(reg.Dimensions)
 
 	var cols []string
-	cols = append(cols, dims...)
+	cols = append(cols, selDims...)
 	for _, r := range reg.Resources {
 		col := strings.ToLower(r.Name)
 		cols = append(cols,
@@ -774,6 +803,7 @@ func (tr *translator) genBalancesAndTurnovers(reg *metadata.Register, args [][]t
 	tableName := metadata.RegisterTableName(reg.Name)
 	alias := "остаткиоборотов_" + strings.ToLower(reg.Name)
 	dims := dimCols(reg.Dimensions)
+	selDims := dimSelCols(reg.Dimensions)
 
 	var startSQL, endSQL, filterSQL string
 	if len(args) > 0 && len(args[0]) > 0 {
@@ -791,7 +821,7 @@ func (tr *translator) genBalancesAndTurnovers(reg *metadata.Register, args [][]t
 	}
 
 	var cols []string
-	cols = append(cols, dims...)
+	cols = append(cols, selDims...)
 	for _, r := range reg.Resources {
 		col := strings.ToLower(r.Name)
 		if startSQL != "" {
@@ -854,6 +884,7 @@ func (tr *translator) genInfoSlice(ir *metadata.InfoRegister, args [][]tok, dire
 	tableName := metadata.InfoRegTableName(ir.Name)
 	alias := aliasPrefix + strings.ToLower(ir.Name)
 	dims := dimCols(ir.Dimensions)
+	selDims := dimSelCols(ir.Dimensions)
 
 	var resCols []string
 	for _, r := range ir.Resources {
@@ -886,14 +917,15 @@ func (tr *translator) genInfoSlice(ir *metadata.InfoRegister, args [][]tok, dire
 		// SELECT (per dim) the row with latest/earliest period — uses
 		// d.LatestPerKey, which gives DISTINCT ON for PG and ROW_NUMBER()
 		// OVER (PARTITION BY) for SQLite.
-		selectCols := append([]string{"period"}, append(append([]string{}, dims...), resCols...)...)
+		// selDims: aliased col names for SELECT; dims: actual col names for PARTITION BY.
+		selectCols := append([]string{"period"}, append(append([]string{}, selDims...), resCols...)...)
 		return d.LatestPerKey(selectCols, dims, []string{"period " + direction}, tableName, "", where), alias, nil
 	}
 
 	// Non-periodic or no dimensions — plain SELECT.
 	var sb strings.Builder
 	var allCols []string
-	allCols = append(allCols, dims...)
+	allCols = append(allCols, selDims...)
 	allCols = append(allCols, resCols...)
 	sb.WriteString("SELECT ")
 	sb.WriteString(strings.Join(allCols, ", "))
@@ -992,6 +1024,7 @@ func buildColMap(tokens []tok, opts CompileOpts) map[string]string {
 	}
 
 	// Find the specific register being queried (same scan as preScanRefDims).
+	vtSourceFound := false
 	for i := 0; i+2 < len(tokens); i++ {
 		t := tokens[i]
 		if t.kind != tIdent {
@@ -1002,6 +1035,7 @@ func buildColMap(tokens []tok, opts CompileOpts) map[string]string {
 			continue
 		}
 		if i+3 < len(tokens) && tokens[i+3].kind == tDot {
+			vtSourceFound = true
 			continue // skip virtual tables
 		}
 		regName := tokens[i+2].val
@@ -1024,6 +1058,12 @@ func buildColMap(tokens []tok, opts CompileOpts) map[string]string {
 			}
 		}
 		// Found a source but not a register — stop searching (entity query needs no colMap)
+		return m
+	}
+
+	// VT query: the subquery already aliases _id cols to DSL names, so the outer
+	// query must reference those logical names — return empty colMap.
+	if vtSourceFound {
 		return m
 	}
 

@@ -14,8 +14,9 @@ type Ref struct {
 	Name string
 }
 
-func (r *Ref) String() string    { return r.Name }
+func (r *Ref) String() string     { return r.Name }
 func (r *Ref) GetRefUUID() string { return r.UUID }
+func (r *Ref) TypeName() string   { return "Ссылка" }
 
 // refKey extracts the comparison key: UUID for Ref, string representation otherwise.
 // Used in Map.findIdx and equal() so *Ref and plain UUID strings match each other.
@@ -85,6 +86,8 @@ func (a *Array) SetIndex(i int, val any) {
 }
 
 func (a *Array) Iterate() []any { return a.items }
+func (a *Array) String() string  { return fmt.Sprintf("Массив[%d]", len(a.items)) }
+func (a *Array) TypeName() string { return "Массив" }
 
 // ─── Struct (Структура) ───────────────────────────────────────────────────────
 
@@ -125,6 +128,8 @@ func newStruct(args []any) *Struct {
 
 func (s *Struct) Get(field string) any    { return s.vals[strings.ToLower(field)] }
 func (s *Struct) Set(field string, v any) { s.vals[strings.ToLower(field)] = v }
+func (s *Struct) String() string          { return fmt.Sprintf("Структура[%d]", len(s.keys)) }
+func (s *Struct) TypeName() string        { return "Структура" }
 
 func (s *Struct) CallMethod(name string, args []any) any {
 	switch name {
@@ -178,6 +183,9 @@ func (m *Map) findIdx(key any) int {
 	}
 	return -1
 }
+
+func (m *Map) String() string   { return fmt.Sprintf("Соответствие[%d]", len(m.keys)) }
+func (m *Map) TypeName() string { return "Соответствие" }
 
 func (m *Map) CallMethod(name string, args []any) any {
 	switch name {
@@ -235,6 +243,7 @@ func (kv *KeyValue) Get(field string) any {
 }
 
 func (kv *KeyValue) Set(field string, val any) {}
+func (kv *KeyValue) TypeName() string           { return "КлючИЗначение" }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 

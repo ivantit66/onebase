@@ -105,6 +105,9 @@ type VarEntry struct {
 	Type  string `json:"type"`
 }
 
+// typeNamer is implemented by DSL collection types to return a user-friendly type name.
+type typeNamer interface{ TypeName() string }
+
 // FormatValue formats a value for display in the debugger
 func FormatValue(v any) string {
 	if v == nil {
@@ -117,6 +120,9 @@ func FormatValue(v any) string {
 		}
 		return val
 	case float64:
+		if val == float64(int64(val)) {
+			return fmt.Sprintf("%g", val)
+		}
 		return fmt.Sprintf("%.2f", val)
 	case int, int32, int64:
 		return fmt.Sprintf("%d", val)
@@ -138,6 +144,9 @@ func FormatValue(v any) string {
 func GetTypeName(v any) string {
 	if v == nil {
 		return "Неопределено"
+	}
+	if tn, ok := v.(typeNamer); ok {
+		return tn.TypeName()
 	}
 	switch v.(type) {
 	case bool:
