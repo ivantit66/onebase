@@ -1333,6 +1333,12 @@ func translate(tokens []tok, opts CompileOpts) (Result, error) {
 					}
 				} else if col, ok := tr.colMap[lower]; ok && !prevDot {
 					tr.emit(col)
+				} else if prevDot {
+					if c, ok2 := tr.colMap[lower]; ok2 {
+						tr.emit(c)
+					} else {
+						tr.emit(lower)
+					}
 				} else {
 					tr.emit(lower)
 				}
