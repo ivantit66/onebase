@@ -671,6 +671,12 @@ function startEdit(name) {
     });
     editor._fileId = name;
     monacoEditors[name] = editor;
+    // Override F10/F11 inside Monaco so debugger shortcuts work even when editor has focus.
+    // Monaco intercepts these via its internal keybinding manager before the DOM event
+    // reaches our document-level capture handler.
+    editor.addCommand(monaco.KeyCode.F10, function() { dbgStep('over'); });
+    editor.addCommand(monaco.KeyCode.F11, function() { dbgStep('into'); });
+    editor.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.F11, function() { dbgStep('out'); });
     // Gutter click for breakpoint toggle — setTimeout decouples from Monaco internals
     editor.onMouseDown(function(e) {
       try {
