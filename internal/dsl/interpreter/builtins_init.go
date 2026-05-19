@@ -155,6 +155,42 @@ func init() {
 	builtins["числопрописью"] = amountWordsFn
 	builtins["amountinwords"] = amountWordsFn
 
+	// Распределить(сумма, веса[, точность]) — пропорциональное распределение
+	// с гарантией суммы (замечание #9). Веса — Массив чисел; результат — Массив
+	// той же длины. Точность по умолчанию 2 (копейки).
+	distributeFn := func(args []any, _ string, _ int) (any, error) {
+		if len(args) < 2 {
+			return &Array{}, nil
+		}
+		total, _ := toFloat(args[0])
+		var weights []float64
+		switch a := args[1].(type) {
+		case *Array:
+			for _, item := range a.items {
+				f, _ := toFloat(item)
+				weights = append(weights, f)
+			}
+		case []any:
+			for _, item := range a {
+				f, _ := toFloat(item)
+				weights = append(weights, f)
+			}
+		}
+		scale := 2
+		if len(args) >= 3 {
+			s, _ := toFloat(args[2])
+			scale = int(s)
+		}
+		shares := DistributeAmount(total, weights, scale)
+		out := &Array{}
+		for _, v := range shares {
+			out.items = append(out.items, v)
+		}
+		return out, nil
+	}
+	builtins["распределить"] = distributeFn
+	builtins["distribute"] = distributeFn
+
 	// ─── B5: Формат ───────────────────────────────────────────────────────
 	formatFn := func(args []any, _ string, _ int) (any, error) {
 		s, err := fmtBuiltin(args)
