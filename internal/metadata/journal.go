@@ -20,6 +20,15 @@ type JournalColumn struct {
 	Field    string
 	Label    string
 	Fallback []string
+	// Map — явное соответствие docTypeName → fieldName в этом документе.
+	// Замечание #7: лучшая альтернатива fallback, потому что:
+	//   1. Explicit — видно для какого документа какое поле.
+	//   2. Не зависит от порядка обхода fallback (raw COALESCE мог давать
+	//      нежелательные совпадения если в документе два совпадающих поля).
+	//   3. UI может показывать tooltip «в документе X это поле называется Y».
+	// Если Map[doc] есть — используется он, fallback не применяется. Если
+	// не задан — работает старый fallback-механизм (back compat).
+	Map      map[string]string
 	Format   string // "date" | "number" | "" (auto)
 }
 
@@ -33,10 +42,11 @@ type rawJournal struct {
 	Title     string `yaml:"title"`
 	Documents []string `yaml:"documents"`
 	Columns   []struct {
-		Field    string   `yaml:"field"`
-		Label    string   `yaml:"label"`
-		Fallback []string `yaml:"fallback"`
-		Format   string   `yaml:"format"`
+		Field    string            `yaml:"field"`
+		Label    string            `yaml:"label"`
+		Fallback []string          `yaml:"fallback"`
+		Map      map[string]string `yaml:"map"`
+		Format   string            `yaml:"format"`
 	} `yaml:"columns"`
 	Filters []struct {
 		Field string `yaml:"field"`
@@ -73,6 +83,7 @@ func LoadJournalFile(path string) (*Journal, error) {
 			Field:    rc.Field,
 			Label:    label,
 			Fallback: rc.Fallback,
+			Map:      rc.Map,
 			Format:   rc.Format,
 		})
 	}

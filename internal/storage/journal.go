@@ -11,15 +11,34 @@ import (
 
 // colExprForDoc returns the SQL expression for a journal column in the given entity's SELECT.
 // Returns ("NULL", nil) if the column has no matching field in the entity.
+//
+// Замечание #7: приоритет резолва:
+//   1. jcol.Map[entity.Name] — явный per-doc mapping (новый рекомендуемый путь).
+//   2. Exact match — у документа есть поле с именем jcol.Field.
+//   3. Fallback list — старый fallback (back compat); COALESCE если несколько.
 func colExprForDoc(jcol metadata.JournalColumn, entity *metadata.Entity) (string, *metadata.Field) {
-	// Exact match
+	// 1. Explicit map для этого документа.
+	if jcol.Map != nil {
+		if mapped, ok := jcol.Map[entity.Name]; ok && mapped != "" {
+			for i := range entity.Fields {
+				f := &entity.Fields[i]
+				if strings.EqualFold(f.Name, mapped) {
+					return metadata.ColumnName(*f), f
+				}
+			}
+			// Map ссылается на несуществующее поле — намеренно
+			// возвращаем NULL, не падая на fallback'е молча.
+			return "NULL", nil
+		}
+	}
+	// 2. Exact match
 	for i := range entity.Fields {
 		f := &entity.Fields[i]
 		if strings.EqualFold(f.Name, jcol.Field) {
 			return metadata.ColumnName(*f), f
 		}
 	}
-	// Fallback match — build COALESCE of all matching columns
+	// 3. Fallback match — build COALESCE of all matching columns
 	type match struct {
 		col string
 		f   *metadata.Field
