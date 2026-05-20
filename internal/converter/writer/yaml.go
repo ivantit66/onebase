@@ -22,11 +22,13 @@ type yamlTablePart struct {
 
 type yamlCatalog struct {
 	Name   string      `yaml:"name"`
+	Title  string      `yaml:"title,omitempty"`
 	Fields []yamlField `yaml:"fields"`
 }
 
 type yamlDocument struct {
 	Name       string          `yaml:"name"`
+	Title      string          `yaml:"title,omitempty"`
 	Fields     []yamlField     `yaml:"fields"`
 	TableParts []yamlTablePart `yaml:"tableparts,omitempty"`
 }
@@ -47,6 +49,7 @@ func WriteCatalogs(cats []*parser1c.CatalogMeta, outDir string, notes *Conversio
 	for _, cat := range cats {
 		obj := yamlCatalog{
 			Name:   cat.Name,
+			Title:  synonymTitle(cat.Name, cat.Synonym),
 			Fields: convertFields(cat.Attributes, notes),
 		}
 		if err := writeYAML(filepath.Join(dir, fileName(cat.Name)+".yaml"), obj); err != nil {
@@ -66,6 +69,7 @@ func WriteDocuments(docs []*parser1c.DocumentMeta, outDir string, notes *Convers
 	for _, doc := range docs {
 		obj := yamlDocument{
 			Name:   doc.Name,
+			Title:  synonymTitle(doc.Name, doc.Synonym),
 			Fields: convertFields(doc.Attributes, notes),
 		}
 		for _, ts := range doc.TabularSections {
@@ -282,6 +286,16 @@ func WriteScheduledJobs(jobs []*parser1c.ScheduledJobMeta, outDir string, notes 
 		notes.ScheduledJobs++
 	}
 	return nil
+}
+
+// synonymTitle возвращает синоним 1С как title объекта. Пустой синоним и
+// синоним, совпадающий с именем, отбрасываются — title не нужен.
+func synonymTitle(name, synonym string) string {
+	synonym = strings.TrimSpace(synonym)
+	if synonym == "" || synonym == name {
+		return ""
+	}
+	return synonym
 }
 
 func convertFields(attrs []parser1c.Attribute, notes *ConversionReport) []yamlField {
