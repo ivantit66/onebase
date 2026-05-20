@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"strings"
 	"unicode"
 
 	"github.com/ivantit66/onebase/internal/metadata"
@@ -124,8 +125,150 @@ func (db *DB) MigrateInfoRegisters(ctx context.Context, regs []*metadata.InfoReg
 				return fmt.Errorf("migrate info register %s.%s: %w", ir.Name, f.Name, err)
 			}
 		}
+		// Замечание #23 (продолжение): фактический PK таблицы может не
+		// совпадать с pkCols(ir) — наследие старого CREATE до того как
+		// регистр стал periodic / добавили измерения. SQLite не позволяет
+		// ALTER PK, поэтому при mismatch пересоздаём таблицу через
+		// CREATE + INSERT SELECT + DROP + RENAME.
+		if err := db.fixInfoRegPK(ctx, ir); err != nil {
+			return fmt.Errorf("migrate info register %s PK: %w", ir.Name, err)
+		}
 	}
 	return nil
+}
+
+// fixInfoRegPK сверяет фактический PRIMARY KEY таблицы регистра сведений
+// с ожидаемым (pkCols(ir)). При несовпадении пересоздаёт таблицу с
+// правильным PK, копируя данные. Безопасно если в существующих строках
+// нет дубликатов по новому ключу — иначе INSERT упадёт с UNIQUE constraint,
+// и пользователь должен будет разобраться с дубликатами.
+//
+// Реализация SQLite-only — PostgreSQL поддерживает ALTER TABLE для PK
+// напрямую (но в onebase это пока не используется).
+func (db *DB) fixInfoRegPK(ctx context.Context, ir *metadata.InfoRegister) error {
+	if db.dialect.Name() != "sqlite" {
+		return nil // PG: ALTER TABLE сам разрулит, но это другой код-путь
+	}
+	table := metadata.InfoRegTableName(ir.Name)
+
+	// Снимаем фактический PK.
+	rows, err := db.Query(ctx, "PRAGMA table_info("+sqliteIdent(table)+")")
+	if err != nil {
+		return err
+	}
+	type pkCol struct {
+		name string
+		pos  int
+	}
+	var actual []pkCol
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if pk > 0 {
+			actual = append(actual, pkCol{name: name, pos: pk})
+		}
+	}
+	rows.Close()
+	// Сортируем по pos
+	for i := 1; i < len(actual); i++ {
+		for j := i; j > 0 && actual[j-1].pos > actual[j].pos; j-- {
+			actual[j-1], actual[j] = actual[j], actual[j-1]
+		}
+	}
+
+	expected := pkCols(ir)
+	if len(actual) == len(expected) {
+		match := true
+		for i := range actual {
+			if actual[i].name != expected[i] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return nil
+		}
+	}
+
+	// PK mismatch — rebuild.
+	d := db.dialect
+	tmp := table + "_new"
+	if _, err := db.Exec(ctx, "DROP TABLE IF EXISTS "+sqliteIdent(tmp)); err != nil {
+		return err
+	}
+	createSQL := CreateInfoRegisterSQL(d, ir)
+	// Подменяем имя таблицы на _new
+	createSQL = strings.Replace(createSQL, "CREATE TABLE IF NOT EXISTS "+table, "CREATE TABLE "+tmp, 1)
+	if _, err := db.Exec(ctx, createSQL); err != nil {
+		return err
+	}
+
+	// Копируем данные — только общие колонки. Берём пересечение
+	// колонок старой и новой таблицы.
+	oldCols, err := tableColumnNames(ctx, db, table)
+	if err != nil {
+		return err
+	}
+	newCols, err := tableColumnNames(ctx, db, tmp)
+	if err != nil {
+		return err
+	}
+	var common []string
+	newSet := make(map[string]bool, len(newCols))
+	for _, c := range newCols {
+		newSet[c] = true
+	}
+	for _, c := range oldCols {
+		if newSet[c] {
+			common = append(common, c)
+		}
+	}
+	if len(common) > 0 {
+		copySQL := fmt.Sprintf("INSERT INTO %s (%s) SELECT %s FROM %s",
+			sqliteIdent(tmp),
+			strings.Join(common, ", "),
+			strings.Join(common, ", "),
+			sqliteIdent(table))
+		if _, err := db.Exec(ctx, copySQL); err != nil {
+			// Откатимся — дропнем tmp, оставим старую.
+			_, _ = db.Exec(ctx, "DROP TABLE "+sqliteIdent(tmp))
+			return fmt.Errorf("copy data (возможно дубликаты по новому PK): %w", err)
+		}
+	}
+	if _, err := db.Exec(ctx, "DROP TABLE "+sqliteIdent(table)); err != nil {
+		return err
+	}
+	if _, err := db.Exec(ctx, "ALTER TABLE "+sqliteIdent(tmp)+" RENAME TO "+sqliteIdent(table)); err != nil {
+		return err
+	}
+	return nil
+}
+
+// tableColumnNames возвращает имена колонок таблицы в порядке их объявления.
+func tableColumnNames(ctx context.Context, db *DB, table string) ([]string, error) {
+	rows, err := db.Query(ctx, "PRAGMA table_info("+sqliteIdent(table)+")")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
 }
 
 // Migrate applies CREATE TABLE and ADD COLUMN IF NOT EXISTS for all entities.

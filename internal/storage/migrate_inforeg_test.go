@@ -103,6 +103,65 @@ func TestMigrateInfoRegisters_AddsDimension(t *testing.T) {
 	}
 }
 
+// Замечание #23: при mismatch фактического PK (наследие старого CREATE)
+// миграция пересоздаёт таблицу с правильным PK через CREATE+INSERT SELECT+DROP+RENAME.
+func TestMigrateInfoRegisters_RebuildsPK(t *testing.T) {
+	ctx := context.Background()
+	db, err := ConnectSQLite(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Создаём «старую» неправильную таблицу — PK только по номенклатура_id.
+	_, err = db.Exec(ctx, `CREATE TABLE инфо_ценыноменклатуры (
+		номенклатура_id TEXT NOT NULL,
+		цена TEXT,
+		PRIMARY KEY (номенклатура_id)
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ir := &metadata.InfoRegister{
+		Name:     "ЦеныНоменклатуры",
+		Periodic: true,
+		Dimensions: []metadata.Field{
+			{Name: "Номенклатура", Type: "reference:Номенклатура", RefEntity: "Номенклатура"},
+			{Name: "ТипЦен", Type: "reference:ТипЦен", RefEntity: "ТипЦен"},
+		},
+		Resources: []metadata.Field{
+			{Name: "Цена", Type: "number"},
+		},
+	}
+	if err := db.MigrateInfoRegisters(ctx, []*metadata.InfoRegister{ir}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Проверим что PK теперь (period, номенклатура_id, типцен_id).
+	rows, err := db.Query(ctx, `PRAGMA table_info("инфо_ценыноменклатуры")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var pks []string
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if pk > 0 {
+			pks = append(pks, name)
+		}
+	}
+	if len(pks) != 3 {
+		t.Errorf("ожидалось 3 колонки в PK, получили %v", pks)
+	}
+}
+
 // Добавление новых ресурсов уже работало — регресс-тест на это.
 func TestMigrateInfoRegisters_AddsResource(t *testing.T) {
 	ctx := context.Background()
