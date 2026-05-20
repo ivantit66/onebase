@@ -6,6 +6,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/storage"
 )
@@ -731,7 +732,10 @@ func (tr *translator) genBalances(reg *metadata.Register, args [][]tok) (string,
 
 	var conds []string
 	if len(args) > 0 && len(args[0]) > 0 {
-		if s := tr.translateFilterTokens(args[0]); s != "" && s != "NULL" {
+		// Замечание #1: момент времени документа — особое условие.
+		if mt := tr.firstArgMoment(args[0]); mt != nil {
+			conds = append(conds, tr.momentTimeCondition(mt))
+		} else if s := tr.translateFilterTokens(args[0]); s != "" && s != "NULL" {
 			conds = append(conds, "period <= "+s)
 		}
 	}
@@ -919,7 +923,14 @@ func (tr *translator) genInfoSlice(ir *metadata.InfoRegister, args [][]tok, dire
 
 	var conds []string
 	if ir.Periodic && len(args) > 0 && len(args[0]) > 0 {
-		if s := tr.translateFilterTokens(args[0]); s != "" && s != "NULL" {
+		// #1: МоментВремени для info-регистра — берём только Period,
+		// recorder в info-таблицах не используется для исключения.
+		if mt := tr.firstArgMoment(args[0]); mt != nil {
+			d := dialectOrDefault(tr.opts.Dialect)
+			p, _ := mt.PointInTime()
+			tr.args = append(tr.args, p)
+			conds = append(conds, "period "+periodOp+" "+d.Placeholder(len(tr.args)))
+		} else if s := tr.translateFilterTokens(args[0]); s != "" && s != "NULL" {
 			conds = append(conds, "period "+periodOp+" "+s)
 		}
 	}
@@ -1433,6 +1444,60 @@ func rewriteDateFuncs(tokens []tok, dialect string) []tok {
 		out = append(out, t)
 	}
 	return out
+}
+
+// momentTimeValue — контракт для DSL-значения «момент времени» (см.
+// замечание #1). Реализуется *runtime.MomentTime; здесь объявлен через
+// интерфейс чтобы не тянуть импорт runtime в query.
+type momentTimeValue interface {
+	PointInTime() (period time.Time, docID string)
+}
+
+// momentTimeCondition строит SQL-условие «строго до момента» — всё что
+// зафиксировано раньше данной точки в хронологическом порядке journal'а.
+// Возвращает SQL-фрагмент с placeholder'ами и добавляет два arg'а к
+// tr.args (период и UUID документа).
+//
+// Для accumulation register условие имеет вид:
+//   (period < $1 OR (period = $1 AND recorder != $2))
+//
+// Логика «recorder != docID» гарантирует, что при перепроведении сам
+// документ исключается из собственной сводки.
+func (tr *translator) momentTimeCondition(mt momentTimeValue) string {
+	d := dialectOrDefault(tr.opts.Dialect)
+	period, docID := mt.PointInTime()
+	tr.args = append(tr.args, period)
+	periodPH := d.Placeholder(len(tr.args))
+	if docID == "" {
+		// document-less moment — простое сравнение
+		return "period <= " + periodPH
+	}
+	if id, err := uuid.Parse(docID); err == nil {
+		if d.Name() == "sqlite" {
+			tr.args = append(tr.args, id.String())
+		} else {
+			tr.args = append(tr.args, id)
+		}
+	} else {
+		tr.args = append(tr.args, docID)
+	}
+	docPH := d.Placeholder(len(tr.args))
+	return fmt.Sprintf("(period < %s OR (period = %s AND recorder != %s))",
+		periodPH, periodPH, docPH)
+}
+
+// firstArgMoment возвращает *MomentTime если первый аргумент VT —
+// это &Param и paramValues[name] = *MomentTime. Иначе nil — fallback на
+// обычное period <= ...
+func (tr *translator) firstArgMoment(args []tok) momentTimeValue {
+	if len(args) != 1 || args[0].kind != tParam {
+		return nil
+	}
+	v := tr.paramValues[args[0].val]
+	if mt, ok := v.(momentTimeValue); ok {
+		return mt
+	}
+	return nil
 }
 
 // systemColAlias maps the PascalCase русский alias for register system columns

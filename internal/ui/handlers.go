@@ -1461,6 +1461,11 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 	queryFactory := interpreter.NewQueryFactory(ctx, s.store, s.reg)
 	predefined := interpreter.NewPredefinedRoot(ctx, s.store)
 	catalogs := interpreter.NewCatalogsRoot(ctx, s.store, s.reg)
+	// #2 managed locks: builtin БлокировкаДанных() возвращает свежий LockObject,
+	// привязанный к глобальному менеджеру server'а.
+	lockFactory := interpreter.BuiltinFunc(func(_ []any, _ string, _ int) (any, error) {
+		return runtime.NewLockObject(s.lockMgr), nil
+	})
 	vars := map[string]any{
 		"Движения":                  mc,
 		"Перечисления":              &interpreter.MapThis{M: enumsMap},
@@ -1471,6 +1476,8 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 		"PredefinedValues":          predefined,
 		"Справочники":               catalogs,
 		"Catalogs":                  catalogs,
+		"БлокировкаДанных":          lockFactory,
+		"DataLock":                  lockFactory,
 	}
 	for k, v := range interpreter.NewHTTPFunctions() {
 		vars[k] = v

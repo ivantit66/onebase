@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/metadata"
@@ -68,6 +69,48 @@ func TestObject_String_Nil(t *testing.T) {
 	var o *Object
 	if got := o.String(); got != "" {
 		t.Errorf("nil-Object.String() = %q", got)
+	}
+}
+
+// Замечание #1: ЭтотОбъект.МоментВремени() возвращает MomentTime с
+// period из поля «Дата» документа и DocID = ID объекта.
+func TestObject_MomentTime(t *testing.T) {
+	docDate := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
+	docID := uuid.New()
+	o := &Object{
+		Type: "Поступление",
+		Kind: metadata.KindDocument,
+		ID:   docID,
+		Fields: map[string]any{
+			"дата": docDate,
+		},
+	}
+	v := o.CallMethod("моментвремени", nil)
+	mt, ok := v.(*MomentTime)
+	if !ok {
+		t.Fatalf("ожидался *MomentTime, получили %T", v)
+	}
+	if !mt.Period.Equal(docDate) {
+		t.Errorf("Period: got %v, want %v", mt.Period, docDate)
+	}
+	if mt.DocID != docID {
+		t.Errorf("DocID не совпал")
+	}
+	if mt.DocType != "Поступление" {
+		t.Errorf("DocType: %s", mt.DocType)
+	}
+}
+
+func TestMomentTime_PointInTime(t *testing.T) {
+	docDate := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
+	docID := uuid.New()
+	mt := &MomentTime{Period: docDate, DocID: docID, DocType: "X"}
+	p, id := mt.PointInTime()
+	if !p.Equal(docDate) {
+		t.Errorf("Period: %v vs %v", p, docDate)
+	}
+	if id != docID.String() {
+		t.Errorf("DocID string: %s vs %s", id, docID.String())
 	}
 }
 
