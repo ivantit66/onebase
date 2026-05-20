@@ -361,6 +361,7 @@ func KnownBuiltinNames() map[string]struct{} {
 		"текущийпользователь", "currentuser",
 		"имяпользователя", "username",
 		"справочники", "catalogs",
+		"документы", "documents",
 		"предопределённыезначения", "predefinedvalues",
 	} {
 		names[k] = struct{}{}

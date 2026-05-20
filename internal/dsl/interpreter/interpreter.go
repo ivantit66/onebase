@@ -20,6 +20,14 @@ type dslReturn struct{ val any }
 // userError — пользовательская ошибка через Error(), перехватывается Попыткой
 type userError struct{ Msg string }
 
+// RaiseUserError panics with a DSL user error. Предназначено для
+// внешних пакетов (например ui), которым нужно прервать выполнение DSL
+// из метода объекта (CallMethod) с осмысленным сообщением — оно
+// перехватывается Run/RunWithResult и Попыткой так же, как Error().
+func RaiseUserError(msg string) {
+	panic(userError{Msg: msg})
+}
+
 // loopBreak — выход из цикла через Прервать
 type loopBreak struct{}
 

@@ -1466,6 +1466,8 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 	// поэтому запись участвует в открытой DSL-транзакции.
 	txState := interpreter.NewTxState(ctx)
 	catalogs := interpreter.NewCatalogsRoot(txState, s.store, s.reg)
+	// #26: Документы.X.Создать()/.Записать()/.Провести() из обработки.
+	documents := newDocsRoot(s, txState)
 	// #2 managed locks: builtin БлокировкаДанных() возвращает свежий LockObject,
 	// привязанный к глобальному менеджеру server'а.
 	lockFactory := interpreter.BuiltinFunc(func(_ []any, _ string, _ int) (any, error) {
@@ -1501,6 +1503,8 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 		"PredefinedValues":          predefined,
 		"Справочники":               catalogs,
 		"Catalogs":                  catalogs,
+		"Документы":                 documents,
+		"Documents":                 documents,
 		"БлокировкаДанных":          lockFactory,
 		"DataLock":                  lockFactory,
 		"ТекущийПользователь":       currentUserFn,
