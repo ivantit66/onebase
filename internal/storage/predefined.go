@@ -244,6 +244,21 @@ func (db *DB) GetPredefinedIDStr(ctx context.Context, entityName, predefinedName
 	return id.String(), nil
 }
 
+// WriteCatalogRecord upserts a catalog/document record from DSL code
+// (замечание #25: Справочники.X.Создать().Записать() из обработки).
+// idStr пустой или невалидный → генерируется новый UUID. Возвращает
+// строковый UUID записанной записи (для построения *Ref в DSL).
+func (db *DB) WriteCatalogRecord(ctx context.Context, entity *metadata.Entity, idStr string, fields map[string]any) (string, error) {
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		id = uuid.New()
+	}
+	if err := db.Upsert(ctx, entity.Name, id, fields, entity); err != nil {
+		return "", err
+	}
+	return id.String(), nil
+}
+
 // FindCatalogByField looks up a single catalog row by exact match of fieldName.
 // Returns (id, displayValue, true) on hit; ("", "", false, nil) when not found.
 // displayValue is the matched field's value — handy for building a *Ref.

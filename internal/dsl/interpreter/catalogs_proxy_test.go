@@ -10,8 +10,9 @@ import (
 
 // fakeCatalogsDB stubs storage for catalog/predefined lookups in tests.
 type fakeCatalogsDB struct {
-	predefinedID map[string]string                  // "Entity/Name" → uuid
+	predefinedID map[string]string // "Entity/Name" → uuid
 	byField      map[string]map[string]struct{ ID, Display string }
+	written      []map[string]any // запись через WriteCatalogRecord
 }
 
 func (f *fakeCatalogsDB) GetPredefinedIDStr(_ context.Context, entityName, name string) (string, error) {
@@ -29,6 +30,18 @@ func (f *fakeCatalogsDB) FindCatalogByField(_ context.Context, entity *metadata.
 		}
 	}
 	return "", "", false, nil
+}
+
+func (f *fakeCatalogsDB) WriteCatalogRecord(_ context.Context, entity *metadata.Entity, idStr string, fields map[string]any) (string, error) {
+	rec := map[string]any{"_entity": entity.Name, "_id": idStr}
+	for k, v := range fields {
+		rec[k] = v
+	}
+	f.written = append(f.written, rec)
+	if idStr == "" {
+		return "99999999-9999-9999-9999-999999999999", nil
+	}
+	return idStr, nil
 }
 
 type fakeEntityLookup struct{ m map[string]*metadata.Entity }
@@ -60,7 +73,50 @@ func newCatalogsTestEnv() (*CatalogsRoot, *fakeCatalogsDB, *fakeEntityLookup) {
 		},
 	}
 	lookup := &fakeEntityLookup{m: map[string]*metadata.Entity{"ТипЦен": entity}}
-	return NewCatalogsRoot(context.Background(), db, lookup), db, lookup
+	return NewCatalogsRoot(NewStaticCtx(context.Background()), db, lookup), db, lookup
+}
+
+// Замечание #25: Справочники.X.Создать().Записать() должно персистить.
+func TestCatalogProxy_CreateAndWrite(t *testing.T) {
+	root, db, _ := newCatalogsTestEnv()
+	cp := root.Get("ТипЦен").(*CatalogProxy)
+
+	rec := cp.CallMethod("создать", nil)
+	w, ok := rec.(*CatalogRecordWriter)
+	if !ok {
+		t.Fatalf("Создать вернул %T, ожидался *CatalogRecordWriter", rec)
+	}
+	// поле через Set (Зап.Наименование = ...)
+	w.Set("Наименование", "Спеццена")
+	// поле через УстановитьЗначение
+	w.CallMethod("установитьзначение", []any{"Код", "СЦ-001"})
+
+	res := w.CallMethod("записать", nil)
+	ref, ok := res.(*Ref)
+	if !ok {
+		t.Fatalf("Записать вернул %T, ожидался *Ref", res)
+	}
+	if ref.Name != "Спеццена" {
+		t.Errorf("Ref.Name = %q, ожидалось Спеццена", ref.Name)
+	}
+	// проверим что запись реально дошла до db
+	if len(db.written) != 1 {
+		t.Fatalf("ожидалась 1 запись в db, получили %d", len(db.written))
+	}
+	if db.written[0]["наименование"] != "Спеццена" {
+		t.Errorf("в записи нет наименования: %v", db.written[0])
+	}
+	if db.written[0]["код"] != "СЦ-001" {
+		t.Errorf("в записи нет кода: %v", db.written[0])
+	}
+}
+
+// Создать() для несуществующего справочника — Get вернёт nil.
+func TestCatalogProxy_CreateUnknownEntity(t *testing.T) {
+	root, _, _ := newCatalogsTestEnv()
+	if v := root.Get("НетТакого"); v != nil {
+		t.Errorf("Справочники.НетТакого → %v, ожидался nil", v)
+	}
 }
 
 // Справочники.X.ИмяПредопределённой должно возвращать Ref.
