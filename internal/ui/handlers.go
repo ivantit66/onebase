@@ -1466,6 +1466,26 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 	lockFactory := interpreter.BuiltinFunc(func(_ []any, _ string, _ int) (any, error) {
 		return runtime.NewLockObject(s.lockMgr), nil
 	})
+
+	// API текущего пользователя для персональных настроек.
+	// ТекущийПользователь() → объект {ИД, Имя, ПолноеИмя, Админ}.
+	// ИмяПользователя()     → строка-логин (или "" для фоновых заданий).
+	var curUserID, curUserLogin, curUserFullName string
+	var curUserAdmin bool
+	if u := auth.UserFromContext(ctx); u != nil {
+		curUserID, curUserLogin, curUserFullName, curUserAdmin = u.ID, u.Login, u.FullName, u.IsAdmin
+	}
+	userObj := &interpreter.MapThis{M: map[string]any{
+		"ИД": curUserID, "Имя": curUserLogin, "ПолноеИмя": curUserFullName, "Админ": curUserAdmin,
+		"ID": curUserID, "Login": curUserLogin, "FullName": curUserFullName, "IsAdmin": curUserAdmin,
+	}}
+	currentUserFn := interpreter.BuiltinFunc(func(_ []any, _ string, _ int) (any, error) {
+		return userObj, nil
+	})
+	userNameFn := interpreter.BuiltinFunc(func(_ []any, _ string, _ int) (any, error) {
+		return curUserLogin, nil
+	})
+
 	vars := map[string]any{
 		"Движения":                  mc,
 		"Перечисления":              &interpreter.MapThis{M: enumsMap},
@@ -1478,6 +1498,10 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 		"Catalogs":                  catalogs,
 		"БлокировкаДанных":          lockFactory,
 		"DataLock":                  lockFactory,
+		"ТекущийПользователь":       currentUserFn,
+		"CurrentUser":               currentUserFn,
+		"ИмяПользователя":           userNameFn,
+		"UserName":                  userNameFn,
 	}
 	for k, v := range interpreter.NewHTTPFunctions() {
 		vars[k] = v

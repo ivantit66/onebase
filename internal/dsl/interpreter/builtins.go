@@ -356,6 +356,12 @@ func KnownBuiltinNames() map[string]struct{} {
 		"отменитьтранзакцию", "rollbacktransaction",
 		// injected in except-block context
 		"описаниеошибки", "errordescription",
+		// register movement / lock / current-user globals (buildDSLVars)
+		"блокировкаданных", "datalock",
+		"текущийпользователь", "currentuser",
+		"имяпользователя", "username",
+		"справочники", "catalogs",
+		"предопределённыезначения", "predefinedvalues",
 	} {
 		names[k] = struct{}{}
 	}
