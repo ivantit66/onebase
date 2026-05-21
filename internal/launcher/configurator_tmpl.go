@@ -693,6 +693,14 @@ function startEdit(name) {
     });
     editor._fileId = name;
     monacoEditors[name] = editor;
+    // Запоминаем последнее непустое выделение: правый клик в Monaco
+    // сбрасывает selection раньше, чем открывается конструктор запроса,
+    // поэтому в openQBModalMonaco текущее выделение уже пустое.
+    editor._lastSelText = '';
+    editor.onDidChangeCursorSelection(function(ev) {
+      var t = editor.getModel().getValueInRange(ev.selection);
+      if (t && t.trim()) editor._lastSelText = t;
+    });
     // Override F10/F11 inside Monaco so debugger shortcuts work even when editor has focus.
     // Monaco intercepts these via its internal keybinding manager before the DOM event
     // reaches our document-level capture handler.
@@ -1576,6 +1584,8 @@ function openQBModalMonaco(editorId){
   document.getElementById('mqb-dsl').value='';
   document.getElementById('mqb-qry').value='';
   var sel = editor.getModel().getValueInRange(editor.getSelection()).trim();
+  // Правый клик мог сбросить выделение — берём последнее запомненное.
+  if(!sel && editor._lastSelText) sel = editor._lastSelText.trim();
   if(sel){
     var q=qbExtractQuery(sel);
     if(q){document.getElementById('mqb-qry').value=q;qbParseToFields(q);}

@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -214,14 +215,22 @@ func (s *Server) queryConsoleAnalyze(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		sqlLower := strings.ToLower(sr.SQL)
-		ph := "$" + fmt.Sprintf("%d", phIdx)
+		// Плейсхолдер зависит от диалекта: PostgreSQL — именованный «$N»,
+		// SQLite — позиционный «?». Для именованного целевое вхождение
+		// единственное (occ=1); для «?» плейсхолдеры неотличимы, поэтому
+		// берём phIdx-е по счёту вхождение.
+		ph := strings.ToLower(s.store.Dialect().Placeholder(phIdx))
+		occ := 1
+		if !strings.ContainsAny(ph, "0123456789") {
+			occ = phIdx
+		}
 		parts := strings.Split(sqlLower, ph)
-		if len(parts) < 2 {
+		if len(parts) <= occ {
 			dbg.Type = "ph_not_in_sql→fallback"
 			debugInfo[name] = dbg
 			continue
 		}
-		before := strings.TrimSpace(parts[0])
+		before := strings.TrimSpace(parts[occ-1])
 		tokens := strings.Fields(before)
 		if len(tokens) < 2 {
 			dbg.Type = "too_few_tokens→fallback"
@@ -449,6 +458,12 @@ func coerceParams(params map[string]any) {
 		if !ok {
 			continue
 		}
+		// UUID-значения (ссылочные параметры) оставляем строкой — иначе
+		// UUID вида "123e4567-..." был бы ошибочно принят за число и в SQL
+		// получилось бы "uuid = numeric".
+		if _, err := uuid.Parse(strings.TrimSpace(s)); err == nil {
+			continue
+		}
 		// Try date formats
 		for _, layout := range []string{
 			"02.01.2006 15:04",
@@ -471,9 +486,10 @@ func coerceParams(params map[string]any) {
 	}
 }
 
+// parseFloat принимает строку как число только если она ЦЕЛИКОМ является
+// числом. fmt.Sscanf("%f") разбирал префикс ("123e4..." из UUID → число),
+// поэтому здесь строгий strconv.ParseFloat.
 func parseFloat(s string) (float64, error) {
-	var f float64
-	_, err := fmt.Sscanf(s, "%f", &f)
-	return f, err
+	return strconv.ParseFloat(strings.TrimSpace(s), 64)
 }
 
