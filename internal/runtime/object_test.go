@@ -101,6 +101,30 @@ func TestObject_MomentTime(t *testing.T) {
 	}
 }
 
+// При загрузке документа из БД/формы дата приходит СТРОКОЙ. МоментВремени
+// должен её распарсить, иначе Period нулевой и moment-фильтр (period < @)
+// отсекает все движения → ФИФО «доступно 0».
+func TestObject_MomentTime_StringDate(t *testing.T) {
+	cases := []string{
+		"2026-05-20T12:00:00Z",   // RFC3339
+		"2026-05-20T12:00:00",    // без зоны
+		"2026-05-20 12:00:00",    // SQLite datetime (пробел)
+		"2026-05-20",             // только дата
+	}
+	for _, ds := range cases {
+		o := &Object{
+			Type:   "Поступление",
+			Kind:   metadata.KindDocument,
+			ID:     uuid.New(),
+			Fields: map[string]any{"дата": ds},
+		}
+		mt := o.CallMethod("моментвремени", nil).(*MomentTime)
+		if mt.Period.IsZero() {
+			t.Errorf("дата %q не распарсилась — Period нулевой (ФИФО упал бы)", ds)
+		}
+	}
+}
+
 func TestMomentTime_PointInTime(t *testing.T) {
 	docDate := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
 	docID := uuid.New()

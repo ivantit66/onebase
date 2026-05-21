@@ -4,6 +4,7 @@
 onebase-gui.exe
 onebase-linux-arm64
 onebase-arm64
+dbquery.exe
 
 # Temp files
 __*.py
