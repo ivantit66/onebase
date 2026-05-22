@@ -422,13 +422,13 @@ func (s *Server) adminSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if s.authRepo == nil {
-		adminTmpl.ExecuteTemplate(w, "admin-sessions", map[string]any{"Sessions": nil, "NoAuth": true})
-		return
+	hasUsers := false
+	if s.authRepo != nil {
+		hasUsers, _ = s.authRepo.HasUsers(r.Context())
 	}
-	hasUsers, _ := s.authRepo.HasUsers(r.Context())
 	if !hasUsers {
-		adminTmpl.ExecuteTemplate(w, "admin-sessions", map[string]any{"Sessions": nil, "NoAuth": true})
+		users, _ := s.store.ActiveUsersFromAudit(r.Context())
+		adminTmpl.ExecuteTemplate(w, "admin-sessions", map[string]any{"AuditUsers": users})
 		return
 	}
 	sessions, _ := s.authRepo.ActiveSessions(r.Context())
@@ -585,6 +585,7 @@ func (s *Server) adminAudit(w http.ResponseWriter, r *http.Request) {
 
 	entries, _ := s.store.AuditSearch(r.Context(), filter, pageSize+1, (page-1)*pageSize)
 
+		s.enrichAuditEntriesGlobal(r.Context(), entries)
 	hasNext := len(entries) > pageSize
 	if hasNext {
 		entries = entries[:pageSize]
@@ -638,6 +639,7 @@ func (s *Server) recordHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	s.enrichAuditEntries(r.Context(), entity, entries)
 	s.render(w, r, "page-history", map[string]any{
 		"EntityName": entity.Name,
 		"ID":         id.String(),
@@ -699,7 +701,21 @@ const tplAdminSessions = `{{define "admin-sessions"}}` + adminHead + `
   <h2>Активные пользователи</h2>
   <a class="btn" href="/ui/admin/sessions" style="background:#e2e8f0;color:#475569;font-size:13px">Обновить</a>
 </div>
-{{if .NoAuth}}
+{{if .AuditUsers}}
+<div class="card" style="max-width:700px">
+<table>
+<thead><tr>
+  <th>Логин</th><th>Последний запрос</th>
+</tr></thead>
+<tbody>
+{{range .AuditUsers}}<tr>
+  <td><strong>{{.Login}}</strong></td>
+  <td style="font-size:12px;color:#94a3b8">{{.LastSeen.Format "02.01.2006 15:04:05"}}</td>
+</tr>{{end}}
+</tbody>
+</table>
+</div>
+{{else if .NoAuth}}
 <div class="card" style="max-width:700px">
   <p class="empty">Авторизация не настроена — пользователей нет.</p>
 </div>

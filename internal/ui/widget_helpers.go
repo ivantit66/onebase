@@ -71,7 +71,7 @@ func echartsJSON(chart *widget.ChartData) template.JS {
 	}
 	opt := map[string]any{
 		"tooltip": map[string]any{"trigger": "axis"},
-		"grid":    map[string]any{"left": 40, "right": 16, "top": 24, "bottom": 30},
+		"grid":    map[string]any{"left": 56, "right": 16, "top": 24, "bottom": 30},
 	}
 	switch strings.ToLower(chart.Kind) {
 	case "pie":
@@ -189,4 +189,51 @@ func groupThousands(n int64) string {
 		}
 	}
 	return b.String()
+}
+
+// fmtReportCell formats a single cell value in a report table. Unlike
+// widgetCell (which takes a row + field + format), this receives the raw value
+// directly and auto-detects the type: time.Time → date, float64 → number with
+// thousands separators, strings that parse as dates → formatted date.
+func fmtReportCell(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case time.Time:
+		h, m, sec := t.Clock()
+		if h != 0 || m != 0 || sec != 0 {
+			return t.Format("02.01.2006 15:04:05")
+		}
+		return t.Format("02.01.2006")
+	case float64:
+		if t == float64(int64(t)) {
+			return groupThousands(int64(t))
+		}
+		return fmt.Sprintf("%.2f", t)
+	case float32:
+		return fmt.Sprintf("%.2f", float64(t))
+	case int:
+		return groupThousands(int64(t))
+	case int32:
+		return groupThousands(int64(t))
+	case int64:
+		return groupThousands(t)
+	case string:
+		if len(t) >= 10 {
+			for _, layout := range []string{
+				time.RFC3339, "2006-01-02T15:04:05", "2006-01-02 15:04:05", "2006-01-02",
+			} {
+				if pt, err := time.Parse(layout, t); err == nil {
+					h, m, sec := pt.Clock()
+					if h != 0 || m != 0 || sec != 0 {
+						return pt.Format("02.01.2006 15:04:05")
+					}
+					return pt.Format("02.01.2006")
+				}
+			}
+		}
+		return t
+	}
+	return fmt.Sprintf("%v", v)
 }

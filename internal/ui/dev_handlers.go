@@ -52,6 +52,7 @@ func (s *Server) queryConsoleExec(w http.ResponseWriter, r *http.Request) {
 	coerceParams(req.Params)
 	res, err := query.Compile(req.Query, query.CompileOpts{
 		Params:      req.Params,
+		Entities:    s.reg.Entities(),
 		Registers:   s.reg.Registers(),
 		InfoRegs:    s.reg.InfoRegisters(),
 		AccountRegs: s.reg.AccountRegisters(),
@@ -189,6 +190,7 @@ func (s *Server) queryConsoleAnalyze(w http.ResponseWriter, r *http.Request) {
 		singleParam[name] = "__DETECT__"
 		sr, err2 := query.Compile(req.Query, query.CompileOpts{
 			Params:      singleParam,
+		Entities:    s.reg.Entities(),
 			Registers:   s.reg.Registers(),
 			InfoRegs:    s.reg.InfoRegisters(),
 			AccountRegs: s.reg.AccountRegisters(),

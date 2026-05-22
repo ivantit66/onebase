@@ -21,6 +21,7 @@ type QueryRegistry interface {
 	Registers() []*metadata.Register
 	InfoRegisters() []*metadata.InfoRegister
 	AccountRegisters() []*metadata.AccountRegister
+	Entities() []*metadata.Entity
 }
 
 // queryProxy реализует DSL-объект Новый Запрос.
@@ -116,6 +117,7 @@ func (q *queryProxy) execute() *Array {
 	res, err := query.Compile(q.text, query.CompileOpts{
 		Params:      unwrapArrayParams(q.params),
 		Registers:   q.reg.Registers(),
+		Entities:    q.reg.Entities(),
 		InfoRegs:    q.reg.InfoRegisters(),
 		AccountRegs: q.reg.AccountRegisters(),
 		Dialect:     q.db.Dialect(),

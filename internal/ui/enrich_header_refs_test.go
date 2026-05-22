@@ -76,6 +76,66 @@ func TestEnrichHeaderRefs_UUIDToRef(t *testing.T) {
 	}
 }
 
+// Корень бага: enrichHeaderRefs делал obj.Set(f.Name, ref) — это писало
+// Ref под lowercase-ключом, а оригинальный PascalCase-ключ с UUID-строкой
+// оставался. Из-за случайного порядка обхода Go-мапы obj.Get() мог вернуть
+// то Ref, то UUID — недетерминированно. Фикс: замена in-place по
+// оригинальному ключу. Проверяем что НЕТ дубля ключей и нет сырого UUID.
+func TestEnrichHeaderRefs_NoDuplicateKey(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.ConnectSQLite(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	contr := &metadata.Entity{
+		Name:   "Контрагент",
+		Kind:   metadata.KindCatalog,
+		Fields: []metadata.Field{{Name: "Наименование", Type: metadata.FieldTypeString}},
+	}
+	doc := &metadata.Entity{
+		Name: "Счёт",
+		Kind: metadata.KindDocument,
+		Fields: []metadata.Field{
+			{Name: "Контрагент", Type: "reference:Контрагент", RefEntity: "Контрагент"},
+		},
+	}
+	if err := db.Migrate(ctx, []*metadata.Entity{contr, doc}); err != nil {
+		t.Fatal(err)
+	}
+	cid := uuid.New()
+	if err := db.Upsert(ctx, "Контрагент", cid, map[string]any{"Наименование": "ООО Ромашка"}, contr); err != nil {
+		t.Fatal(err)
+	}
+	registry := runtime.NewRegistry()
+	registry.Load([]*metadata.Entity{contr, doc}, nil, nil, nil, nil, nil, nil)
+	s := &Server{store: db, reg: registry}
+
+	// Ключ в PascalCase (как кладёт форма) с UUID-строкой.
+	obj := &runtime.Object{
+		ID:     uuid.New(),
+		Type:   "Счёт",
+		Kind:   metadata.KindDocument,
+		Fields: map[string]any{"Контрагент": cid.String()},
+	}
+	s.enrichHeaderRefs(ctx, doc, obj)
+
+	// Должен остаться РОВНО один ключ для контрагента, и он = *Ref.
+	var refKeys int
+	for k, v := range obj.Fields {
+		if k == "Контрагент" || k == "контрагент" {
+			refKeys++
+			if _, ok := v.(*interpreter.Ref); !ok {
+				t.Errorf("ключ %q держит %T, ожидался *Ref (сырой UUID не заменён)", k, v)
+			}
+		}
+	}
+	if refKeys != 1 {
+		t.Errorf("ожидался 1 ключ контрагента, найдено %d (дубль ключей!): %v", refKeys, obj.Fields)
+	}
+}
+
 // Поле, уже являющееся *Ref (проведение из обработки), не должно
 // перезаписываться — двойной обработки нет.
 func TestEnrichHeaderRefs_SkipsExistingRef(t *testing.T) {

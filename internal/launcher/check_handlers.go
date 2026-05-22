@@ -222,6 +222,7 @@ func checkQueries(proj *project.Project) []checkIssue {
 		Registers:   proj.Registers,
 		InfoRegs:    proj.InfoRegisters,
 		AccountRegs: proj.AccountRegisters,
+		Entities:    proj.Entities,
 	}
 	for _, w := range proj.Widgets {
 		if w.Query == "" {

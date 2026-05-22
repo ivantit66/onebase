@@ -275,12 +275,39 @@ func (r *Repo) ActiveSessions(ctx context.Context) ([]*SessionInfo, error) {
 	var sessions []*SessionInfo
 	for rows.Next() {
 		si := &SessionInfo{}
-		if err := rows.Scan(&si.Login, &si.FullName, &si.IsAdmin, &si.ExpiresAt); err != nil {
+		var expiresRaw any
+		if err := rows.Scan(&si.Login, &si.FullName, &si.IsAdmin, &expiresRaw); err != nil {
 			return nil, err
 		}
+		si.ExpiresAt = parseSessionTime(expiresRaw)
 		sessions = append(sessions, si)
 	}
 	return sessions, rows.Err()
+}
+
+// parseSessionTime normalises an expires_at column value to time.Time.
+// PostgreSQL returns time.Time natively; SQLite stores it as TEXT which
+// the driver may return as string or []byte in Go's time format.
+func parseSessionTime(v any) time.Time {
+	switch t := v.(type) {
+	case time.Time:
+		return t
+	case string:
+		// Try standard formats first, then Go's own String() format.
+		for _, layout := range []string{
+			time.RFC3339Nano, time.RFC3339,
+			"2006-01-02 15:04:05.999999999 -0700 MST",
+			"2006-01-02 15:04:05 -0700 MST",
+			"2006-01-02 15:04:05",
+		} {
+			if parsed, err := time.Parse(layout, t); err == nil {
+				return parsed
+			}
+		}
+	case []byte:
+		return parseSessionTime(string(t))
+	}
+	return time.Time{}
 }
 
 // SetDenyPasswdChange sets the deny_passwd_change flag for a user.

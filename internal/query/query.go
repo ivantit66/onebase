@@ -18,6 +18,7 @@ type CompileOpts struct {
 	Registers   []*metadata.Register
 	InfoRegs    []*metadata.InfoRegister
 	AccountRegs []*metadata.AccountRegister
+	Entities    []*metadata.Entity
 	// Dialect selects the SQL flavour. nil = PgDialect (default).
 	Dialect storage.Dialect
 }
@@ -324,11 +325,19 @@ const (
 )
 
 type refDimInfo struct {
-	fieldName string // lowercase dim name: "номенклатура"
-	idCol     string // DB column: "номенклатура_id"
-	joinAlias string // SQL alias for auto-JOIN: "ref_номенклатура"
-	joinTable string // referenced catalog table: "номенклатура"
-	isVT      bool   // true: VT outer query, JOIN ON uses fieldName instead of idCol
+	fieldName  string // lowercase dim name: "номенклатура"
+	idCol      string // DB column: "номенклатура_id"
+	joinAlias  string // SQL alias for auto-JOIN: "ref_номенклатура"
+	joinTable  string // referenced catalog table: "номенклатура"
+	isVT       bool   // true: VT outer query, JOIN ON uses fieldName instead of idCol
+	refIsDoc   bool   // true: referenced entity is a document → display "номер", not "наименование"
+}
+
+func (rd refDimInfo) displayCol() string {
+	if rd.refIsDoc {
+		return rd.joinAlias + ".номер"
+	}
+	return rd.joinAlias + ".наименование"
 }
 
 type translator struct {
@@ -982,8 +991,13 @@ func (tr *translator) genFirstSlice(ir *metadata.InfoRegister, args [][]tok) (st
 // --- reference dimension auto-join ---
 
 // preScanRefDims pre-scans tokens to find the first simple (non-virtual) register source
-// and returns reference dimension info for auto-JOIN generation.
+// and returns reference dimension info for auto-JOIN generation. Only fields actually
+// referenced in the query produce JOINs to avoid ambiguous-column errors.
 func preScanRefDims(tokens []tok, opts CompileOpts) []refDimInfo {
+	return filterUsedRefDims(preScanAllRefDims(tokens, opts), tokens)
+}
+
+func preScanAllRefDims(tokens []tok, opts CompileOpts) []refDimInfo {
 	for i := 0; i+2 < len(tokens); i++ {
 		t := tokens[i]
 		if t.kind != tIdent {
@@ -999,7 +1013,7 @@ func preScanRefDims(tokens []tok, opts CompileOpts) []refDimInfo {
 			if isAccumRegType(upper) {
 				for _, reg := range opts.Registers {
 					if strings.EqualFold(reg.Name, regName) {
-						return buildVTRefDimInfos(reg.Dimensions)
+						return buildVTRefDimInfos(append(reg.Dimensions, reg.Attributes...))
 					}
 				}
 			} else if isInfoRegType(upper) {
@@ -1015,7 +1029,7 @@ func preScanRefDims(tokens []tok, opts CompileOpts) []refDimInfo {
 		if isAccumRegType(upper) {
 			for _, reg := range opts.Registers {
 				if strings.EqualFold(reg.Name, regName) {
-					return buildRefDimInfos(reg.Dimensions)
+					return buildRefDimInfos(append(reg.Dimensions, reg.Attributes...))
 				}
 			}
 		} else if isInfoRegType(upper) {
@@ -1025,8 +1039,36 @@ func preScanRefDims(tokens []tok, opts CompileOpts) []refDimInfo {
 				}
 			}
 		}
+		// Document / Catalog sources
+		for _, ent := range opts.Entities {
+			if strings.EqualFold(ent.Name, regName) {
+				return buildRefDimInfosWithEntities(ent.Fields, opts.Entities)
+			}
+		}
 	}
 	return nil
+}
+
+// filterUsedRefDims removes refDims for fields not referenced in the query tokens.
+// This avoids unnecessary JOINs that can cause "ambiguous column name" errors when
+// a joined table shares column names (e.g. дата) with the main table.
+func filterUsedRefDims(dims []refDimInfo, tokens []tok) []refDimInfo {
+	if len(dims) == 0 {
+		return nil
+	}
+	used := make(map[string]bool, len(tokens))
+	for _, t := range tokens {
+		if t.kind == tIdent {
+			used[strings.ToLower(t.val)] = true
+		}
+	}
+	var out []refDimInfo
+	for _, rd := range dims {
+		if used[rd.fieldName] {
+			out = append(out, rd)
+		}
+	}
+	return out
 }
 
 // buildVTRefDimInfos creates refDimInfos for VT outer queries where the subquery
@@ -1049,15 +1091,26 @@ func buildVTRefDimInfos(dims []metadata.Field) []refDimInfo {
 }
 
 func buildRefDimInfos(dims []metadata.Field) []refDimInfo {
+	return buildRefDimInfosWithEntities(dims, nil)
+}
+
+func buildRefDimInfosWithEntities(dims []metadata.Field, entities []*metadata.Entity) []refDimInfo {
 	var result []refDimInfo
 	for _, d := range dims {
 		if d.RefEntity != "" {
-			result = append(result, refDimInfo{
+			rd := refDimInfo{
 				fieldName: strings.ToLower(d.Name),
 				idCol:     strings.ToLower(d.Name) + "_id",
 				joinAlias: "ref_" + strings.ToLower(d.Name),
 				joinTable: strings.ToLower(d.RefEntity),
-			})
+			}
+			for _, e := range entities {
+				if strings.EqualFold(e.Name, d.RefEntity) && e.Kind == metadata.KindDocument {
+					rd.refIsDoc = true
+					break
+				}
+			}
+			result = append(result, rd)
 		}
 	}
 	return result
@@ -1367,27 +1420,32 @@ func translate(tokens []tok, opts CompileOpts) (Result, error) {
 				}
 			} else {
 				lower := strings.ToLower(t.val)
+				nextIsDot := tr.peek(0).kind == tDot
 				if tr.section == sectionFrom && !prevDot {
-					// In FROM clause bare identifiers are table names — skip colMap/refDim
 					tr.emit(lower)
 				} else if rd := tr.findRefDim(lower); rd != nil && !prevDot {
-					switch tr.section {
-					case sectionSelect:
-						tr.emit(rd.joinAlias + ".наименование")
-						// Skip auto-alias when user provides КАК/AS
-						if p := strings.ToUpper(tr.peek(0).val); p != "КАК" && p != "AS" {
-							tr.emit("AS")
-							tr.emit(rd.fieldName)
+					if nextIsDot {
+						tr.emit(rd.joinAlias)
+					} else {
+						switch tr.section {
+						case sectionSelect:
+							tr.emit(rd.displayCol())
+							if p := strings.ToUpper(tr.peek(0).val); p != "КАК" && p != "AS" {
+								tr.emit("AS")
+								tr.emit(rd.fieldName)
+							}
+						case sectionGroupBy, sectionOrderBy:
+							tr.emit(rd.displayCol())
+						default:
+							tr.emit(rd.idCol)
 						}
-					case sectionGroupBy, sectionOrderBy:
-						tr.emit(rd.joinAlias + ".наименование")
-					default: // WHERE, HAVING, FROM (after dot), OTHER → raw column (UUID for VT, _id for plain)
-						tr.emit(rd.idCol)
 					}
 				} else if col, ok := tr.colMap[lower]; ok && !prevDot {
 					tr.emit(col)
 				} else if prevDot {
-					if c, ok2 := tr.colMap[lower]; ok2 {
+					if rd := tr.findRefDim(lower); rd != nil {
+						tr.emit(rd.idCol)
+					} else if c, ok2 := tr.colMap[lower]; ok2 {
 						tr.emit(c)
 					} else {
 						tr.emit(lower)

@@ -188,6 +188,7 @@ var tmpl = template.Must(template.New("root").Funcs(template.FuncMap{
 	"wcell":        widgetCell,
 	"echartsJSON":  echartsJSON,
 	"splitCamel":   splitCamel,
+	"fmtCell":      fmtReportCell,
 }).Parse(tplHead + tplNav + tplIndex + tplList + tplForm + tplRegister + tplReport + tplProcessor + tplAbout + tplDeleteMarked + tplInfoReg + tplConstants + tplHistory + tplJournal + tplScheduled + tplAccountReg + tplQueryBuilder + tplAllFunctions + tplQueryConsole + tplCodeConsole + tplForbidden))
 
 const tplHead = `
@@ -441,6 +442,7 @@ window.__obWidgetCharts = window.__obWidgetCharts || {};
       if(!opt)continue;
       try{
         var c=echarts.init(node);
+        if(opt.yAxis&&opt.yAxis.type==="value"){opt.yAxis.axisLabel={formatter:function(v){if(Math.abs(v)>=1e6)return(v/1e6).toFixed(1)+"M";if(Math.abs(v)>=1e3)return(v/1e3).toFixed(1)+"k";return v%1===0?v:v.toFixed(2)}};}
         c.setOption(opt);
         (function(c){window.addEventListener('resize',function(){c.resize();});})(c);
       }catch(e){console.error('chart init failed',e);}
@@ -626,7 +628,7 @@ const tplList = `
         {{index $row .Name}}{{if index $row "_is_predefined"}} <span title="Предопределённый" style="color:#f59e0b;font-size:11px">★</span>{{end}}
       </td>
     {{else if eq (str .Type) "date"}}<td>{{fmtDate (index $row .Name)}}</td>
-    {{else}}<td>{{index $row .Name}}</td>{{end}}
+    {{else}}<td>{{fmtCell (index $row .Name)}}</td>{{end}}
   {{end}}
   <td>
     {{if $isFolder}}
@@ -674,7 +676,7 @@ const tplList = `
   {{end}}
   {{range $.Entity.Fields}}
     {{if eq (str .Type) "date"}}<td style="white-space:nowrap">{{fmtDate (index $row .Name)}}</td>
-    {{else}}<td style="white-space:nowrap">{{if and (eq .Name "Наименование") $.Entity.Hierarchical}}{{if $isFolder}}📁 {{else}}📄 {{end}}{{end}}{{index $row .Name}}{{if and (eq .Name "Наименование") (index $row "_is_predefined")}} <span title="Предопределённый элемент" style="color:#f59e0b;font-size:11px">★</span>{{end}}</td>{{end}}
+    {{else}}<td style="white-space:nowrap">{{if and (eq .Name "Наименование") $.Entity.Hierarchical}}{{if $isFolder}}📁 {{else}}📄 {{end}}{{end}}{{fmtCell (index $row .Name)}}{{if and (eq .Name "Наименование") (index $row "_is_predefined")}} <span title="Предопределённый элемент" style="color:#f59e0b;font-size:11px">★</span>{{end}}</td>{{end}}
   {{end}}
   <td>
     {{if and $isFolder $.Entity.Hierarchical}}
@@ -1197,7 +1199,8 @@ const tplReport = `
 <script>
 (function(){
   var c=echarts.init(document.getElementById('ob-chart'));
-  c.setOption({{jsJSON .ChartOption}});
+  var _o={{jsJSON .ChartOption}};if(_o.yAxis&&_o.yAxis.type==="value"){_o.yAxis.axisLabel={formatter:function(v){if(Math.abs(v)>=1e6)return(v/1e6).toFixed(1)+"M";if(Math.abs(v)>=1e3)return(v/1e3).toFixed(1)+"k";return v%1===0?v:v.toFixed(2)}};}
+  c.setOption(_o);
   window.addEventListener('resize',function(){c.resize()});
 })();
 </script>
@@ -1211,7 +1214,7 @@ const tplReport = `
 <table><thead><tr>{{range .Cols}}<th>{{.}}</th>{{end}}</tr></thead>
 <tbody>
 {{range .Rows}}{{$row := .}}<tr>
-  {{range $.Cols}}<td>{{index $row .}}</td>{{end}}
+  {{range $.Cols}}<td>{{fmtCell (index $row .)}}</td>{{end}}
 </tr>{{end}}
 </tbody></table>
 {{else}}<p class="empty">Нет данных</p>{{end}}

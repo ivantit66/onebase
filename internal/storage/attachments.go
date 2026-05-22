@@ -59,11 +59,11 @@ func (db *DB) ListAttachments(ctx context.Context, ownerKind, ownerName string, 
 	defer rows.Close()
 	var result []Attachment
 	for rows.Next() {
-		var a Attachment
-		if err := rows.Scan(&a.ID, &a.OwnerKind, &a.OwnerName, &a.OwnerID, &a.Filename, &a.MimeType, &a.SizeBytes, &a.UploadedAt, &a.UploadedBy); err != nil {
+		a, err := scanAttachment(rows)
+		if err != nil {
 			return nil, err
 		}
-		result = append(result, a)
+		result = append(result, *a)
 	}
 	return result, nil
 }
@@ -95,22 +95,22 @@ func (db *DB) UploadAttachment(ctx context.Context, ownerKind, ownerName string,
 	}
 
 	q := fmt.Sprintf(`
-		INSERT INTO _attachments (id, owner_kind, owner_name, owner_id, filename, mime_type, size_bytes, uploaded_by)
-		VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-		RETURNING id, owner_kind, owner_name, owner_id, filename, mime_type, size_bytes, uploaded_at, uploaded_by
-	`, d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4),
+			INSERT INTO _attachments (id, owner_kind, owner_name, owner_id, filename, mime_type, size_bytes, uploaded_by)
+			VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+		`, d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4),
 		d.Placeholder(5), d.Placeholder(6), d.Placeholder(7), d.Placeholder(8))
-	var a Attachment
-	err = db.QueryRow(ctx, q,
+	if _, err := db.Exec(ctx, q,
 		id.String(), ownerKind, ownerName, ownerID.String(), filename, mimeType, n, uploadedBy,
-	).Scan(
-		&a.ID, &a.OwnerKind, &a.OwnerName, &a.OwnerID, &a.Filename, &a.MimeType, &a.SizeBytes, &a.UploadedAt, &a.UploadedBy,
-	)
+	); err != nil {
+		os.Remove(filePath)
+		return Attachment{}, err
+	}
+	a, err := db.GetAttachment(ctx, id)
 	if err != nil {
 		os.Remove(filePath)
 		return Attachment{}, err
 	}
-	return a, nil
+	return *a, nil
 }
 
 // GetAttachment returns attachment metadata by ID.
@@ -120,13 +120,8 @@ func (db *DB) GetAttachment(ctx context.Context, id uuid.UUID) (*Attachment, err
 		SELECT id, owner_kind, owner_name, owner_id, filename, mime_type, size_bytes, uploaded_at, uploaded_by
 		FROM _attachments WHERE id=%s
 	`, d.Placeholder(1))
-	var a Attachment
-	err := db.QueryRow(ctx, q, id.String()).Scan(
-		&a.ID, &a.OwnerKind, &a.OwnerName, &a.OwnerID, &a.Filename, &a.MimeType, &a.SizeBytes, &a.UploadedAt, &a.UploadedBy)
-	if err != nil {
-		return nil, err
-	}
-	return &a, nil
+	row := db.QueryRow(ctx, q, id.String())
+	return scanAttachment(row)
 }
 
 // OpenAttachment opens the file for a given attachment ID and returns its metadata.
@@ -155,4 +150,28 @@ func (db *DB) DeleteAttachment(ctx context.Context, id uuid.UUID) error {
 	q := fmt.Sprintf(`DELETE FROM _attachments WHERE id=%s`, d.Placeholder(1))
 	_, err = db.Exec(ctx, q, id.String())
 	return err
+}
+
+// attachmentScanner is satisfied by both sql.Row and sql.Rows.
+type attachmentScanner interface{ Scan(dest ...any) error }
+
+func scanAttachment(row attachmentScanner) (*Attachment, error) {
+	var idStr, ownerIDStr string
+	var uploadedAtRaw any
+	var a Attachment
+	if err := row.Scan(&idStr, &a.OwnerKind, &a.OwnerName, &ownerIDStr, &a.Filename, &a.MimeType, &a.SizeBytes, &uploadedAtRaw, &a.UploadedBy); err != nil {
+		return nil, err
+	}
+	a.UploadedAt = parseAuditTime(uploadedAtRaw)
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return nil, fmt.Errorf("attachment id: %w", err)
+	}
+	a.ID = id
+	ownerID, err := uuid.Parse(ownerIDStr)
+	if err != nil {
+		return nil, fmt.Errorf("attachment owner_id: %w", err)
+	}
+	a.OwnerID = ownerID
+	return &a, nil
 }

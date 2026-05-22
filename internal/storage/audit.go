@@ -195,16 +195,36 @@ func (db *DB) AuditSearch(ctx context.Context, filter AuditFilter, limit, offset
 }
 
 // AuditDiff compares old and new field values and returns changed fields.
+// Values implementing refUUIDer (e.g. *interpreter.Ref) are normalised to
+// their UUID string so the audit log stores plain UUIDs, not struct dumps.
 func AuditDiff(old, new map[string]any, entity *metadata.Entity) []FieldChange {
 	var changes []FieldChange
 	for _, f := range entity.Fields {
-		ov := old[f.Name]
-		nv := new[f.Name]
+		ov := auditVal(old[f.Name])
+		nv := auditVal(new[f.Name])
 		if fmt.Sprintf("%v", ov) != fmt.Sprintf("%v", nv) {
 			changes = append(changes, FieldChange{Field: f.Name, Old: ov, New: nv})
 		}
 	}
 	return changes
+}
+
+// refUUIDer is satisfied by *interpreter.Ref. Kept here to avoid
+// importing interpreter (which would create a circular dependency).
+type refUUIDer interface {
+	GetRefUUID() string
+}
+
+// auditVal normalises a value for audit storage. Ref objects become their
+// UUID string; everything else is passed through unchanged.
+func auditVal(v any) any {
+	if v == nil {
+		return nil
+	}
+	if r, ok := v.(refUUIDer); ok {
+		return r.GetRefUUID()
+	}
+	return v
 }
 
 // FieldChange represents one changed field.
@@ -360,4 +380,49 @@ func parseTimeStr(s string) time.Time {
 func (db *DB) execAudit(ctx context.Context, sql string, args ...any) error {
 	_, err := db.Exec(ctx, sql, args...)
 	return err
+}
+
+// ActiveUserInfo represents a user seen recently in the audit log.
+type ActiveUserInfo struct {
+	Login     string
+	LastSeen  time.Time
+}
+
+// ActiveUsersFromAudit returns distinct user_logins from _audit in the
+// last 24 hours, ordered by most recent activity. Used when no auth
+// subsystem is configured (file-based databases).
+func (db *DB) ActiveUsersFromAudit(ctx context.Context) ([]ActiveUserInfo, error) {
+	d := db.dialect
+	q := fmt.Sprintf(`
+		SELECT COALESCE(NULLIF(user_login,''),'admin') AS login, MAX(at) AS last_seen
+		FROM _audit
+		WHERE at >= %s
+		GROUP BY login
+		ORDER BY last_seen DESC`,
+		d.Placeholder(1))
+	cutoff := time.Now().Add(-24 * time.Hour)
+	// SQLite stores at as TEXT (ISO 8601), direct comparison with
+	// time.Time does not work - format as string.
+	cutoffArg := any(cutoff)
+	if db.IsSQLite() {
+		cutoffArg = cutoff.Format("2006-01-02 15:04:05")
+	}
+	rows, err := db.Query(ctx, q, cutoffArg)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []ActiveUserInfo
+	for rows.Next() {
+		var login string
+		var lastSeen any
+		if err := rows.Scan(&login, &lastSeen); err != nil {
+			continue
+		}
+		result = append(result, ActiveUserInfo{
+			Login:    login,
+			LastSeen: parseAuditTime(lastSeen),
+		})
+	}
+	return result, nil
 }

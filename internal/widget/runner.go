@@ -285,22 +285,31 @@ func (r *Runner) runRecent(ctx context.Context, w *metadata.Widget, res *Result)
 		WHERE ` + strings.Join(where, " AND ") + ` AND record_id IS NOT NULL
 		GROUP BY entity_kind, entity_name, record_id
 		ORDER BY _ts DESC
-		LIMIT ` + fmt.Sprint(limit)
+		LIMIT ` + fmt.Sprint(limit*3)
 
 	rows, _, err := r.Store.RunQuery(ctx, sql, args)
 	if err != nil {
 		res.Error = err.Error()
 		return
 	}
+	var kept []map[string]any
 	for _, row := range rows {
 		entName, _ := row["entity_name"].(string)
 		kind, _ := row["entity_kind"].(string)
 		id := fmt.Sprintf("%v", row["record_id"])
+		title := recordPresentation(ctx, r, entName, id)
+		if title == shortID(id) {
+			continue
+		}
 		row["_url"] = "/ui/" + kind + "/" + entName + "/" + id
 		row["_label"] = entName
-		row["_title"] = recordPresentation(ctx, r, entName, id)
+		row["_title"] = title
+		kept = append(kept, row)
+		if len(kept) >= limit {
+			break
+		}
 	}
-	res.Rows = rows
+	res.Rows = kept
 	res.Columns = []ColumnSpec{
 		{Field: "entity_name", Label: "Объект"},
 		{Field: "_ts", Label: "Когда", Format: "date"},
@@ -368,6 +377,7 @@ func (r *Runner) runQuery(ctx context.Context, w *metadata.Widget) ([]map[string
 
 	compiled, err := query.Compile(w.Query, query.CompileOpts{
 		Params:      params,
+		Entities:    r.Reg.Entities(),
 		Registers:   r.Reg.Registers(),
 		InfoRegs:    r.Reg.InfoRegisters(),
 		AccountRegs: r.Reg.AccountRegisters(),
