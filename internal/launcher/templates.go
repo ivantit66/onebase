@@ -231,7 +231,7 @@ const tplForm = `
     <div class="fg">
       <label>Тип хранения конфигурации</label>
       <select name="config_source" onchange="togglePath(this.value)">
-        <option value="database" {{if eq .Base.ConfigSource "database"}}selected{{end}}>В базе данных (1С-режим)</option>
+        <option value="database" {{if eq .Base.ConfigSource "database"}}selected{{end}}>В базе данных (встроенная)</option>
         <option value="file" {{if eq .Base.ConfigSource "file"}}selected{{end}}>Файловый (разработка)</option>
       </select>
       <div class="hint">«В базе данных» — конфигурация хранится в БД, редактирование через Выгрузку/Загрузку. «Файловый» — папка на диске под git.</div>

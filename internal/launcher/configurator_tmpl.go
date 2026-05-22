@@ -338,7 +338,7 @@ const cfgHead = `{{define "cfg-head"}}<!DOCTYPE html>
 </div>
 <div class="tabs">
   <a class="tab {{if eq .Tab "tree"}}active{{end}}" href="/bases/{{.Base.ID}}/configurator?tab=tree">🌳 Дерево</a>
-  <a class="tab {{if eq .Tab "convert"}}active{{end}}" href="/bases/{{.Base.ID}}/configurator?tab=convert">🔄 Конвертер 1С</a>
+  <a class="tab {{if eq .Tab "convert"}}active{{end}}" href="/bases/{{.Base.ID}}/configurator?tab=convert">🔄 Импорт конфигурации</a>
   <a class="tab {{if eq .Tab "files"}}active{{end}}" href="/bases/{{.Base.ID}}/configurator?tab=files">📁 Файлы</a>
   <a class="tab {{if eq .Tab "backup"}}active{{end}}" href="/bases/{{.Base.ID}}/configurator?tab=backup">💾 Бэкапы</a>
 </div>
@@ -3963,13 +3963,13 @@ const cfgRegDetail = `{{define "register-detail"}}
 const cfgTabConvert = `{{define "tab-convert"}}
 <div class="pad">
 <div class="convert-form">
-  <h3>🔄 Конвертация конфигурации 1С → onebase</h3>
+  <h3>🔄 Импорт конфигурации из выгрузки 1С:Предприятие 8.3</h3>
   <form method="POST" action="/bases/{{.Base.ID}}/configurator/convert">
     <div class="fg">
-      <label>Путь к папке выгрузки 1С</label>
+      <label>Путь к папке XML-выгрузки</label>
       <input type="text" name="src_dir" value="{{.ConvertSrcDir}}"
-             placeholder="C:\Users\...\1C\МояКонфигурация" autofocus>
-      <div class="hint">В 1С: Конфигуратор → Конфигурация → Выгрузить конфигурацию в файлы</div>
+             placeholder="C:\Users\...\export\МояКонфигурация" autofocus>
+      <div class="hint">Выгрузка делается в конфигураторе 1С:Предприятие: Конфигурация → Выгрузить конфигурацию в файлы</div>
     </div>
     <div class="form-btns">
       <button class="btn-primary" type="submit" name="apply" value="0">Просмотр</button>

@@ -37,11 +37,11 @@ type TabularSection struct {
 type Attribute struct {
 	Name    string
 	Synonym string
-	Type    FieldType1C
+	Type    FieldType
 }
 
-// FieldType1C — тип реквизита в формате 1С
-type FieldType1C struct {
+// FieldType — тип реквизита в формате 1С
+type FieldType struct {
 	// Основной тип, если один
 	Primary string
 	// Ссылочный тип: имя объекта (справочника/документа) без префикса
@@ -63,7 +63,7 @@ type EnumMeta struct {
 type ConstantMeta struct {
 	Name    string
 	Synonym string
-	Type    FieldType1C
+	Type    FieldType
 }
 
 // InfoRegMeta — регистр сведений

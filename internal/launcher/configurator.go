@@ -312,7 +312,7 @@ func (h *handler) configuratorConvert(w http.ResponseWriter, r *http.Request) {
 	data.ConvertSrcDir = srcDir
 
 	if srcDir == "" {
-		data.Error = "Укажите путь к папке конфигурации 1С"
+		data.Error = "Укажите путь к папке XML-выгрузки конфигурации"
 		renderCfg(w, data)
 		return
 	}

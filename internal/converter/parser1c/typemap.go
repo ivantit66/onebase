@@ -4,7 +4,7 @@ import "strings"
 
 // MapType конвертирует тип 1С → тип onebase.
 // Возвращает тип и примечание (для отчёта).
-func MapType(t FieldType1C) (onebaseType string, note string) {
+func MapType(t FieldType) (onebaseType string, note string) {
 	if t.Composite {
 		return "string", "составной тип → string"
 	}

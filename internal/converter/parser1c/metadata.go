@@ -442,15 +442,15 @@ func convertAttrs(xmlAttrs []xmlAttribute) []Attribute {
 	return result
 }
 
-func parseType(types []string) FieldType1C {
+func parseType(types []string) FieldType {
 	if len(types) == 0 {
-		return FieldType1C{Primary: "string"}
+		return FieldType{Primary: "string"}
 	}
 	if len(types) > 1 {
-		return FieldType1C{Composite: true, AllTypes: types}
+		return FieldType{Composite: true, AllTypes: types}
 	}
 	t := types[0]
-	ft := FieldType1C{Primary: t}
+	ft := FieldType{Primary: t}
 	// Извлечь имя объекта из ссылки (CatalogRef.X, cfg:CatalogRef.X, DocumentRef.X)
 	bare := strings.TrimPrefix(t, "cfg:")
 	if strings.Contains(bare, ".") && !strings.HasPrefix(bare, "xs:") {
@@ -513,7 +513,7 @@ func parseConstants(dir string) ([]*ConstantMeta, error) {
 			})
 			continue
 		}
-		result = append(result, &ConstantMeta{Name: name, Type: FieldType1C{Primary: "string"}})
+		result = append(result, &ConstantMeta{Name: name, Type: FieldType{Primary: "string"}})
 	}
 	return result, nil
 }

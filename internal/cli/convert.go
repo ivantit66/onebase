@@ -10,20 +10,20 @@ import (
 
 var convertCmd = &cobra.Command{
 	Use:   "convert",
-	Short: "Convert a 1C configuration to onebase format",
-	Long: `Reads a 1C configuration XML export and creates a onebase project.
+	Short: "Import a 1C:Enterprise configuration into onebase format",
+	Long: `Reads a 1C:Enterprise configuration XML export and creates a onebase project.
 
-How to export from 1C Configurator:
+To produce the export, use the 1C:Enterprise configurator:
   Configuration → Save configuration to files... → choose a directory
 
 Then run:
-  onebase convert --from 1c-xml --dir ./1c-export --out ./my-project`,
+  onebase convert --from 1c-xml --dir ./export --out ./my-project`,
 	RunE: runConvert,
 }
 
 func init() {
 	convertCmd.Flags().String("from", "1c-xml", "source format: 1c-xml")
-	convertCmd.Flags().String("dir", "", "path to the 1C XML export directory")
+	convertCmd.Flags().String("dir", "", "path to the 1C:Enterprise XML export directory")
 	convertCmd.Flags().String("out", "", "output directory for the onebase project")
 	convertCmd.MarkFlagRequired("dir")
 	convertCmd.MarkFlagRequired("out")
