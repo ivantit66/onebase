@@ -54,6 +54,16 @@ func ConnectSQLite(ctx context.Context, dbPath string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("storage: sqlite: open %q: %w", dbPath, err)
 	}
+
+	// Один коннект в пуле — критично для SQLite. PRAGMA настройки
+	// (busy_timeout, journal_mode и т.п.) применяются per-connection, а
+	// database/sql ленивo открывает дополнительные коннекты при параллельной
+	// нагрузке: они не получают прагмы и сразу падают с SQLITE_BUSY. SQLite
+	// всё равно single-writer на запись, а на чтение в WAL-режиме одного
+	// коннекта достаточно (внутри SQLite читатели не блокируют друг друга).
+	conn.SetMaxOpenConns(1)
+	conn.SetMaxIdleConns(1)
+
 	if err := conn.PingContext(ctx); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("storage: sqlite: ping %q: %w", dbPath, err)
