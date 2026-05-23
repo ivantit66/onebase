@@ -874,6 +874,7 @@ const tplForm = `
 
 <div class="card">
 <form id="main-form" method="POST">
+{{if and (not .IsNew) (index .Values "_version")}}<input type="hidden" name="_version" value="{{index .Values "_version"}}">{{end}}
 {{if .Entity.Hierarchical}}
 <div class="form-group">
   <label>Тип</label>

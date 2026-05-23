@@ -96,6 +96,11 @@ func (db *DB) Upsert(ctx context.Context, entityName string, id uuid.UUID, field
 	}
 	_ = argIdx
 
+	// Оптимистическая блокировка: на каждом UPDATE инкрементируем _version.
+	// На INSERT — DEFAULT 1 из DDL. См. UpsertVersioned для проверки ожидаемой
+	// ревизии перед записью.
+	updates = append(updates, "_version = "+table+"._version + 1")
+
 	var sql string
 	if len(updates) == 0 {
 		sql = fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON CONFLICT (id) DO NOTHING",
@@ -133,7 +138,7 @@ func (db *DB) GetByID(ctx context.Context, entityName string, id uuid.UUID, enti
 	if entity.Kind == metadata.KindDocument {
 		cols = append(cols, "posted")
 	}
-	cols = append(cols, "deletion_mark")
+	cols = append(cols, "deletion_mark", "_version")
 	if entity.Hierarchical {
 		cols = append(cols, "is_folder", "parent_id")
 	}
@@ -160,6 +165,8 @@ func (db *DB) GetByID(ctx context.Context, entityName string, id uuid.UUID, enti
 		off++
 	}
 	result["deletion_mark"] = normalizeValue(dest[off])
+	off++
+	result["_version"] = normalizeValue(dest[off])
 	off++
 	if entity.Hierarchical {
 		result["is_folder"] = normalizeValue(dest[off])

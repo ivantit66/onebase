@@ -303,6 +303,14 @@ func (db *DB) Migrate(ctx context.Context, entities []*metadata.Entity) error {
 		if err := db.AddColumnIfMissing(ctx, table, "deletion_mark", d.TypeBool()+" NOT NULL DEFAULT "+boolFalseLit(d)); err != nil {
 			return fmt.Errorf("migrate %s.deletion_mark: %w", e.Name, err)
 		}
+		// _version — счётчик ревизий для оптимистических блокировок.
+		// Инкрементируется в Upsert при каждом UPDATE. UpsertVersioned
+		// сравнивает с ожидаемым значением и возвращает ErrVersionConflict,
+		// если кто-то опередил. BIGINT работает на обоих диалектах: в PG —
+		// нативный, в SQLite — через INTEGER affinity.
+		if err := db.AddColumnIfMissing(ctx, table, "_version", "BIGINT NOT NULL DEFAULT 1"); err != nil {
+			return fmt.Errorf("migrate %s._version: %w", e.Name, err)
+		}
 		if e.Hierarchical {
 			if err := db.AddHierarchyColumns(ctx, table); err != nil {
 				return fmt.Errorf("migrate %s hierarchy: %w", e.Name, err)

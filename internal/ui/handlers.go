@@ -3,6 +3,7 @@
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -511,6 +512,11 @@ func (s *Server) formEdit(w http.ResponseWriter, r *http.Request) {
 	if entity.Kind == metadata.KindDocument {
 		vals["posted"] = fmt.Sprintf("%v", row["posted"])
 	}
+	// _version нужен на форме как hidden — для оптимистической блокировки
+	// при последующем POST'е в submitEdit. См. storage.UpsertVersioned.
+	if v, ok := row["_version"]; ok && v != nil {
+		vals["_version"] = fmt.Sprintf("%v", v)
+	}
 
 	tpRows := make(map[string][]map[string]any)
 	for _, tp := range entity.TableParts {
@@ -566,8 +572,27 @@ func (s *Server) formEdit(w http.ResponseWriter, r *http.Request) {
 		"HasPrintProc":  s.reg.GetProcedure(entity.Name, "Печать") != nil || s.reg.GetProcedure(entity.Name, "Print") != nil,
 		"FolderOptions": folderOptsEdit,
 		"DocMovements":  docMovements,
-		"Error":         r.URL.Query().Get("posting_error"),
+		"Error":         buildEditError(r),
 	})
+}
+
+// buildEditError собирает сообщение об ошибке из query-параметров, пришедших
+// после redirect'а. posting_error — сбой ОбработкиПроведения; conflict=1 —
+// оптимистический конфликт версий (см. storage.ErrVersionConflict).
+func buildEditError(r *http.Request) string {
+	if r.URL.Query().Get("conflict") == "1" {
+		return "Объект был изменён другим пользователем, пока вы редактировали форму. Ваши изменения не сохранены — текущие данные перезагружены."
+	}
+	return r.URL.Query().Get("posting_error")
+}
+
+// renderVersionConflict перезагружает форму редактирования с актуальными
+// данными из БД и показывает пользователю сообщение об оптимистическом
+// конфликте. Изменения пользователя теряются — это сознательный выбор
+// (lost-update лучше тихого перетирания чужих правок).
+func (s *Server) renderVersionConflict(w http.ResponseWriter, r *http.Request, entity *metadata.Entity, id uuid.UUID) {
+	target := "/ui/" + strings.ToLower(string(entity.Kind)) + "/" + entity.Name + "/" + id.String() + "?conflict=1"
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (s *Server) submitEdit(w http.ResponseWriter, r *http.Request) {
@@ -633,8 +658,17 @@ func (s *Server) submitEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Парсим _version для оптимистической блокировки. Если поля нет —
+	// expectedVersion=nil, UpsertVersioned не проверяет (поведение как раньше).
+	var expectedVersion *int64
+	if vStr := r.FormValue("_version"); vStr != "" {
+		if v, perr := strconv.ParseInt(vStr, 10, 64); perr == nil {
+			expectedVersion = &v
+		}
+	}
+
 	if err := s.store.WithTx(r.Context(), func(ctx context.Context) error {
-		if err := s.store.Upsert(ctx, entity.Name, obj.ID, obj.Fields, entity); err != nil {
+		if err := s.store.UpsertVersioned(ctx, entity.Name, obj.ID, obj.Fields, entity, expectedVersion); err != nil {
 			return err
 		}
 		if err := s.saveTablePartsDirect(ctx, entity, obj.ID, obj.TablePartRows); err != nil {
@@ -657,6 +691,13 @@ func (s *Server) submitEdit(w http.ResponseWriter, r *http.Request) {
 		}
 		return s.store.SetPosted(ctx, entity.Name, obj.ID, false)
 	}); err != nil {
+		// Оптимистический конфликт: перечитываем актуальное состояние из БД
+		// и показываем пользователю с понятным сообщением. Свои изменения
+		// он потеряет — но это лучше, чем тихо перетереть чужие.
+		if errors.Is(err, storage.ErrVersionConflict) {
+			s.renderVersionConflict(w, r, entity, id)
+			return
+		}
 		http.Error(w, err.Error(), 500)
 		return
 	}
