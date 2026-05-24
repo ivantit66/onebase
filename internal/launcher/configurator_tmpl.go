@@ -1,6 +1,9 @@
 ﻿package launcher
 
-import "html/template"
+import (
+	"html/template"
+	"strings"
+)
 
 var cfgTmpl = template.Must(template.New("cfg").Funcs(template.FuncMap{
 	"dict": func(pairs ...any) map[string]any {
@@ -12,6 +15,7 @@ var cfgTmpl = template.Must(template.New("cfg").Funcs(template.FuncMap{
 		}
 		return m
 	},
+	"lower": strings.ToLower,
 	"fieldTypeLabel": func(typ, ref string) string {
 		switch typ {
 		case "string":
@@ -3866,6 +3870,64 @@ const cfgTabTree = `{{define "tab-tree"}}
   {{if and $fSaved (eq $fSavedEnt $e.Name)}}<span class="save-ok">✓ Сохранено</span>{{end}}
 </div>
 </form>
+
+{{/* ── Управляемые формы (план 37, этап 4) ────────────────────────────── */}}
+<div class="section-hd" style="margin-top:18px">◇ Управляемая форма</div>
+<div style="background:#f8fafc;border:1px dashed #c8d4f0;border-radius:6px;padding:12px 14px;font-size:12px;color:#475569;line-height:1.5">
+  <p style="margin:0 0 8px">
+    Управляемая форма — декларативное описание UI в YAML, переопределяющее
+    авто-форму выше. Поддерживает группы, страницы-закладки, реквизиты формы,
+    события и обработчики на DSL OneBase. Подробнее: <a href="https://github.com/ivanarama/onebase/blob/main/docs/forms.md" target="_blank" style="color:#1a4a80">docs/forms.md</a>.
+  </p>
+  {{$hasManaged := false}}
+  {{$entityLower := lower $e.Name}}
+  {{range $.ManagedForms}}{{if eq (lower .Entity) $entityLower}}{{$hasManaged = true}}{{end}}{{end}}
+  {{if $hasManaged}}
+  <table style="width:100%;border-collapse:collapse;margin:8px 0;font-size:12px">
+    <thead><tr style="background:#fff;border-bottom:1px solid #e2e8f0">
+      <th style="text-align:left;padding:4px 8px">Имя</th>
+      <th style="text-align:left;padding:4px 8px">Тип</th>
+      <th style="text-align:left;padding:4px 8px">Модуль</th>
+      <th></th>
+    </tr></thead>
+    <tbody>
+    {{range $.ManagedForms}}{{if eq (lower .Entity) $entityLower}}
+    <tr style="border-bottom:1px solid #eef0f5">
+      <td style="padding:6px 8px">◇ {{.Name}}</td>
+      <td style="padding:6px 8px">{{if .Kind}}{{.Kind}}{{else}}—{{end}}</td>
+      <td style="padding:6px 8px">{{if .HasOS}}есть{{else}}—{{end}}</td>
+      <td style="text-align:right;padding:6px 8px">
+        <a href="/bases/{{$baseID}}/configurator/forms/edit?entity={{.Entity}}&name={{.Name}}"
+           style="display:inline-block;padding:3px 10px;background:#1a4a80;color:#fff;text-decoration:none;border-radius:4px;font-size:11px">
+          Редактировать
+        </a>
+      </td>
+    </tr>
+    {{end}}{{end}}
+    </tbody>
+  </table>
+  <p style="margin:4px 0 0;color:#64748b;font-size:11px">
+    В пользовательском режиме карточка <b>{{$e.Name}}</b> будет рендериться по
+    YAML с маркером ◇ managed, а не авто-форме выше.
+  </p>
+  {{else}}
+  <p style="margin:0 0 10px">У сущности <b>{{$e.Name}}</b> нет управляемых форм. Авто-форма выше используется по умолчанию.</p>
+  {{end}}
+  <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+    <a href="/bases/{{$baseID}}/configurator/forms/edit?entity={{$e.Name}}&name=ФормаОбъекта"
+       style="display:inline-block;padding:5px 12px;background:#16a34a;color:#fff;text-decoration:none;border-radius:4px;font-size:12px">
+      + Форма объекта
+    </a>
+    <a href="/bases/{{$baseID}}/configurator/forms/edit?entity={{$e.Name}}&name=ФормаСписка"
+       style="display:inline-block;padding:5px 12px;background:#16a34a;color:#fff;text-decoration:none;border-radius:4px;font-size:12px">
+      + Форма списка
+    </a>
+    <a href="/bases/{{$baseID}}/configurator/forms"
+       style="display:inline-block;padding:5px 12px;background:#e2e8f0;color:#334155;text-decoration:none;border-radius:4px;font-size:12px">
+      Все формы / Импорт из 1С
+    </a>
+  </div>
+</div>
 {{end}}`
 
 // ── Register detail (editable) ────────────────────────────────────────────────
