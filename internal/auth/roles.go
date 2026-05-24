@@ -202,6 +202,14 @@ func (r *Repo) UnassignRole(ctx context.Context, userID, roleID string) error {
 	return err
 }
 
+// DeleteRoleByName removes a role and (via ON DELETE CASCADE) its assignments.
+func (r *Repo) DeleteRoleByName(ctx context.Context, name string) error {
+	d := r.db.Dialect()
+	q := fmt.Sprintf(`DELETE FROM _roles WHERE name = %s`, d.Placeholder(1))
+	_, err := r.db.Exec(ctx, q, name)
+	return err
+}
+
 // LoadRolesYAML reads all *.yaml files from dir and returns Role slices.
 func LoadRolesYAML(dir string) ([]*Role, error) {
 	items, err := os.ReadDir(dir)

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"net/http"
 	"sort"
 	"strings"
 
@@ -218,16 +219,16 @@ type navGroup struct {
 	Items []navItem
 }
 
-func (s *Server) buildNav(sub string) []navGroup {
+func (s *Server) buildNav(r *http.Request, sub string) []navGroup {
 	subs := s.reg.Subsystems()
 	if len(subs) > 0 {
 		cur := s.reg.GetSubsystem(sub)
 		if cur == nil {
 			cur = subs[0]
 		}
-		return s.buildNavForSubsystem(cur, sub)
+		return s.buildNavForSubsystem(r, cur, sub)
 	}
-	return s.buildFlatNav()
+	return s.buildFlatNav(r)
 }
 
 func strSet(names []string) map[string]bool {
@@ -238,7 +239,7 @@ func strSet(names []string) map[string]bool {
 	return m
 }
 
-func (s *Server) buildNavForSubsystem(sub *metadata.Subsystem, subName string) []navGroup {
+func (s *Server) buildNavForSubsystem(r *http.Request, sub *metadata.Subsystem, subName string) []navGroup {
 	q := "?subsystem=" + subName
 	var nav []navGroup
 
@@ -249,6 +250,9 @@ func (s *Server) buildNavForSubsystem(sub *metadata.Subsystem, subName string) [
 		sort.Slice(entities, func(i, j int) bool { return entities[i].Name < entities[j].Name })
 		var catalogs, documents []navItem
 		for _, e := range entities {
+			if !s.can(r, string(e.Kind), e.Name, "read") {
+				continue
+			}
 			url := "/ui/" + strings.ToLower(string(e.Kind)) + "/" + e.Name + q
 			if e.Kind == metadata.KindCatalog && catSet[e.Name] {
 				catalogs = append(catalogs, navItem{Label: e.DisplayName(), URL: url})
@@ -271,6 +275,9 @@ func (s *Server) buildNavForSubsystem(sub *metadata.Subsystem, subName string) [
 		var regItems []navItem
 		for _, reg := range registers {
 			if !regSet[reg.Name] {
+				continue
+			}
+			if !s.can(r, "register", reg.Name, "read") {
 				continue
 			}
 			regItems = append(regItems, navItem{
@@ -296,6 +303,9 @@ func (s *Server) buildNavForSubsystem(sub *metadata.Subsystem, subName string) [
 			if !irSet[ir.Name] {
 				continue
 			}
+			if !s.can(r, "inforeg", ir.Name, "read") {
+				continue
+			}
 			label := ir.Name
 			if ir.Periodic {
 				label += " (периодический)"
@@ -314,6 +324,9 @@ func (s *Server) buildNavForSubsystem(sub *metadata.Subsystem, subName string) [
 		var repItems []navItem
 		for _, rep := range reps {
 			if !repSet[rep.Name] {
+				continue
+			}
+			if !s.can(r, "report", rep.Name, "run") {
 				continue
 			}
 			label := rep.Title
@@ -370,12 +383,15 @@ func (s *Server) buildNavForSubsystem(sub *metadata.Subsystem, subName string) [
 	return nav
 }
 
-func (s *Server) buildFlatNav() []navGroup {
+func (s *Server) buildFlatNav(r *http.Request) []navGroup {
 	entities := s.reg.Entities()
 	sort.Slice(entities, func(i, j int) bool { return entities[i].Name < entities[j].Name })
 
 	var catalogs, documents []navItem
 	for _, e := range entities {
+		if !s.can(r, string(e.Kind), e.Name, "read") {
+			continue
+		}
 		url := "/ui/" + strings.ToLower(string(e.Kind)) + "/" + e.Name
 		item := navItem{Label: e.DisplayName(), URL: url}
 		if e.Kind == metadata.KindCatalog {
@@ -389,6 +405,9 @@ func (s *Server) buildFlatNav() []navGroup {
 	sort.Slice(registers, func(i, j int) bool { return registers[i].Name < registers[j].Name })
 	var regItems []navItem
 	for _, reg := range registers {
+		if !s.can(r, "register", reg.Name, "read") {
+			continue
+		}
 		regItems = append(regItems, navItem{
 			Label: reg.Name + " (движения)",
 			URL:   "/ui/register/" + strings.ToLower(reg.Name),
@@ -414,6 +433,9 @@ func (s *Server) buildFlatNav() []navGroup {
 	sort.Slice(inforegs, func(i, j int) bool { return inforegs[i].Name < inforegs[j].Name })
 	var inforegItems []navItem
 	for _, ir := range inforegs {
+		if !s.can(r, "inforeg", ir.Name, "read") {
+			continue
+		}
 		label := ir.Name
 		if ir.Periodic {
 			label += " (периодический)"
@@ -431,6 +453,9 @@ func (s *Server) buildFlatNav() []navGroup {
 	sort.Slice(reps, func(i, j int) bool { return reps[i].Name < reps[j].Name })
 	var repItems []navItem
 	for _, rep := range reps {
+		if !s.can(r, "report", rep.Name, "run") {
+			continue
+		}
 		label := rep.Title
 		if label == "" {
 			label = rep.Name

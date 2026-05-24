@@ -532,10 +532,12 @@ const tplList = `
         <a class="btn btn-secondary btn-sm" href="?view=tree{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">📂 Дерево</a>
       {{end}}
       {{if .UpURL}}<a class="btn btn-secondary btn-sm" href="{{.UpURL}}">↑ Наверх</a>{{end}}
+      {{if .CanWrite}}
       <a class="btn btn-primary" href="/ui/{{lower (str .Entity.Kind)}}/{{lower .Entity.Name}}/new?{{if .ParentStr}}parent={{.ParentStr}}&{{end}}subsystem={{$.CurrentSubsystem}}">+ Элемент</a>
       <a class="btn btn-secondary" href="/ui/{{lower (str .Entity.Kind)}}/{{lower .Entity.Name}}/new?is_folder=true{{if .ParentStr}}&parent={{.ParentStr}}{{end}}">📁 Группа</a>
+      {{end}}
     {{else}}
-      <a class="btn btn-primary" href="/ui/{{lower (str .Entity.Kind)}}/{{lower .Entity.Name}}/new{{if $.CurrentSubsystem}}?subsystem={{$.CurrentSubsystem}}{{end}}">+ Создать</a>
+      {{if .CanWrite}}<a class="btn btn-primary" href="/ui/{{lower (str .Entity.Kind)}}/{{lower .Entity.Name}}/new{{if $.CurrentSubsystem}}?subsystem={{$.CurrentSubsystem}}{{end}}">+ Создать</a>{{end}}
     {{end}}
     <a class="btn btn-sm" href="/ui/{{lower (str .Entity.Kind)}}/{{lower .Entity.Name}}/excel{{filterQuery .Params}}" style="background:#16a34a;color:#fff" title="Скачать Excel">Excel ↓</a>
   </div>
@@ -705,6 +707,7 @@ const tplList = `
 </main>
 <script>
 var _isAdmin={{if .IsAdmin}}true{{else}}false{{end}};
+var _canDelete={{if .CanDelete}}true{{else}}false{{end}};
 var _listSel=null;
 function listRowClick(e,tr){
   if(e.target.closest('a,button'))return;
@@ -753,8 +756,10 @@ function listCtxMenu(e,tr){
   } else {
     items.push({label:'Открыть',fn:function(){window.location.href=tr.dataset.openUrl;}});
   }
-  if(!isPredefined)items.push({label:'Пометить на удаление',danger:true,fn:function(){listSubmit(tr.dataset.markUrl,'Пометить на удаление?');}});
-  else items.push({label:'Предопределённый — нельзя удалить',disabled:true});
+  if(_canDelete){
+    if(!isPredefined)items.push({label:'Пометить на удаление',danger:true,fn:function(){listSubmit(tr.dataset.markUrl,'Пометить на удаление?');}});
+    else items.push({label:'Предопределённый — нельзя удалить',disabled:true});
+  }
   if(_isAdmin&&!isPredefined)items.push({label:'Удалить навсегда',danger:true,fn:function(){listSubmit(tr.dataset.delUrl,'Удалить запись навсегда?');}});
   items.forEach(function(item){
     var mi=document.createElement('div');
@@ -779,7 +784,7 @@ function listSubmit(url,msg){
   if(confirm(msg)){var f=document.createElement('form');f.method='POST';f.action=url;document.body.appendChild(f);f.submit();}
 }
 document.addEventListener('keydown',function(e){
-  if(e.key==='Delete'&&_listSel)listSubmit(_listSel.dataset.markUrl,'Пометить на удаление?');
+  if(e.key==='Delete'&&_listSel&&_canDelete)listSubmit(_listSel.dataset.markUrl,'Пометить на удаление?');
 });
 </script>
 </div></body></html>
@@ -807,15 +812,15 @@ const tplForm = `
       {{end}}
     {{end}}
   {{end}}
-  <button class="btn btn-secondary" type="submit" name="_action" value="" form="main-form">Записать</button>
+  {{if .CanWrite}}<button class="btn btn-secondary" type="submit" name="_action" value="" form="main-form">Записать</button>{{end}}
   {{if .Entity.Posting}}
-    <button class="btn btn-post" type="submit" name="_action" value="post_and_close" form="main-form">Провести и закрыть</button>
+    {{if $.CanPost}}<button class="btn btn-post" type="submit" name="_action" value="post_and_close" form="main-form">Провести и закрыть</button>{{end}}
     {{if not .IsNew}}
       {{if eq (index .Values "posted") "true"}}
-        <button class="btn btn-primary btn-sm" type="submit" name="_action" value="post" form="main-form">Перепровести</button>
-        <button class="btn btn-sm" style="background:#e2e8f0;color:#374151" form="form-unpost" type="submit">Отменить проведение</button>
+        {{if $.CanPost}}<button class="btn btn-primary btn-sm" type="submit" name="_action" value="post" form="main-form">Перепровести</button>{{end}}
+        {{if $.CanUnpost}}<button class="btn btn-sm" style="background:#e2e8f0;color:#374151" form="form-unpost" type="submit">Отменить проведение</button>{{end}}
       {{else}}
-        <button class="btn btn-primary" type="submit" name="_action" value="post" form="main-form">Провести</button>
+        {{if $.CanPost}}<button class="btn btn-primary" type="submit" name="_action" value="post" form="main-form">Провести</button>{{end}}
       {{end}}
     {{end}}
   {{end}}
@@ -840,10 +845,12 @@ const tplForm = `
       </div>
     </div>
     {{end}}
+    {{if .CanDelete}}
     <form method="POST" action="/ui/{{lower (str .Entity.Kind)}}/{{.Entity.Name}}/{{.ID}}/delete"
           onsubmit="return confirm('{{if .IsAdmin}}Удалить запись навсегда?{{else}}Пометить запись на удаление?{{end}}')" style="margin-left:auto">
       <button class="btn btn-danger btn-sm" type="submit">{{if .IsAdmin}}Удалить{{else}}Пометить на удаление{{end}}</button>
     </form>
+    {{end}}
   {{end}}
 </div>
 
@@ -969,7 +976,7 @@ const tplForm = `
 {{end}}
 
 <div style="margin-top:16px">
-  <button class="btn btn-secondary" type="submit" name="_action" value="" form="main-form">Записать</button>
+  {{if .CanWrite}}<button class="btn btn-secondary" type="submit" name="_action" value="" form="main-form">Записать</button>{{end}}
   <a href="/ui/{{lower (str .Entity.Kind)}}/{{lower .Entity.Name}}" class="btn btn-cancel">Отмена</a>
 </div>
 </form>
@@ -1427,7 +1434,7 @@ const tplInfoReg = `
 <main>
 <div class="row-top">
   <h2>{{.InfoReg.Name}}{{if .InfoReg.Periodic}} <span style="font-size:13px;color:#64748b;font-weight:400">(периодический)</span>{{end}}</h2>
-  <a class="btn" href="/ui/inforeg/{{lower .InfoReg.Name}}/new">+ Добавить запись</a>
+  {{if .CanWrite}}<a class="btn" href="/ui/inforeg/{{lower .InfoReg.Name}}/new">+ Добавить запись</a>{{end}}
 </div>
 <div class="card">
 {{if .Rows}}
@@ -1435,20 +1442,20 @@ const tplInfoReg = `
   {{if .InfoReg.Periodic}}<th>Период</th>{{end}}
   {{range .InfoReg.Dimensions}}<th>{{.Name}}</th>{{end}}
   {{range .InfoReg.Resources}}<th>{{.Name}}</th>{{end}}
-  <th></th>
+  {{if .CanDelete}}<th></th>{{end}}
 </tr></thead><tbody>
 {{range .Rows}}{{$row := .}}<tr>
   {{if $.InfoReg.Periodic}}<td>{{index $row "period"}}</td>{{end}}
   {{range $.InfoReg.Dimensions}}<td>{{index $row .Name}}</td>{{end}}
   {{range $.InfoReg.Resources}}<td style="font-weight:600">{{index $row .Name}}</td>{{end}}
-  <td>
+  {{if $.CanDelete}}<td>
     <form method="POST" action="/ui/inforeg/{{lower $.InfoReg.Name}}/delete" style="display:inline"
           onsubmit="return confirm('Удалить запись?')">
       {{if $.InfoReg.Periodic}}<input type="hidden" name="period" value="{{index $row "period"}}">{{end}}
       {{range $.InfoReg.Dimensions}}<input type="hidden" name="{{.Name}}" value="{{index $row .Name}}">{{end}}
       <button class="btn btn-danger btn-sm" type="submit">×</button>
     </form>
-  </td>
+  </td>{{end}}
 </tr>{{end}}
 </tbody></table>
 {{else}}<p class="empty">Записей нет</p>{{end}}

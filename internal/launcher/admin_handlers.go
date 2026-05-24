@@ -74,8 +74,9 @@ func (h *handler) cfgAdminUsers(w http.ResponseWriter, r *http.Request) {
 			listTitle = "Убрать из списка выбора"
 			listStyle = "background:#2563eb;color:#fff"
 		}
-		html += fmt.Sprintf(`<tr%s><td style="padding:5px 8px">%s</td><td style="padding:5px 8px">%s</td><td style="padding:5px 8px;text-align:center">%s</td><td style="padding:5px 8px;color:#888">%s</td><td style="padding:5px 8px;white-space:nowrap"><button onclick="cfgUserPasswd('%s')" style="background:#f59e0b;color:#fff;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-right:4px">Пароль</button><button onclick="cfgUserDenyPasswd('%s',%v)" title="%s" style="%s;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-right:4px">%s</button><button onclick="cfgUserShowInList('%s',%v)" title="%s" style="%s;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-right:4px">%s</button><button onclick="cfgUserDel('%s')" style="color:#c00;background:none;border:none;cursor:pointer;font-size:11px" title="Удалить">✕</button></td></tr>`,
+		html += fmt.Sprintf(`<tr%s><td style="padding:5px 8px">%s</td><td style="padding:5px 8px">%s</td><td style="padding:5px 8px;text-align:center">%s</td><td style="padding:5px 8px;color:#888">%s</td><td style="padding:5px 8px;white-space:nowrap"><button onclick="cfgUserRoles('%s')" style="background:#0e7490;color:#fff;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-right:4px">Роли</button><button onclick="cfgUserPasswd('%s')" style="background:#f59e0b;color:#fff;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-right:4px">Пароль</button><button onclick="cfgUserDenyPasswd('%s',%v)" title="%s" style="%s;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-right:4px">%s</button><button onclick="cfgUserShowInList('%s',%v)" title="%s" style="%s;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-right:4px">%s</button><button onclick="cfgUserDel('%s')" style="color:#c00;background:none;border:none;cursor:pointer;font-size:11px" title="Удалить">✕</button></td></tr>`,
 			bg, escHTML(u.Login), escHTML(u.FullName), admin, u.CreatedAt.Format("02.01.2006"),
+			u.ID,
 			u.ID,
 			u.ID, u.DenyPasswdChange, denyTitle, denyStyle, denyIcon,
 			u.ID, u.ShowInList, listTitle, listStyle, listIcon,
@@ -87,6 +88,7 @@ func (h *handler) cfgAdminUsers(w http.ResponseWriter, r *http.Request) {
 	html += `</table></div>
 <script>
 function cfgUserNew(){document.getElementById('cfg-user-new').style.display='block';document.getElementById('cfg-un').focus()}
+function cfgUserRoles(id){cfgAdmin('users/roles?uid='+encodeURIComponent(id))}
 function cfgUserCreate(){
   var d={login:document.getElementById('cfg-un').value,password:document.getElementById('cfg-up').value,fullName:document.getElementById('cfg-ufn').value,isAdmin:document.getElementById('cfg-ua').checked};
   fetch('/bases/` + b.ID + `/configurator/admin/users/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)})
