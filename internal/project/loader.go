@@ -437,13 +437,40 @@ func (p *Project) loadDSL() error {
 func (p *Project) loadFormModules() error {
 	srcDir := filepath.Join(p.Dir, "src")
 	formLoader := loader.NewFormLoader()
+	managedLoader := loader.NewManagedFormLoader()
 
 	for _, ent := range p.Entities {
-		forms, err := formLoader.LoadEntityForms(srcDir, ent.Name)
+		// 1. Управляемые формы (план 37): <projectRoot>/forms/<entity>/*.form.yaml.
+		//    Если папки нет — managed остаётся nil, ничего не помечается managed.
+		managed, err := managedLoader.LoadEntityForms(p.Dir, ent.Name)
+		if err != nil {
+			return fmt.Errorf("load managed forms for %s: %w", ent.Name, err)
+		}
+
+		// 2. Авто-формы (legacy): src/<entity>*.form.os.
+		legacy, err := formLoader.LoadEntityForms(srcDir, ent.Name)
 		if err != nil {
 			return fmt.Errorf("load form modules for %s: %w", ent.Name, err)
 		}
-		ent.Forms = forms
+
+		// 3. Мерж: managed приоритетны. Legacy-формы с тем же Name отбрасываются,
+		//    остальные добавляются в конец и помечаются autogen.
+		taken := make(map[string]struct{}, len(managed))
+		for _, f := range managed {
+			taken[f.Name] = struct{}{}
+		}
+		merged := append([]*metadata.FormModule(nil), managed...)
+		for _, f := range legacy {
+			if _, dup := taken[f.Name]; dup {
+				continue
+			}
+			if f.LayoutKind == "" {
+				f.LayoutKind = metadata.FormLayoutAutogen
+			}
+			merged = append(merged, f)
+		}
+
+		ent.Forms = merged
 	}
 	return nil
 }

@@ -1,7 +1,9 @@
 package metadata
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 )
 
 // FormEventType represents types of form events (1C-style)
@@ -26,76 +28,197 @@ const (
 	// возможность их объявлять. UI пока умеет дергать ExecuteElementEvent
 	// generic-маршрутом — кастомные триггеры (auto-fill цены при добавлении
 	// строки и т.п.) реализуются в конфиге пользователя.
-	FormEventOnRowAdded    FormEventType = "ПриДобавленииСтроки" // OnRowAdded
-	FormEventOnRowChanged  FormEventType = "ПриИзмененииСтроки"  // OnRowChanged
-	FormEventOnRowDeleted  FormEventType = "ПриУдаленииСтроки"   // OnRowDeleted
-	FormEventOnRowActivated FormEventType = "ПриАктивизацииСтроки" // OnRowActivated
+	FormEventOnRowAdded     FormEventType = "ПриДобавленииСтроки"   // OnRowAdded
+	FormEventOnRowChanged   FormEventType = "ПриИзмененииСтроки"    // OnRowChanged
+	FormEventOnRowDeleted   FormEventType = "ПриУдаленииСтроки"     // OnRowDeleted
+	FormEventOnRowActivated FormEventType = "ПриАктивизацииСтроки"  // OnRowActivated
+	// События, добавленные для управляемых форм (план 37). Используются
+	// конвертером 1С и редактором; интерпретатор вызывает их по той же
+	// generic-схеме что и существующие row-события.
+	FormEventOnClick           FormEventType = "Нажатие"                // OnClick
+	FormEventBeforeRowAdd      FormEventType = "ПередДобавлениемСтроки" // BeforeAddRow
+	FormEventAfterRowAdd       FormEventType = "ПослеДобавленияСтроки"  // AfterAddRow
+	FormEventBeforeRowDelete   FormEventType = "ПередУдалениемСтроки"   // BeforeDeleteRow
+	FormEventStartListChoice   FormEventType = "НачалоВыбораИзСписка"   // StartListChoice
+	FormEventAutoComplete      FormEventType = "АвтоПодбор"             // AutoComplete
+	FormEventExecuteCommand    FormEventType = "ВыполнитьКоманду"       // Command
 )
 
 // FormElementType represents types of form elements
 type FormElementType string
 
 const (
-	FormElementField          FormElementType = "ПолеВвода"        // InputField
-	FormElementLabel          FormElementType = "Надпись"          // Label
-	FormElementButton         FormElementType = "Кнопка"           // Button
-	FormElementTable          FormElementType = "Таблица"          // Table
-	FormElementGroupBox       FormElementType = "ГруппаФормы"      // FormGroup
-	FormElementPage           FormElementType = "Страница"         // Page
-	FormElementPages          FormElementType = "СтраницыФормы"    // FormPages
-	FormElementCheckbox       FormElementType = "Флажок"           // Checkbox
-	FormElementSwitch         FormElementType = "Переключатель"    // Switch
-	FormElementInputList      FormElementType = "ПолеСписка"       // InputList
-	FormElementDatePicker     FormElementType = "ПолеДаты"         // DateField
-	FormElementFormField      FormElementType = "ПолеФормы"        // FormField
-	FormElementTablePart      FormElementType = "ТабличнаяЧасть"   // TablePart
+	FormElementField      FormElementType = "ПолеВвода"      // InputField
+	FormElementLabel      FormElementType = "Надпись"        // Label
+	FormElementButton     FormElementType = "Кнопка"         // Button
+	FormElementTable      FormElementType = "Таблица"        // Table
+	FormElementGroupBox   FormElementType = "ГруппаФормы"    // FormGroup
+	FormElementPage       FormElementType = "Страница"       // Page
+	FormElementPages      FormElementType = "СтраницыФормы"  // FormPages
+	FormElementCheckbox   FormElementType = "Флажок"         // Checkbox
+	FormElementSwitch     FormElementType = "Переключатель"  // Switch
+	FormElementInputList  FormElementType = "ПолеСписка"     // InputList
+	FormElementDatePicker FormElementType = "ПолеДаты"       // DateField
+	FormElementFormField  FormElementType = "ПолеФормы"      // FormField
+	FormElementTablePart  FormElementType = "ТабличнаяЧасть" // TablePart
+	// Управляемые формы (план 37): дополнения для покрытия XML 1С и UI-редактора.
+	FormElementColumn           FormElementType = "Колонка"          // Column (Table inner)
+	FormElementCommandBar       FormElementType = "КоманднаяПанель"  // CommandBar
+	FormElementPicture          FormElementType = "ПолеКартинки"     // PictureField
+	FormElementCommandBarButton FormElementType = "КнопкаКП"         // CommandBar Button
+)
+
+// Layout kinds of a form module. Пустая строка трактуется как "autogen"
+// ради backward-compat — все ранее загруженные .form.os формы остаются
+// в авто-генерируемом представлении.
+const (
+	FormLayoutAutogen = "autogen"
+	FormLayoutManaged = "managed"
 )
 
 // FormElement represents a single form element (field, button, etc.)
 type FormElement struct {
-	ID          string                    // unique identifier
-	Name        string                    // element name for DSL access
-	Kind        FormElementType           // element type
-	Title       string                    // display title
-	FieldName   string                    // bound field name (for fields)
-	TablePart   string                    // table part name (for table parts)
-	Visible     bool                      // is visible
-	Enabled     bool                      // is enabled
-	Required    bool                      // is required
-	Handlers    map[FormEventType]string  // event handlers (proc name)
-	Props       map[string]any            // additional properties
-	Children    []*FormElement            // child elements (for groups)
+	ID        string                   `yaml:"id,omitempty"`
+	Name      string                   `yaml:"name,omitempty"`
+	Kind      FormElementType          `yaml:"kind,omitempty"`
+	Title     string                   `yaml:"title,omitempty"`
+	FieldName string                   `yaml:"field,omitempty"`
+	TablePart string                   `yaml:"table_part,omitempty"`
+	Visible   bool                     `yaml:"visible,omitempty"`
+	Enabled   bool                     `yaml:"enabled,omitempty"`
+	Required  bool                     `yaml:"required,omitempty"`
+	Handlers  map[FormEventType]string `yaml:"events,omitempty"`
+	Props     map[string]any           `yaml:"props,omitempty"`
+	Children  []*FormElement           `yaml:"children,omitempty"`
+
+	// Поля, добавленные планом 37. Все опциональны; YAML-загрузчик
+	// заполняет их при чтении managed-формы, конвертер 1С использует
+	// для round-trip, рендерер — для отрисовки HTML.
+	OriginalID      string            `yaml:"original_id,omitempty"`       // id из Form.xml для round-trip
+	TitleMap        map[string]string `yaml:"title_map,omitempty"`         // локализованный заголовок (ru, en, ...)
+	DataPath        string            `yaml:"data_path,omitempty"`         // "Объект.Контрагент", "Список.Цена"
+	Picture         string            `yaml:"picture,omitempty"`           // "_resources/.../Picture.png" или "stdpic:Post"
+	ValuesPicture   string            `yaml:"values_picture,omitempty"`    // палитра выбора (для PictureField/InputField)
+	Width           int               `yaml:"width,omitempty"`             // ширина в условных единицах
+	Height          int               `yaml:"height,omitempty"`            // высота
+	HorizontalAlign string            `yaml:"halign,omitempty"`            // left|center|right|stretch
+	VerticalAlign   string            `yaml:"valign,omitempty"`            // top|center|bottom
+	ReadOnly        bool              `yaml:"readonly,omitempty"`          // только чтение
+	Hint            string            `yaml:"hint,omitempty"`              // всплывающая подсказка
+	Mask            string            `yaml:"mask,omitempty"`              // маска ввода
+	Choice          bool              `yaml:"choice,omitempty"`            // включена кнопка выбора у InputField
+	UnknownXML      []byte            `yaml:"unknown_xml,omitempty"`       // экзотический XML, сохраняется как есть
 }
 
 // FormModule represents a form module with event handlers
 type FormModule struct {
-	EntityName  string                    // parent entity name
-	Name        string                    // form name (e.g. "ФормаОбъекта", "ФормаСписка")
-	Kind        string                    // form kind: "object", "list"
-	Elements    []*FormElement            // form elements structure
-	Handlers    map[FormEventType]string  // form-level event handlers
-	Procedures  map[string]*FormProcedure // procedures defined in form module
+	EntityName string                    `yaml:"entity,omitempty"`
+	Name       string                    `yaml:"name,omitempty"`
+	Kind       string                    `yaml:"kind,omitempty"` // "object", "list", "choice", "folder", "custom"
+	Elements   []*FormElement            `yaml:"elements,omitempty"`
+	Handlers   map[FormEventType]string  `yaml:"events,omitempty"`
+	Procedures map[string]*FormProcedure `yaml:"-"`
+
+	// Поля, добавленные планом 37 для управляемых форм.
+	LayoutKind             string           `yaml:"layout_kind,omitempty"`              // "managed"|"autogen" (пусто=autogen)
+	Title                  map[string]string `yaml:"title,omitempty"`                   // локализованный заголовок формы
+	OriginalID             string           `yaml:"original_id,omitempty"`              // id корневого узла из 1С
+	Attributes             []*FormAttribute `yaml:"attributes,omitempty"`               // реквизиты формы
+	Commands               []*FormCommand   `yaml:"commands,omitempty"`                 // команды формы
+	AutoCommandBar         *FormCommandBar  `yaml:"auto_command_bar,omitempty"`         // авто-командная панель
+	AutoSaveDataInSettings bool             `yaml:"auto_save_data_in_settings,omitempty"`
+	VerticalScroll         string           `yaml:"vertical_scroll,omitempty"`          // auto|never|always
+	// OneCMeta — служебный блок, используемый только конвертером 1С,
+	// рантайм его игнорирует. Может содержать version, unknown_xml и т.п.
+	OneCMeta map[string]any `yaml:"oneC_meta,omitempty"`
+
+	// idCounter — приватный счётчик для GenerateID. Стартует с 10000,
+	// чтобы новые id из редактора не пересекались с диапазоном 1С.
+	idCounter int        `yaml:"-"`
+	idMu      sync.Mutex `yaml:"-"`
 }
 
 // FormProcedure represents a procedure in form module
 type FormProcedure struct {
-	Name       string              // procedure name
-	Params     []FormProcParam     // parameters
-	Body       string              // procedure body (DSL source)
-	IsExport   bool                // is exported
+	Name     string          `yaml:"name,omitempty"`
+	Params   []FormProcParam `yaml:"params,omitempty"`
+	Body     string          `yaml:"body,omitempty"`
+	IsExport bool            `yaml:"export,omitempty"`
 }
 
 // FormProcParam represents a procedure parameter
 type FormProcParam struct {
-	Name string // parameter name
-	Type string // parameter type
+	Name string `yaml:"name,omitempty"`
+	Type string `yaml:"type,omitempty"`
+}
+
+// FormAttribute — реквизит формы (живёт только в форме, отдельно от полей сущности).
+// При импорте из 1С строится из Form.xml/Attributes.
+type FormAttribute struct {
+	ID            string                 `yaml:"id,omitempty"`            // ID из IR, опционально
+	OriginalID    string                 `yaml:"original_id,omitempty"`   // id из 1С
+	Name          string                 `yaml:"name"`
+	Title         map[string]string      `yaml:"title,omitempty"`
+	TypeRef       string                 `yaml:"type"`                    // "string(40)", "decimal(15,2)", "CatalogRef.Контрагенты", "ValueTable"
+	Length        int                    `yaml:"length,omitempty"`
+	Precision     int                    `yaml:"precision,omitempty"`
+	AllowedLength string                 `yaml:"allowed_length,omitempty"` // "Variable"|"Fixed"
+	Save          bool                   `yaml:"save,omitempty"`
+	FillingValue  string                 `yaml:"filling_value,omitempty"`
+	MainAttribute bool                   `yaml:"main,omitempty"`          // соответствует <MainAttribute>true</MainAttribute>
+	Columns       []*FormAttributeColumn `yaml:"columns,omitempty"`       // для ValueTable
+	Props         map[string]any         `yaml:"props,omitempty"`
+}
+
+// FormAttributeColumn — колонка реквизита-таблицы (ValueTable).
+type FormAttributeColumn struct {
+	ID         string            `yaml:"id,omitempty"`
+	OriginalID string            `yaml:"original_id,omitempty"`
+	Name       string            `yaml:"name"`
+	Title      map[string]string `yaml:"title,omitempty"`
+	TypeRef    string            `yaml:"type"`
+	Length     int               `yaml:"length,omitempty"`
+	Precision  int               `yaml:"precision,omitempty"`
+	Props      map[string]any    `yaml:"props,omitempty"`
+}
+
+// FormCommand — команда формы (соответствует <Commands>/<Command> из 1С).
+type FormCommand struct {
+	ID         string            `yaml:"id,omitempty"`
+	OriginalID string            `yaml:"original_id,omitempty"`
+	Name       string            `yaml:"name"`
+	Title      map[string]string `yaml:"title,omitempty"`
+	Group      string            `yaml:"group,omitempty"`   // form_command_bar|...
+	Picture    string            `yaml:"picture,omitempty"` // "_resources/..." или "stdpic:Post"
+	Action     string            `yaml:"action,omitempty"`  // имя процедуры-обработчика
+	Props      map[string]any    `yaml:"props,omitempty"`
+}
+
+// FormCommandBar — описание авто-командной панели формы.
+type FormCommandBar struct {
+	ID         string                  `yaml:"id,omitempty"`
+	OriginalID string                  `yaml:"original_id,omitempty"`
+	Name       string                  `yaml:"name,omitempty"`
+	Visible    bool                    `yaml:"visible,omitempty"`
+	Buttons    []*FormCommandBarButton `yaml:"buttons,omitempty"`
+}
+
+// FormCommandBarButton — кнопка в командной панели.
+type FormCommandBarButton struct {
+	ID             string            `yaml:"id,omitempty"`
+	OriginalID     string            `yaml:"original_id,omitempty"`
+	Name           string            `yaml:"name"`
+	Title          map[string]string `yaml:"title,omitempty"`
+	CommandName    string            `yaml:"command,omitempty"`        // ссылка на FormCommand.Name
+	Representation string            `yaml:"representation,omitempty"` // PictureAndText|Picture|Text
+	Picture        string            `yaml:"picture,omitempty"`
 }
 
 // EventHandlerInfo contains information about event handler
 type EventHandlerInfo struct {
-	ElementName  string           // element name (empty for form-level events)
-	EventType    FormEventType    // event type
-	ProcName     string           // procedure name to call
+	ElementName string        // element name (empty for form-level events)
+	EventType   FormEventType // event type
+	ProcName    string        // procedure name to call
 }
 
 // GetEventHandler returns handler for element event
@@ -165,10 +288,10 @@ func findElementByName(el *FormElement, name string) *FormElement {
 // StandardFormNames returns standard form names for 1C compatibility
 func StandardFormNames() []string {
 	return []string{
-		"ФормаОбъекта",   // ObjectForm
-		"ФормаСписка",    // ListForm
-		"ФормаВыбора",    // ChoiceForm
-		"ФормаГруппы",    // FolderForm (for hierarchical catalogs)
+		"ФормаОбъекта", // ObjectForm
+		"ФормаСписка",  // ListForm
+		"ФормаВыбора",  // ChoiceForm
+		"ФормаГруппы",  // FolderForm (for hierarchical catalogs)
 	}
 }
 
@@ -194,4 +317,92 @@ func FormModuleFileName(entityName, formName string) string {
 // ObjectFormFileName returns .os filename for object form
 func ObjectFormFileName(entityName string) string {
 	return strings.ToLower(entityName) + ".form.os"
+}
+
+// IsManaged возвращает true для управляемой формы (LayoutKind=managed).
+// Пустой LayoutKind трактуется как autogen — backward-compat для существующих
+// форм, загружаемых из src/*.form.os.
+func (fm *FormModule) IsManaged() bool {
+	return fm != nil && fm.LayoutKind == FormLayoutManaged
+}
+
+// GenerateID выдаёт стабильный id для новых элементов формы.
+// Счётчик стартует с 10000 чтобы не пересекаться с диапазоном id 1С (обычно <10000).
+func (fm *FormModule) GenerateID() string {
+	fm.idMu.Lock()
+	defer fm.idMu.Unlock()
+	if fm.idCounter < 10000 {
+		fm.idCounter = 10000
+	}
+	fm.idCounter++
+	return fmt.Sprintf("fm-%d", fm.idCounter)
+}
+
+// FindByID находит элемент в дереве по идентификатору (ID или OriginalID).
+func (fm *FormModule) FindByID(id string) *FormElement {
+	if fm == nil || id == "" {
+		return nil
+	}
+	for _, el := range fm.Elements {
+		if found := findElementByID(el, id); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func findElementByID(el *FormElement, id string) *FormElement {
+	if el == nil {
+		return nil
+	}
+	if el.ID == id || el.OriginalID == id {
+		return el
+	}
+	for _, child := range el.Children {
+		if found := findElementByID(child, id); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+// Walk вызывает fn для каждого элемента дерева в порядке pre-order.
+// Если fn возвращает false, обход поддерева прерывается.
+func (fm *FormModule) Walk(fn func(*FormElement) bool) {
+	if fm == nil || fn == nil {
+		return
+	}
+	for _, el := range fm.Elements {
+		walkElement(el, fn)
+	}
+}
+
+func walkElement(el *FormElement, fn func(*FormElement) bool) {
+	if el == nil {
+		return
+	}
+	if !fn(el) {
+		return
+	}
+	for _, child := range el.Children {
+		walkElement(child, fn)
+	}
+}
+
+// IsContainer возвращает true для элементов, способных содержать дочерние.
+// Используется UI-редактором и рендерером для рекурсивной отрисовки.
+func (el *FormElement) IsContainer() bool {
+	if el == nil {
+		return false
+	}
+	switch el.Kind {
+	case FormElementGroupBox,
+		FormElementPage,
+		FormElementPages,
+		FormElementTable,
+		FormElementTablePart,
+		FormElementCommandBar:
+		return true
+	}
+	return false
 }
