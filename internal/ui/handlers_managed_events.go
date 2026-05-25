@@ -138,7 +138,7 @@ func (s *Server) handleManagedFormEvent(w http.ResponseWriter, r *http.Request) 
 		enc.Encode(formEventResponse{
 			OK:         false,
 			Values:     serializeFields(obj.Fields),
-			TableParts: obj.TablePartRows,
+			TableParts: serializeTablePartRows(obj.TablePartRows),
 			Messages:   msgs,
 			Error:      runErr.Error(),
 		})
@@ -148,9 +148,33 @@ func (s *Server) handleManagedFormEvent(w http.ResponseWriter, r *http.Request) 
 	enc.Encode(formEventResponse{
 		OK:         true,
 		Values:     serializeFields(obj.Fields),
-		TableParts: obj.TablePartRows,
+		TableParts: serializeTablePartRows(obj.TablePartRows),
 		Messages:   msgs,
 	})
+}
+
+// serializeTablePartRows прогоняет каждое значение каждой строки через
+// serializeValue. Без этого Ref-объекты после enrichTPRowsWithRefs
+// сериализуются как {Name:…, UUID:…} → JS-applyTableParts получает объект
+// без GetRefUUID-метода, не может сопоставить с option.value и select
+// показывает «— выбрать —» вместо реального товара.
+func serializeTablePartRows(tps map[string][]map[string]any) map[string][]map[string]any {
+	if tps == nil {
+		return nil
+	}
+	out := make(map[string][]map[string]any, len(tps))
+	for tpName, rows := range tps {
+		outRows := make([]map[string]any, len(rows))
+		for i, row := range rows {
+			outRow := make(map[string]any, len(row))
+			for fk, fv := range row {
+				outRow[fk] = serializeValue(fv)
+			}
+			outRows[i] = outRow
+		}
+		out[tpName] = outRows
+	}
+	return out
 }
 
 // resolveHandlerProc возвращает имя процедуры-обработчика по уровню события.

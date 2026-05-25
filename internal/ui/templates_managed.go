@@ -118,44 +118,43 @@ const tplManagedForm = `
   {{$tpRef := index $ctx.TPRefOptions $tpName}}
   <h3 style="margin:18px 0 8px;font-size:14px">{{fieldTitleRU $el.TitleMap $tpName}}</h3>
   {{if $tpMeta}}
-  <table class="mtp" data-tp="{{$tpName}}" style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden">
+  <table class="tp-table" data-tp="{{$tpName}}">
     <thead>
-      <tr style="background:#f8fafc">
-        {{range $tpMeta.Fields}}<th style="padding:6px 10px;text-align:left;font-weight:600;color:#475569;font-size:12px;border-bottom:1px solid #e2e8f0">{{.Name}}</th>{{end}}
-        <th style="width:32px;border-bottom:1px solid #e2e8f0"></th>
+      <tr>
+        {{range $tpMeta.Fields}}<th>{{.Name}}</th>{{end}}
+        <th style="width:40px"></th>
       </tr>
     </thead>
     <tbody id="tp-body-{{$tpName}}" data-tp-fields="{{range $i, $f := $tpMeta.Fields}}{{if $i}},{{end}}{{$f.Name}}|{{$f.Type}}{{if $f.RefEntity}}:{{$f.RefEntity}}{{end}}{{end}}">
     {{range $i, $row := $tpRows}}
       <tr>
         {{range $f := $tpMeta.Fields}}
-        <td style="padding:4px 8px;border-bottom:1px solid #f1f5f9">
+        <td>
           {{$v := index $row $f.Name}}
           {{if isRef (str $f.Type)}}
             <div style="display:flex;gap:4px;align-items:center">
-              <select name="tp.{{$tpName}}.{{$i}}.{{$f.Name}}" style="flex:1;padding:4px 6px;border:1px solid #e2e8f0;border-radius:4px;font-size:12px">
+              <select name="tp.{{$tpName}}.{{$i}}.{{$f.Name}}" style="flex:1">
                 <option value="">— выбрать —</option>
                 {{range index $tpRef $f.Name}}
                 <option value="{{index . "id"}}" {{if eq (str (index . "id")) (refID $v)}}selected{{end}}>{{index . "_label"}}</option>
                 {{end}}
               </select>
-              <button type="button" onclick="openRefCreate(this.parentElement.querySelector('select'), '{{$f.RefEntity}}')" style="padding:2px 6px;border:1px solid #e2e8f0;border-radius:4px;background:#f8fafc;cursor:pointer;font-size:11px;flex-shrink:0;font-weight:600;color:#16a34a" title="Создать новый">+</button>
+              <button type="button" onclick="openRefPicker(this.parentElement.querySelector('select'))" style="padding:4px 8px;border:1px solid #e2e8f0;border-radius:5px;background:#f8fafc;cursor:pointer;font-size:12px;flex-shrink:0" title="Выбрать из списка">...</button>
+              <button type="button" onclick="openRefCreate(this.parentElement.querySelector('select'), '{{$f.RefEntity}}')" style="padding:4px 7px;border:1px solid #e2e8f0;border-radius:5px;background:#f8fafc;cursor:pointer;font-size:12px;flex-shrink:0;font-weight:600;color:#16a34a" title="Создать новый">+</button>
             </div>
           {{else if eq (str $f.Type) "number"}}
-            <input type="number" step="any" name="tp.{{$tpName}}.{{$i}}.{{$f.Name}}" value="{{$v}}" style="width:100%;padding:4px 6px;border:1px solid #e2e8f0;border-radius:4px;font-size:12px">
+            <input type="number" step="any" name="tp.{{$tpName}}.{{$i}}.{{$f.Name}}" value="{{$v}}" data-tp-num="{{$f.Name}}" oninput="recalcTpRow(this)">
           {{else}}
-            <input type="text" name="tp.{{$tpName}}.{{$i}}.{{$f.Name}}" value="{{$v}}" style="width:100%;padding:4px 6px;border:1px solid #e2e8f0;border-radius:4px;font-size:12px">
+            <input type="text" name="tp.{{$tpName}}.{{$i}}.{{$f.Name}}" value="{{$v}}" oninput="recalcTpRow(this)">
           {{end}}
         </td>
         {{end}}
-        <td style="padding:4px 6px;text-align:center;border-bottom:1px solid #f1f5f9">
-          <button type="button" onclick="this.closest('tr').remove()" style="border:none;background:none;color:#dc2626;font-size:16px;cursor:pointer;line-height:1">×</button>
-        </td>
+        <td><button type="button" class="del-btn" onclick="this.closest('tr').remove()">×</button></td>
       </tr>
     {{end}}
     </tbody>
   </table>
-  <button type="button" class="btn btn-sm" style="background:#e2e8f0;color:#475569;margin:6px 0 12px;padding:6px 12px;border:none;border-radius:5px;cursor:pointer;font-size:12px"
+  <button type="button" class="btn btn-sm" style="background:#e2e8f0;color:#475569;margin:0 0 12px"
     onclick="addTpRow('{{$tpName}}', [{{range $tpMeta.Fields}}'{{.Name}}',{{end}}], [{{range $tpMeta.Fields}}{{if eq (str .Type) "number"}}'{{.Name}}',{{end}}{{end}}], document.getElementById('tp-body-{{$tpName}}').rows.length)">
     + Добавить строку
   </button>
@@ -321,16 +320,16 @@ window._tpRefOpts = {{jsJSON .TPRefOptions}};
         const tr = document.createElement('tr');
         fieldsMeta.forEach(function(f){
           const td = document.createElement('td');
-          td.style.cssText = 'padding:4px 8px;border-bottom:1px solid #f1f5f9';
           const v = row[f.name];
           const isRef = f.type === 'reference' || f.type.indexOf('reference') === 0;
           if (isRef && refOpts[f.name]) {
             const sel = document.createElement('select');
             sel.name = 'tp.' + tpName + '.' + idx + '.' + f.name;
-            sel.style.cssText = 'width:100%;padding:4px 6px;border:1px solid #e2e8f0;border-radius:4px;font-size:12px';
             const empty = document.createElement('option');
             empty.value = ''; empty.textContent = '— выбрать —';
             sel.appendChild(empty);
+            // v приходит сериализованным как UUID-string (serializeTablePartRows),
+            // но на всякий случай учитываем и legacy-формат с GetRefUUID-методом.
             const cur = (v && typeof v === 'object' && v.GetRefUUID) ? v.GetRefUUID() : (v == null ? '' : String(v));
             refOpts[f.name].forEach(function(opt){
               const o = document.createElement('option');
@@ -355,17 +354,15 @@ window._tpRefOpts = {{jsJSON .TPRefOptions}};
               inp.type = 'text';
               inp.value = (v == null ? '' : v);
             }
-            inp.style.cssText = 'width:100%;padding:4px 6px;border:1px solid #e2e8f0;border-radius:4px;font-size:12px';
             td.appendChild(inp);
           }
           tr.appendChild(td);
         });
         const tdDel = document.createElement('td');
-        tdDel.style.cssText = 'padding:4px 6px;text-align:center;border-bottom:1px solid #f1f5f9';
         const btn = document.createElement('button');
         btn.type = 'button';
+        btn.className = 'del-btn';
         btn.textContent = '×';
-        btn.style.cssText = 'border:none;background:none;color:#dc2626;font-size:16px;cursor:pointer;line-height:1';
         btn.onclick = function(){ tr.remove(); };
         tdDel.appendChild(btn);
         tr.appendChild(tdDel);
