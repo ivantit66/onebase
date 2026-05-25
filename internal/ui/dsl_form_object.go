@@ -46,7 +46,26 @@ func (f *formObjectThis) Get(name string) any {
 		}
 	}
 	// Дальше — обычные поля (через Object.Get который ищет в Fields).
-	return f.obj.Get(name)
+	v := f.obj.Get(name)
+	// Дефолты по типу: пустой numeric → 0, иначе `Объект.Сумма + 100` в DSL
+	// даст concat-строку «<nil>100» (DSL `+` для nil-операнда склеивает
+	// строкой), потом форма попытается записать её в PostgreSQL numeric →
+	// ERROR 22P02 invalid input syntax for type numeric.
+	if v == nil && f.entity != nil {
+		for _, fd := range f.entity.Fields {
+			if !strings.EqualFold(fd.Name, name) {
+				continue
+			}
+			switch fd.Type {
+			case metadata.FieldTypeNumber:
+				return float64(0)
+			case metadata.FieldTypeBool:
+				return false
+			}
+			break
+		}
+	}
+	return v
 }
 
 func (f *formObjectThis) Set(name string, v any) {

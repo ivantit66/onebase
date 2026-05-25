@@ -477,6 +477,15 @@ func (i *Interpreter) evalBinary(b *ast.BinaryExpr, e *env) any {
 		if lok && rok {
 			return lf + rf
 		}
+		// nil-toleration: пустое число + N → N, иначе `Объект.Сумма + 100`
+		// при пустом поле дало бы concat «<nil>100», который потом ломает
+		// запись в numeric (SQLSTATE 22P02).
+		if l == nil && rok {
+			return rf
+		}
+		if r == nil && lok {
+			return lf
+		}
 		return fmt.Sprintf("%v", l) + fmt.Sprintf("%v", r)
 	case token.MINUS:
 		// Дата - Дата → разница в секундах; Дата - Число → сдвиг назад.
@@ -493,17 +502,30 @@ func (i *Interpreter) evalBinary(b *ast.BinaryExpr, e *env) any {
 		if lok && rok {
 			return lf - rf
 		}
+		if l == nil && rok {
+			return -rf
+		}
+		if r == nil && lok {
+			return lf
+		}
 	case token.STAR:
 		lf, lok := toFloat(l)
 		rf, rok := toFloat(r)
 		if lok && rok {
 			return lf * rf
 		}
+		// nil * число / число * nil → 0 (а не string concat).
+		if (l == nil && rok) || (r == nil && lok) {
+			return float64(0)
+		}
 	case token.SLASH:
 		lf, lok := toFloat(l)
 		rf, rok := toFloat(r)
 		if lok && rok && rf != 0 {
 			return lf / rf
+		}
+		if l == nil && rok && rf != 0 {
+			return float64(0)
 		}
 	}
 	return nil
