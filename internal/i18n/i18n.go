@@ -187,6 +187,26 @@ func langName(code string) string {
 		return "Français"
 	case "es":
 		return "Español"
+	case "ka":
+		return "ქართული"
+	case "hy":
+		return "Հայերեն"
+	case "kk":
+		return "Қазақша"
+	case "az":
+		return "Azərbaycan"
+	case "uz":
+		return "O'zbekcha"
+	case "uk":
+		return "Українська"
+	case "tr":
+		return "Türkçe"
+	case "ro":
+		return "Română"
+	case "pt":
+		return "Português"
+	case "zh":
+		return "中文"
 	default:
 		return code
 	}
