@@ -354,35 +354,33 @@ func TestRefField_FromHeader_GetObjectWorks(t *testing.T) {
 	outW.Set("ОснованиеВходящее", inRef)
 	outRef := outW.CallMethod("записать", nil).(*interpreter.Ref)
 
-	// Загружаем исходящее так, как это делает обработка проведения:
-	// шапка обогащается через enrichHeaderRefs — ОснованиеВходящее становится
-	// *Ref{UUID, Name, Manager}, и .ПолучитьОбъект() должно работать.
-	outID := uuid.MustParse(outRef.UUID)
-	row, err := db.GetByID(ctx, "ИсходящееПисьмо", outID, outbox)
-	if err != nil {
-		t.Fatal(err)
-	}
-	obj := &runtime.Object{
-		ID:     outID,
-		Type:   outbox.Name,
-		Kind:   outbox.Kind,
-		Fields: row,
-	}
-	s.enrichHeaderRefs(ctx, outbox, obj)
+	_ = outRef // outRef в этом тесте не нужен, важен сам факт записи
 
-	headerRef, ok := obj.Fields["ОснованиеВходящее"].(*interpreter.Ref)
+	// Полный путь как в DSL пользователя:
+	// Документы.ИсходящееПисьмо.НайтиПоНомеру("ИП-001").ПолучитьОбъект()
+	// — за кулисами это docProxy.LoadObject, который должен обогатить
+	// шапку: ОснованиеВходящее → *Ref{Manager}, а не голая строка UUID.
+	outFound := outDp.CallMethod("найтипономеру", []any{"ИП-001"}).(*interpreter.Ref)
+	outObj := outFound.CallMethod("получитьобъект", nil)
+	outDocW, ok := outObj.(*docWriter)
 	if !ok {
-		t.Fatalf("после обогащения ОснованиеВходящее = %T, ожидался *Ref", obj.Fields["ОснованиеВходящее"])
+		t.Fatalf("ПолучитьОбъект исходящего → %T, ожидался *docWriter", outObj)
+	}
+
+	headerRef, ok := outDocW.Get("ОснованиеВходящее").(*interpreter.Ref)
+	if !ok {
+		t.Fatalf("Док.ОснованиеВходящее = %T, ожидался *Ref (обогащение шапки не сработало)", outDocW.Get("ОснованиеВходящее"))
 	}
 	if headerRef.Manager == nil {
-		t.Fatal("после обогащения у ссылки шапки нет Manager — ПолучитьОбъект упадёт")
+		t.Fatal("у ссылки шапки нет Manager — ПолучитьОбъект упадёт")
 	}
 
-	// Тот самый сценарий из issue.
+	// Тот самый сценарий из issue:
+	// ИсходящийОбъект.ОснованиеВходящее.ПолучитьОбъект().Статус = "Исполнено"
 	loaded := headerRef.CallMethod("получитьобъект", nil)
 	w, ok := loaded.(*docWriter)
 	if !ok {
-		t.Fatalf("ПолучитьОбъект → %T, ожидался *docWriter", loaded)
+		t.Fatalf("ПолучитьОбъект ссылки шапки → %T, ожидался *docWriter", loaded)
 	}
 	w.Set("Статус", "Исполнено")
 	w.CallMethod("записать", nil)

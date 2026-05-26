@@ -157,17 +157,25 @@ func (p *docProxy) LoadObject(uuidStr string) (any, error) {
 		}
 		tpRows[tp.Name] = rows
 	}
+	obj := &runtime.Object{
+		ID:            id,
+		Type:          p.entity.Name,
+		Kind:          p.entity.Kind,
+		Fields:        fields,
+		TablePartRows: tpRows,
+	}
+	// Обогащаем UUID-строки в ссылочных полях шапки и ТЧ до *Ref{…,Manager},
+	// чтобы DSL мог писать Док.СсылочноеПоле.ПолучитьОбъект()/.Наименование.
+	// Без этого Док.Покупатель — голая строка UUID, у которой нет методов.
+	p.s.enrichHeaderRefs(p.ctx(), p.entity, obj)
+	for _, tp := range p.entity.TableParts {
+		p.s.enrichTPRowsWithRefs(p.ctx(), tp, tpRows[tp.Name])
+	}
 	return &docWriter{
 		s:      p.s,
 		ctxSrc: p.ctxSrc,
 		entity: p.entity,
-		obj: &runtime.Object{
-			ID:            id,
-			Type:          p.entity.Name,
-			Kind:          p.entity.Kind,
-			Fields:        fields,
-			TablePartRows: tpRows,
-		},
+		obj:    obj,
 	}, nil
 }
 
