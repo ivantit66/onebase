@@ -147,6 +147,8 @@ func (s *Server) ListenAndServe() error {
 		r.Post("/bases/{id}/configurator/admin/sessions/kick", s.h.cfgAdminSessionKick)
 		r.Get("/bases/{id}/configurator/admin/audit", s.h.cfgAdminAudit)
 		r.Post("/bases/{id}/configurator/admin/audit/save", s.h.cfgAdminAuditSave)
+		r.Get("/bases/{id}/configurator/admin/settings", s.h.cfgAdminSettings)
+		r.Post("/bases/{id}/configurator/admin/settings/save", s.h.cfgAdminSettingsSave)
 		r.Get("/bases/{id}/configurator/admin/about", s.h.cfgAdminAbout)
 		r.Get("/bases/{id}/configurator/admin/roles", s.h.cfgAdminRoles)
 		r.Post("/bases/{id}/configurator/admin/roles/save", s.h.cfgAdminRoleSave)

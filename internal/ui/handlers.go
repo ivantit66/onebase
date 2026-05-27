@@ -199,7 +199,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	if !s.requirePerm(w, r, string(entity.Kind), entity.Name, "read") {
 		return
 	}
-	params := parseListParams(r, entity)
+	params := parseListParams(r, entity, s.store.GetListPageSize(r.Context()))
 
 	treeView := entity.Hierarchical && r.URL.Query().Get("view") == "tree"
 
@@ -1574,10 +1574,10 @@ func parseTablePartRows(r *http.Request, entity *metadata.Entity) map[string][]m
 	return result
 }
 
-const defaultPageSize = 100
-
 // parseListParams reads filter, search, sort and pagination URL params.
-func parseListParams(r *http.Request, entity *metadata.Entity) storage.ListParams {
+// defaultLimit задаёт размер страницы по умолчанию (приходит из настроек базы
+// _settings.ui.list_page_size; см. storage.GetListPageSize).
+func parseListParams(r *http.Request, entity *metadata.Entity, defaultLimit int) storage.ListParams {
 	q := r.URL.Query()
 	params := storage.ListParams{
 		Filters: make(map[string]storage.FilterValue),
@@ -1587,8 +1587,11 @@ func parseListParams(r *http.Request, entity *metadata.Entity) storage.ListParam
 	}
 
 	// Pagination
-	limit := defaultPageSize
-	if l, err := strconv.Atoi(q.Get("limit")); err == nil && l > 0 && l <= 1000 {
+	if defaultLimit <= 0 {
+		defaultLimit = storage.DefaultListPageSize
+	}
+	limit := defaultLimit
+	if l, err := strconv.Atoi(q.Get("limit")); err == nil && l > 0 && l <= storage.MaxListPageSize {
 		limit = l
 	}
 	page := 1
@@ -3424,7 +3427,7 @@ func (s *Server) listExcel(w http.ResponseWriter, r *http.Request) {
 	if !s.requirePerm(w, r, string(entity.Kind), entity.Name, "read") {
 		return
 	}
-	params := parseListParams(r, entity)
+	params := parseListParams(r, entity, s.store.GetListPageSize(r.Context()))
 	rows, err := s.store.List(r.Context(), entity.Name, entity, params)
 	if err != nil {
 		http.Error(w, err.Error(), 500)

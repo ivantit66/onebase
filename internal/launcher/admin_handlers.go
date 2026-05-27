@@ -591,6 +591,79 @@ func (h *handler) cfgAdminAuditSave(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
+// cfgAdminSettings — страница «Параметры базы» в админ-меню конфигуратора.
+// Здесь хранятся настройки, специфичные для конкретной информационной базы
+// (а не для git-версионируемой конфигурации): размер страницы списков и т.п.
+func (h *handler) cfgAdminSettings(w http.ResponseWriter, r *http.Request) {
+	b, err := h.store.Get(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+	db, err := getAuthDB(r.Context(), b)
+	if err != nil {
+		w.Write([]byte(`<div style="padding:16px;color:#c00">Нет подключения к БД</div>`))
+		return
+	}
+	pageSize := db.GetListPageSize(r.Context())
+	html := fmt.Sprintf(`<div style="padding:16px">
+	<h3 style="margin:0 0 14px;font-size:15px">Параметры базы</h3>
+	<div style="padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;max-width:520px">
+	  <div style="font-size:13px;font-weight:600;margin-bottom:8px">Списки</div>
+	  <label style="font-size:12px;display:flex;align-items:center;gap:10px">
+	    Строк на странице по умолчанию:
+	    <input type="number" id="st-pagesize" min="1" max="%d" value="%d" style="width:90px;padding:3px 6px;border:1px solid #cbd5e1;border-radius:3px;font-size:12px">
+	  </label>
+	  <div style="font-size:11px;color:#666;margin-top:6px">Применяется к спискам справочников и документов. Допустимо от 1 до %d. URL-параметр <code>?limit=</code> по-прежнему переопределяет значение разово.</div>
+	  <button onclick="cfgSettingsSave()" style="margin-top:12px;background:#16a34a;color:#fff;border:none;padding:5px 14px;border-radius:3px;cursor:pointer;font-size:12px">Сохранить</button>
+	  <span id="st-msg" style="font-size:11px;margin-left:8px"></span>
+	</div>
+</div>
+<script>
+function cfgSettingsSave(){
+  var n=parseInt(document.getElementById('st-pagesize').value,10);
+  fetch('/bases/%s/configurator/admin/settings/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({list_page_size:n})})
+    .then(function(r){return r.json()})
+    .then(function(d){
+      var m=document.getElementById('st-msg');
+      if(d.ok){m.textContent='Сохранено';m.style.color='#16a34a';if(d.value){document.getElementById('st-pagesize').value=d.value;}}
+      else{m.textContent=(d.error||'Ошибка');m.style.color='#c00';}
+    })
+    .catch(function(){var m=document.getElementById('st-msg');m.textContent='Ошибка сети';m.style.color='#c00';});
+}
+</script>`, storage.MaxListPageSize, pageSize, storage.MaxListPageSize, b.ID)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(html))
+}
+
+// cfgAdminSettingsSave сохраняет общие параметры базы (пока — только размер
+// страницы списков). Невалидное значение зажимается в [1; MaxListPageSize],
+// 0/отрицательное считается «вернуть к дефолту».
+func (h *handler) cfgAdminSettingsSave(w http.ResponseWriter, r *http.Request) {
+	b, err := h.store.Get(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, 404, map[string]any{"error": "not found"})
+		return
+	}
+	var req struct {
+		ListPageSize int `json:"list_page_size"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]any{"error": err.Error()})
+		return
+	}
+	db, err := getAuthDB(r.Context(), b)
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := db.SaveListPageSize(r.Context(), req.ListPageSize); err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "value": db.GetListPageSize(r.Context())})
+}
+
 func (h *handler) cfgAdminAbout(w http.ResponseWriter, r *http.Request) {
 	b, err := h.store.Get(chi.URLParam(r, "id"))
 	if err != nil {
