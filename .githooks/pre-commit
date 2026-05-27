@@ -1,0 +1,23 @@
+#!/bin/sh
+# OneBase pre-commit hook.
+#
+# Установка (однократно, в корне репо):
+#   git config core.hooksPath .githooks
+#
+# Что проверяется:
+#   1. i18ncheck — все ключи {{t $.Lang "..."}} из шаблонов имеют перевод
+#      хотя бы в одной локали (иначе fallback возвращает русский текст
+#      во все языки).
+#
+# Чтобы временно обойти все проверки: git commit --no-verify
+
+set -e
+
+# Запускаем только если есть Go в PATH — иначе хук бесполезен и не должен
+# ломать коммит на машине без Go (например, при cherry-pick на CI).
+if ! command -v go >/dev/null 2>&1; then
+    echo "pre-commit: go not in PATH, skipping i18ncheck" >&2
+    exit 0
+fi
+
+go run ./tools/i18ncheck
