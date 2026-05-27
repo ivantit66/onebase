@@ -114,6 +114,13 @@ func (s *Server) tr(lang, key string) string {
 func (s *Server) Mount(r chi.Router) {
 	r.Get("/ui", s.index)
 	r.Get("/ui/", s.index)
+
+	// Gengen — ДО catch-all роутов! (иначе /ui/dev/gengen матчится как {kind}/{entity})
+	r.Get("/ui/dev/gengen", s.gengenPage)
+	r.Post("/ui/dev/gengen/analyze", s.gengenAnalyze)
+	r.Post("/ui/dev/gengen/generate", s.gengenGenerate)
+	r.Post("/ui/dev/gengen/merge", s.gengenMerge)
+
 	r.Get("/ui/{kind}/{entity}", s.list)
 	r.Get("/ui/{kind}/{entity}/new", s.form)
 	r.Post("/ui/{kind}/{entity}/new", s.submit)
@@ -209,12 +216,6 @@ func (s *Server) Mount(r chi.Router) {
 	r.Get("/ui/dev/entity-search", s.devEntitySearch)
 	r.Get("/ui/dev/code-console", s.codeConsolePage)
 	r.Post("/ui/dev/code-exec", s.codeConsoleExec)
-
-	// Gengen — генерация конфигурации
-	r.Get("/ui/dev/gengen", s.gengenPage)
-	r.Post("/ui/dev/gengen/analyze", s.gengenAnalyze)
-	r.Post("/ui/dev/gengen/generate", s.gengenGenerate)
-	r.Post("/ui/dev/gengen/merge", s.gengenMerge)
 
 	// All functions (admin only)
 	r.Get("/ui/all-functions", s.allFunctions)
