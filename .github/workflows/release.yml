@@ -122,6 +122,42 @@ jobs:
 
             Для идентификации: в конфигураторе в шапке отображается `платформа build-${{ github.run_number }}`.
 
+      - name: Append commit diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="build-${{ github.run_number }}"
+          # Find the previous build release
+          PREV=$(gh release list --repo "${{ github.repository }}" --limit 50 --json tagName --jq '.[].tagName' \
+            | grep '^build-' \
+            | sed 's/build-//' \
+            | sort -n \
+            | awk -v cur="${{ github.run_number }}" '$1 < cur' \
+            | tail -1)
+
+          if [[ -z "$PREV" ]]; then
+            echo "No previous build found, skipping commit diff."
+            exit 0
+          fi
+
+          PREV_TAG="build-${PREV}"
+          COMMITS=$(gh api "repos/${{ github.repository }}/compare/${PREV_TAG}...${TAG}" \
+            --jq '.commits[] | "- \(.commit.message | split("\n")[0]) (\(.sha[0:7]))"' 2>/dev/null || true)
+
+          if [[ -z "$COMMITS" ]]; then
+            echo "No commits found between ${PREV_TAG} and ${TAG}."
+            exit 0
+          fi
+
+          COUNT=$(echo "$COMMITS" | wc -l | tr -d ' ')
+          CHANGES=$'\n\n'"## Изменения с ${PREV_TAG} (${COUNT} коммит(ов))"$'\n'"${COMMITS}"
+
+          # Read current body and append
+          CURRENT=$(gh release view "$TAG" --repo "${{ github.repository }}" --json body --jq '.body')
+          NEW_BODY="${CURRENT}${CHANGES}"
+
+          gh release edit "$TAG" --repo "${{ github.repository }}" --notes "$NEW_BODY"
+
   release:
     name: Create GitHub Release
     needs: build
