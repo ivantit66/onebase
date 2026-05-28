@@ -148,7 +148,9 @@ func (SQLiteDialect) Now() string                   { return "datetime('now')" }
 // non-constant DEFAULT expressions to be parenthesised.
 func (SQLiteDialect) CurrentTimestampTZ() string { return "(datetime('now'))" }
 func (SQLiteDialect) LowerLike(col string) string {
-	return "LOWER(CAST(" + col + " AS TEXT))"
+	// ob_lower — Unicode-aware замена встроенной LOWER (см. init в sqlite.go);
+	// нужна для регистронезависимых отборов/поиска по кириллице.
+	return "ob_lower(CAST(" + col + " AS TEXT))"
 }
 func (SQLiteDialect) CaseInsensitiveLikeOp() string { return "LIKE" }
 func (SQLiteDialect) TypeBool() string              { return "INTEGER" } // 0/1

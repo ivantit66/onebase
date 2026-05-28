@@ -1473,6 +1473,7 @@ const tplReport = `
 {{else}}<p class="empty">{{t $.Lang "Нет данных"}}</p>{{end}}
 </div>
 {{end}}
+{{template "form-shared-js" .}}
 </main></div></body></html>
 {{end}}
 `

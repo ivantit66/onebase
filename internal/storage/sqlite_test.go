@@ -252,6 +252,54 @@ func TestSQLiteMigrateMinimal(t *testing.T) {
 	}
 }
 
+// TestSQLiteCyrillicCaseInsensitive проверяет, что отбор и полнотекстовый
+// поиск по кириллице регистронезависимы на SQLite. Встроенная LOWER() в
+// SQLite приводит к нижнему регистру только ASCII — без ob_lower (см. init в
+// sqlite.go) этот тест падал бы для русского текста.
+func TestSQLiteCyrillicCaseInsensitive(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := ConnectSQLite(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("ConnectSQLite: %v", err)
+	}
+	defer db.Close()
+
+	cat := &metadata.Entity{
+		Name: "Counterparty",
+		Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{
+			{Name: "Name", Type: metadata.FieldTypeString},
+		},
+	}
+	if err := db.Migrate(ctx, []*metadata.Entity{cat}); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if err := db.Upsert(ctx, cat.Name, uuid.New(), map[string]any{"Name": "Иванов"}, cat); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	// Поиск в нижнем регистре должен найти запись «Иванов».
+	rows, err := db.List(ctx, cat.Name, cat, ListParams{Search: "иванов"})
+	if err != nil {
+		t.Fatalf("List search: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("Search 'иванов': got %d rows, want 1 (Иванов)", len(rows))
+	}
+
+	// Отбор по полю Name в верхнем регистре должен найти ту же запись.
+	rows, err = db.List(ctx, cat.Name, cat, ListParams{
+		Filters: map[string]FilterValue{"Name": {Value: "ИВАН"}},
+	})
+	if err != nil {
+		t.Fatalf("List filter: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("Filter Name~'ИВАН': got %d rows, want 1 (Иванов)", len(rows))
+	}
+}
+
 func TestSQLiteDialectLatestPerKey(t *testing.T) {
 	d := SQLiteDialect{}
 	sql := d.LatestPerKey(
