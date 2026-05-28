@@ -395,6 +395,7 @@ func KnownBuiltinNames() map[string]struct{} {
 		"справочники", "catalogs",
 		"документы", "documents",
 		"предопределённыезначения", "predefinedvalues",
+		"значениереквизитаобъекта", "objectattributevalue",
 	} {
 		names[k] = struct{}{}
 	}

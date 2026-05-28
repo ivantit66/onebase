@@ -6,9 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/ivantit66/onebase/internal/launcher"
 	"github.com/ivantit66/onebase/internal/project"
-	"github.com/ivantit66/onebase/internal/storage"
 	"github.com/ivantit66/onebase/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -28,10 +26,7 @@ var procrunCmd = &cobra.Command{
 }
 
 func init() {
-	procrunCmd.Flags().String("id", "", "ID базы из реестра ibases")
-	procrunCmd.Flags().String("project", ".", "путь к каталогу конфигурации")
-	procrunCmd.Flags().String("sqlite", "", "путь к файлу SQLite (альтернатива --db)")
-	procrunCmd.Flags().String("db", "", "PostgreSQL DSN (или переменная DATABASE_URL)")
+	addBaseFlags(procrunCmd)
 	procrunCmd.Flags().String("proc", "", "имя обработки (обязательно)")
 	procrunCmd.Flags().StringArray("set", nil, "параметр обработки: ключ=значение (можно несколько)")
 	procrunCmd.Flags().StringArray("file", nil, "файловый параметр: ключ=путь (можно несколько)")
@@ -44,45 +39,20 @@ func runProcrun(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("укажите --proc <имя обработки>")
 	}
 
-	var dir, dsn, sqlitePath, dbType string
-	if baseID, _ := cmd.Flags().GetString("id"); baseID != "" {
-		store, err := launcher.NewStore()
-		if err != nil {
-			return fmt.Errorf("ibases store: %w", err)
-		}
-		base, err := store.Get(baseID)
-		if err != nil {
-			return fmt.Errorf("база не найдена: %w", err)
-		}
-		dir, dsn, dbType, sqlitePath = base.Path, base.DB, base.DBType, base.DBPath
-	} else {
-		dir, _ = cmd.Flags().GetString("project")
-		dsn = dsnFromFlags(cmd)
-		sqlitePath, _ = cmd.Flags().GetString("sqlite")
-		if sqlitePath != "" {
-			dbType = "sqlite"
-		}
+	bc, err := resolveBase(cmd)
+	if err != nil {
+		return err
 	}
+	defer bc.Cleanup()
 
 	ctx := context.Background()
-	var (
-		db  *storage.DB
-		err error
-	)
-	if dbType == "sqlite" {
-		if sqlitePath == "" {
-			return fmt.Errorf("для SQLite укажите путь к файлу базы")
-		}
-		db, err = storage.ConnectSQLite(ctx, sqlitePath)
-	} else {
-		db, err = storage.Connect(ctx, dsn)
-	}
+	db, err := bc.OpenDB(ctx)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 
-	proj, err := project.Load(dir)
+	proj, err := project.Load(bc.Dir)
 	if err != nil {
 		return fmt.Errorf("load project: %w", err)
 	}

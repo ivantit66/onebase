@@ -52,6 +52,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		if err := project.ApplyTemplate(initTemplate, dir, name); err != nil {
 			return err
 		}
+		writeAIGuide(dir)
 		fmt.Fprintf(os.Stdout, "project initialized from template %q in %s\n", initTemplate, dir)
 		return nil
 	}
@@ -59,6 +60,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if err := project.Scaffold(dir, name); err != nil {
 		return err
 	}
+	writeAIGuide(dir)
 	fmt.Fprintf(os.Stdout, "project initialized in %s\n", dir)
 	return nil
+}
+
+// writeAIGuide кладёт AGENTS.md в новую конфигурацию, чтобы ИИ разработчика
+// сразу знал структуру, рабочий цикл и встроенные функции (best-effort).
+func writeAIGuide(dir string) {
+	_ = os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte(generateAIGuide()), 0o644)
 }

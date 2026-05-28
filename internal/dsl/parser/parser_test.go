@@ -102,3 +102,24 @@ EndProcedure`
 		t.Fatal("expected parse error")
 	}
 }
+
+// Модификатор «Экспорт» после сигнатуры должен поглощаться парсером, а не
+// превращаться в фиктивное выражение-statement в начале тела.
+func TestParser_ExportModifier(t *testing.T) {
+	for _, src := range []string{
+		"Функция F(С) Экспорт\n  Возврат С;\nКонецФункции",
+		"Процедура P() Экспорт\n  Возврат;\nКонецПроцедуры",
+	} {
+		prog := parse(t, src)
+		if len(prog.Procedures) != 1 {
+			t.Fatalf("ожидалась 1 процедура, получено %d (src=%q)", len(prog.Procedures), src)
+		}
+		for _, st := range prog.Procedures[0].Body {
+			if es, ok := st.(*ast.ExprStmt); ok {
+				if id, ok := es.X.(*ast.Ident); ok && id.Tok.Literal == "Экспорт" {
+					t.Fatalf("«Экспорт» осталась фиктивным выражением в теле (src=%q)", src)
+				}
+			}
+		}
+	}
+}

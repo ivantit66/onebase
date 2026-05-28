@@ -2,6 +2,7 @@
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/ivantit66/onebase/internal/dsl/ast"
 	"github.com/ivantit66/onebase/internal/dsl/lexer"
@@ -97,6 +98,14 @@ func (p *Parser) parseProcedure() (*ast.ProcedureDecl, error) {
 	}
 	if _, err := p.expect(token.RPAREN); err != nil {
 		return nil, err
+	}
+	// Опциональный модификатор «Экспорт» после сигнатуры (как в 1С). Лексер
+	// токенизирует его как IDENT, поэтому распознаём по литералу и пропускаем —
+	// иначе он осел бы фиктивным выражением-без-эффекта в начале тела.
+	if p.cur.Type == token.IDENT {
+		if low := strings.ToLower(p.cur.Literal); low == "экспорт" || low == "export" {
+			p.advance()
+		}
 	}
 	endTok := token.ENDPROCEDURE
 	if isFunc {
