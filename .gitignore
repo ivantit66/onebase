@@ -6,6 +6,11 @@ onebase-linux-arm64
 onebase-arm64
 dbquery.exe
 *.exe~
+*.test
+
+# Test/coverage artifacts
+coverage.out
+*.log
 
 # Temp files
 __*.py

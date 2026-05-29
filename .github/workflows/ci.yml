@@ -16,6 +16,14 @@ jobs:
           go-version: '1.23'
           cache: true
 
+      - name: Check for UTF-8 BOM in .go files
+        run: |
+          if grep -rlI $'\xEF\xBB\xBF' --include='*.go' .; then
+            echo "::error::Найдены .go файлы с UTF-8 BOM (перечислены выше). Уберите BOM — это ломает //go:build строки и засоряет diff."
+            exit 1
+          fi
+          echo "BOM не найден — ок."
+
       - name: go vet
         run: go vet ./...
 
