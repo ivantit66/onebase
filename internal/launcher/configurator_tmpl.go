@@ -1328,7 +1328,21 @@ function cfgSaveOrder(group, names) {
   names.forEach(function(n) { fd.append('name', n); });
   fetch('/bases/' + _dbgBase + '/configurator/reorder', { method: 'POST', headers: { 'X-Onebase-Ajax': '1' }, body: fd })
     .then(function(r){ return r.json().catch(function(){ return { ok:false }; }); })
-    .then(function(d){ if (!d || !d.ok) cfgToast((d && d.error) || 'Не удалось сохранить порядок', true); else cfgToast('Порядок сохранён', false); })
+    .then(function(d){
+      if (!d || !d.ok) { cfgToast((d && d.error) || 'Не удалось сохранить порядок', true); return; }
+      cfgToast('Порядок сохранён', false);
+      // Подсистемы сортируются по полю order; сервер записал order=(i+1)*10.
+      // Синхронизируем number-инпуты «Порядок» в панелях, иначе последующее
+      // «Сохранить» подсистемы вернуло бы устаревший порядок из формы.
+      if (group === 'subsystems') {
+        names.forEach(function(n, i){
+          var panel = document.getElementById('sub-' + n);
+          if (!panel) return;
+          var inp = panel.querySelector('input[name="order"]');
+          if (inp) inp.value = (i + 1) * 10;
+        });
+      }
+    })
     .catch(function(err){ cfgToast('Ошибка: ' + err.message, true); });
 }
 function initTree() { applyGroupOrder(); initTreeDnd(); }
