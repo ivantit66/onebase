@@ -61,6 +61,74 @@ func TestLoadDSLPrintForms_NoCollision(t *testing.T) {
 	}
 }
 
+// Внешние формы дополняют формы конфигурации и помечаются External=true;
+// reload конфигурации (printForms) их не затирает.
+func TestSetExternalPrintForms_MergeAndFlag(t *testing.T) {
+	r := NewRegistry()
+	r.mu.Lock()
+	r.printForms["реализациятоваров"] = []*printform.PrintForm{
+		{Name: "Накладная", Document: "РеализацияТоваров"},
+	}
+	r.mu.Unlock()
+
+	r.SetExternalPrintForms([]*printform.PrintForm{
+		{Name: "Накладная-А4", Document: "РеализацияТоваров"},
+	})
+
+	forms := r.GetPrintForms("РеализацияТоваров")
+	if len(forms) != 2 {
+		t.Fatalf("ожидались 2 формы (конфиг + внешняя), получили %d", len(forms))
+	}
+	// Конфиг-форма идёт первой и не помечена External.
+	if forms[0].Name != "Накладная" || forms[0].External {
+		t.Errorf("первой должна быть форма конфигурации без External, получили %+v", forms[0])
+	}
+	if forms[1].Name != "Накладная-А4" || !forms[1].External {
+		t.Errorf("второй должна быть внешняя форма с External=true, получили %+v", forms[1])
+	}
+}
+
+// При совпадении имени внешней формы с конфиг-формой обе остаются в списке,
+// но конфигурация идёт первой (приоритет), а внешняя помечена External.
+func TestSetExternalPrintForms_NameCollisionKeepsConfigFirst(t *testing.T) {
+	r := NewRegistry()
+	r.mu.Lock()
+	r.printForms["реализациятоваров"] = []*printform.PrintForm{
+		{Name: "Накладная", Document: "РеализацияТоваров"},
+	}
+	r.mu.Unlock()
+
+	r.SetExternalPrintForms([]*printform.PrintForm{
+		{Name: "Накладная", Document: "РеализацияТоваров"},
+	})
+
+	forms := r.GetPrintForms("РеализацияТоваров")
+	if len(forms) != 2 {
+		t.Fatalf("ожидались 2 формы при коллизии имени, получили %d", len(forms))
+	}
+	if forms[0].External {
+		t.Error("первой (основной) должна оставаться форма конфигурации")
+	}
+	if !forms[1].External {
+		t.Error("второй должна быть внешняя форма")
+	}
+}
+
+// Повторный вызов SetExternalPrintForms полностью заменяет набор внешних форм.
+func TestSetExternalPrintForms_Replaces(t *testing.T) {
+	r := NewRegistry()
+	r.SetExternalPrintForms([]*printform.PrintForm{
+		{Name: "A", Document: "Док"},
+	})
+	r.SetExternalPrintForms([]*printform.PrintForm{
+		{Name: "B", Document: "Док"},
+	})
+	forms := r.GetPrintForms("Док")
+	if len(forms) != 1 || forms[0].Name != "B" {
+		t.Fatalf("ожидалась только форма B после замены, получили %+v", forms)
+	}
+}
+
 // ReceiversOf возвращает все entity, у которых текущий объект указан в
 // based_on. Это инверсия данных, которую UI использует для рендеринга
 // меню «Ввести на основании ▾» на форме источника.

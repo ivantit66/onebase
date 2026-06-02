@@ -342,6 +342,11 @@ func scanAuditRows(rows auditRowsScanner) ([]*AuditEntry, error) {
 	return entries, rows.Err()
 }
 
+// ParseDBTime нормализует значение timestamp-колонки к time.Time независимо
+// от диалекта (PostgreSQL → time.Time, SQLite → строка/[]byte). Экспортируется
+// для пакетов вне storage, читающих свои таблицы напрямую (например extform).
+func ParseDBTime(v any) time.Time { return parseAuditTime(v) }
+
 // parseAuditTime нормализует значение колонки at к time.Time независимо
 // от диалекта: PostgreSQL отдаёт time.Time, SQLite — строку (или []byte)
 // в формате ISO 8601 / "2006-01-02 15:04:05" (как datetime('now')).

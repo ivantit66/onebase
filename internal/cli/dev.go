@@ -17,6 +17,7 @@ import (
 	"github.com/ivantit66/onebase/internal/configdb"
 	"github.com/ivantit66/onebase/internal/devserver"
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
+	"github.com/ivantit66/onebase/internal/extform"
 	"github.com/ivantit66/onebase/internal/i18n"
 	"github.com/ivantit66/onebase/internal/mailer"
 	"github.com/ivantit66/onebase/internal/project"
@@ -148,6 +149,16 @@ func runDev(cmd *cobra.Command, _ []string) error {
 		reg.LoadAccountRegisters(proj.AccountRegisters, proj.ChartsOfAccounts)
 		reg.LoadWidgets(proj.Widgets)
 		reg.LoadHomePage(proj.HomePage)
+
+		// Внешний контур: печатные формы из БД (вне конфигурации проекта).
+		extRepo := extform.New(db)
+		if err := extRepo.EnsureSchema(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "[dev] extform schema error:", err)
+		} else if extForms, err := extRepo.LoadEnabledPrintForms(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "[dev] external print forms:", err)
+		} else {
+			reg.SetExternalPrintForms(extForms)
+		}
 		if loadErr := sched.Reload(proj.ScheduledJobs); loadErr != nil {
 			fmt.Fprintln(os.Stderr, "[dev] scheduler reload error:", loadErr)
 		}

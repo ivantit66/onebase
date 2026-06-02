@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ type Registry struct {
 	constants       map[string]*metadata.Constant
 	reports         map[string]*report.Report
 	printForms      map[string][]*printform.PrintForm   // lowercase entity name → forms
+	extPrintForms   map[string][]*printform.PrintForm   // lowercase entity name → внешние формы (из БД)
 	dslPrintForms   map[string][]*printform.DSLPrintForm // lowercase entity name → DSL forms
 	procs           map[string]map[string]*ast.ProcedureDecl
 	managerProcs    map[string]map[string]*ast.ProcedureDecl // lowercase entity → procs модуля менеджера
@@ -53,6 +55,7 @@ func NewRegistry() *Registry {
 		constants:       make(map[string]*metadata.Constant),
 		reports:         make(map[string]*report.Report),
 		printForms:      make(map[string][]*printform.PrintForm),
+		extPrintForms:   make(map[string][]*printform.PrintForm),
 		dslPrintForms:   make(map[string][]*printform.DSLPrintForm),
 		procs:           make(map[string]map[string]*ast.ProcedureDecl),
 		managerProcs:    make(map[string]map[string]*ast.ProcedureDecl),
@@ -233,11 +236,51 @@ func (r *Registry) ReceiversOf(sourceName string) []*metadata.Entity {
 	return out
 }
 
-// GetPrintForms returns all print forms registered for an entity name (case-insensitive).
+// GetPrintForms returns all print forms registered for an entity name
+// (case-insensitive): сначала формы конфигурации, затем включённые внешние
+// формы (из таблицы _ext_printforms). Конфигурация всегда имеет приоритет —
+// внешние формы не перекрывают одноимённые, а лишь дополняют список (у них
+// выставлен флаг External, по которому UI рисует пометку «(внешняя)»).
 func (r *Registry) GetPrintForms(entityName string) []*printform.PrintForm {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.printForms[strings.ToLower(entityName)]
+	key := strings.ToLower(entityName)
+	cfg := r.printForms[key]
+	ext := r.extPrintForms[key]
+	if len(ext) == 0 {
+		return cfg
+	}
+	out := make([]*printform.PrintForm, 0, len(cfg)+len(ext))
+	out = append(out, cfg...)
+	out = append(out, ext...)
+	return out
+}
+
+// SetExternalPrintForms атомарно заменяет набор внешних печатных форм (из
+// внешнего контура расширяемости). Каждой форме выставляется External=true.
+// При коллизии имени с формой конфигурации пишется предупреждение в лог —
+// конфигурация остаётся основной (см. GetPrintForms). Хранится отдельно от
+// printForms, поэтому reload конфигурации (Load) внешние формы не затирает.
+func (r *Registry) SetExternalPrintForms(forms []*printform.PrintForm) {
+	m := make(map[string][]*printform.PrintForm)
+	for _, f := range forms {
+		f.External = true
+		key := strings.ToLower(f.Document)
+		m[key] = append(m[key], f)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key, list := range m {
+		cfg := r.printForms[key]
+		for _, ef := range list {
+			for _, cf := range cfg {
+				if strings.EqualFold(cf.Name, ef.Name) {
+					log.Printf("extform: внешняя печатная форма %q для %q совпадает по имени с формой конфигурации — основной остаётся форма конфигурации", ef.Name, ef.Document)
+				}
+			}
+		}
+	}
+	r.extPrintForms = m
 }
 
 // LoadDSLPrintForms registers DSL (.os) print forms indexed by entity name.

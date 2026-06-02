@@ -10,6 +10,7 @@ import (
 	"github.com/ivantit66/onebase/internal/debugger"
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
 	"github.com/ivantit66/onebase/internal/entityservice"
+	"github.com/ivantit66/onebase/internal/extform"
 	"github.com/ivantit66/onebase/internal/i18n"
 	"github.com/ivantit66/onebase/internal/mailer"
 	"github.com/ivantit66/onebase/internal/metadata"
@@ -53,6 +54,7 @@ type Server struct {
 	widgetCache      *widget.Cache
 	lockMgr          *runtime.LockManager   // #2 managed locks
 	entitySvc        *entityservice.Service // упсёрт + ТЧ + движения + проведение, разделяется с api
+	extforms         *extform.Repo          // внешний контур: печатные формы из БД
 }
 
 func New(reg *runtime.Registry, store *storage.DB, interp *interpreter.Interpreter, authRepo *auth.Repo, cfg Config, sched *scheduler.Scheduler) *Server {
@@ -60,7 +62,7 @@ func New(reg *runtime.Registry, store *storage.DB, interp *interpreter.Interpret
 	if maxBytes <= 0 {
 		maxBytes = 50 * 1024 * 1024
 	}
-	s := &Server{reg: reg, store: store, interp: interp, authRepo: authRepo, cfg: cfg, sched: sched, mailer: cfg.Mailer, maxFileSizeBytes: maxBytes, globalDebug: debugger.NewGlobalDebugController(), messages: NewMessageStore(), widgetCache: widget.NewCache(60 * time.Second), lockMgr: runtime.NewLockManager()}
+	s := &Server{reg: reg, store: store, interp: interp, authRepo: authRepo, cfg: cfg, sched: sched, mailer: cfg.Mailer, maxFileSizeBytes: maxBytes, globalDebug: debugger.NewGlobalDebugController(), messages: NewMessageStore(), widgetCache: widget.NewCache(60 * time.Second), lockMgr: runtime.NewLockManager(), extforms: extform.New(store)}
 	s.entitySvc = &entityservice.Service{
 		Store:  store,
 		Reg:    reg,
@@ -189,6 +191,13 @@ func (s *Server) Mount(r chi.Router) {
 	// Admin: orphan movements cleanup
 	r.Get("/ui/admin/cleanup", s.adminCleanup)
 	r.Post("/ui/admin/cleanup", s.adminCleanup)
+
+	// Admin: external print forms (внешний контур расширяемости)
+	r.Get("/ui/admin/extforms", s.adminExtForms)
+	r.Post("/ui/admin/extforms", s.adminExtFormUpload)
+	r.Post("/ui/admin/extforms/{id}/toggle", s.adminExtFormToggle)
+	r.Post("/ui/admin/extforms/{id}/delete", s.adminExtFormDelete)
+	r.Get("/ui/admin/extforms/{id}/export", s.adminExtFormExport)
 
 	// Admin: scheduled jobs
 	r.Get("/ui/admin/scheduled", s.scheduledList)

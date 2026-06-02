@@ -461,6 +461,7 @@ const tplNav = `
       <a href="/ui/admin/scheduled">{{t $.Lang "Регламентные задания"}}</a>
       <a href="/ui/delete-marked">{{t $.Lang "Удалить помеченные"}}</a>
       <a href="/ui/admin/cleanup">{{t $.Lang "Очистка регистров"}}</a>
+      {{if .IsAdmin}}<a href="/ui/admin/extforms">{{t $.Lang "Внешние печатные формы"}}</a>{{end}}
       {{if .IsAdmin}}<a href="/ui/all-functions">{{t $.Lang "Все функции"}}</a>{{end}}
       {{if .IsAdmin}}<div class="sys-sub"><a href="#" onclick="event.preventDefault()">{{t $.Lang "Инструменты разработчика"}} &#9654;</a>
       <div class="sys-submenu">
@@ -957,7 +958,7 @@ const tplForm = `
       <div style="display:none;position:absolute;top:100%;left:0;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.1);min-width:160px;z-index:50;margin-top:4px">
         {{range .PrintForms}}
         <a href="/ui/{{lower (str $.Entity.Kind)}}/{{$.Entity.Name}}/{{$.ID}}/print/{{.Name}}" target="_blank"
-           style="display:block;padding:9px 16px;color:#334155;text-decoration:none;font-size:13px;border-bottom:1px solid #f1f5f9">{{.Name}}</a>
+           style="display:block;padding:9px 16px;color:#334155;text-decoration:none;font-size:13px;border-bottom:1px solid #f1f5f9">{{.Name}}{{if .External}} <span style="color:#94a3b8;font-size:11px">({{t $.Lang "внешняя"}})</span>{{end}}</a>
         {{end}}
         {{range .DSLPrintForms}}
         <a href="/ui/{{lower (str $.Entity.Kind)}}/{{$.Entity.Name}}/{{$.ID}}/print-dsl/{{.Name}}" target="_blank"

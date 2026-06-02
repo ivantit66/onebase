@@ -10,6 +10,12 @@ type PrintForm struct {
 	Header   string        `yaml:"header"`
 	Table    *TableSection `yaml:"table"`
 	Footer   string        `yaml:"footer"`
+
+	// External помечает форму, пришедшую из внешнего контура (таблица
+	// _ext_printforms), а не из конфигурации проекта. Заполняется
+	// программно при загрузке; в YAML не сериализуется. UI показывает у
+	// таких форм пометку «(внешняя)».
+	External bool `yaml:"-"`
 }
 
 type TableSection struct {

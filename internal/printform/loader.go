@@ -24,12 +24,24 @@ func LoadFile(path string) (*PrintForm, error) {
 	if err != nil {
 		return nil, fmt.Errorf("printform: read %s: %w", path, err)
 	}
-	var pf PrintForm
-	if err := yaml.Unmarshal(data, &pf); err != nil {
+	pf, err := ParseBytes(data)
+	if err != nil {
 		return nil, fmt.Errorf("printform: parse %s: %w", path, err)
 	}
 	if pf.Name == "" {
 		pf.Name = strings.TrimSuffix(filepath.Base(path), ".yaml")
+	}
+	return pf, nil
+}
+
+// ParseBytes разбирает YAML печатной формы из памяти (без файла). Нужна для
+// внешних форм, которые хранятся в БД (см. internal/extform). Имя формы здесь
+// не подставляется из имени файла — вызывающий обязан задать его сам, если в
+// YAML поле name пустое.
+func ParseBytes(data []byte) (*PrintForm, error) {
+	var pf PrintForm
+	if err := yaml.Unmarshal(data, &pf); err != nil {
+		return nil, err
 	}
 	return &pf, nil
 }
