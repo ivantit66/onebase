@@ -77,9 +77,32 @@ func CheckCrossRefs(proj *project.Project, roles []*auth.Role) []Issue {
 		}
 	}
 
-	// Журналы → документы.
+	// Журналы → документы + поля колонок/фильтров.
 	for _, j := range proj.Journals {
 		checkRefs("journals", j.Name, "Журнал", j.Documents, docs, "документ")
+		// Документы журнала, которые реально существуют — по ним резолвим поля.
+		var jdocs []*metadata.Entity
+		for _, dn := range j.Documents {
+			if e := entityByName[strings.ToLower(dn)]; e != nil {
+				jdocs = append(jdocs, e)
+			}
+		}
+		if len(jdocs) == 0 {
+			continue
+		}
+		// Колонка/фильтр должны резолвиться в поле хотя бы одного документа
+		// (через Map/точное имя/Fallback). Тип документа журнал показывает сам
+		// (колонка _doc_kind), его в columns указывать не нужно.
+		for _, c := range j.Columns {
+			if !journalFieldResolves(c.Field, c.Map, c.Fallback, jdocs) {
+				add("journals", j.Name, "Журнал", fmt.Sprintf("колонка %q не найдена ни в одном документе журнала", c.Field))
+			}
+		}
+		for _, f := range j.Filters {
+			if !journalFieldResolves(f.Field, nil, nil, jdocs) {
+				add("journals", j.Name, "Журнал", fmt.Sprintf("фильтр %q не найден ни в одном документе журнала", f.Field))
+			}
+		}
 	}
 
 	// Подсистемы → объекты в contents.
@@ -126,15 +149,27 @@ func CheckCrossRefs(proj *project.Project, roles []*auth.Role) []Issue {
 		}
 		if pf.Table != nil && pf.Table.Source != "" {
 			if e := entityByName[strings.ToLower(pf.Document)]; e != nil {
-				found := false
-				for _, tp := range e.TableParts {
-					if strings.EqualFold(tp.Name, pf.Table.Source) {
-						found = true
+				var tp *metadata.TablePart
+				for i := range e.TableParts {
+					if strings.EqualFold(e.TableParts[i].Name, pf.Table.Source) {
+						tp = &e.TableParts[i]
 						break
 					}
 				}
-				if !found {
+				if tp == nil {
 					add("printforms", pf.Name, "Печатная форма", fmt.Sprintf("табличная часть %q не найдена в %q", pf.Table.Source, pf.Document))
+				} else {
+					// Колонки и итоги таблицы должны ссылаться на поля ТЧ.
+					for _, c := range pf.Table.Columns {
+						if !tpFieldExists(c.Field, tp) {
+							add("printforms", pf.Name, "Печатная форма", fmt.Sprintf("колонка %q не найдена в табличной части %q", c.Field, pf.Table.Source))
+						}
+					}
+					for _, tot := range pf.Table.Totals {
+						if !tpFieldExists(tot.Field, tp) {
+							add("printforms", pf.Name, "Печатная форма", fmt.Sprintf("итог по %q: поле не найдено в табличной части %q", tot.Field, pf.Table.Source))
+						}
+					}
 				}
 			}
 		}
@@ -150,6 +185,60 @@ func CheckCrossRefs(proj *project.Project, roles []*auth.Role) []Issue {
 	}
 
 	return issues
+}
+
+// fieldInEntity сообщает, есть ли у сущности поле с таким именем.
+func fieldInEntity(e *metadata.Entity, name string) bool {
+	for i := range e.Fields {
+		if strings.EqualFold(e.Fields[i].Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// journalFieldResolves повторяет логику colExprForDoc: колонка/фильтр журнала
+// валидна, если резолвится в реальное поле хотя бы одного документа — через
+// явный Map (docName→field), точное имя или Fallback.
+func journalFieldResolves(field string, fieldMap map[string]string, fallback []string, docs []*metadata.Entity) bool {
+	for _, e := range docs {
+		if fieldMap != nil {
+			if mapped, ok := fieldMap[e.Name]; ok {
+				if fieldInEntity(e, mapped) {
+					return true
+				}
+				continue // Map задан, но указывает в этом документе на пустоту
+			}
+		}
+		if fieldInEntity(e, field) {
+			return true
+		}
+		for _, fb := range fallback {
+			if fieldInEntity(e, fb) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// tpFieldExists проверяет, что поле таблицы печатной формы существует в
+// табличной части. «@row» — служебный псевдостолбец (номер строки). Точечные
+// ссылки (Поле.Реквизит) проверяются по корню.
+func tpFieldExists(field string, tp *metadata.TablePart) bool {
+	if field == "" || strings.HasPrefix(field, "@") {
+		return true
+	}
+	root := field
+	if i := strings.IndexByte(root, '.'); i >= 0 {
+		root = root[:i]
+	}
+	for i := range tp.Fields {
+		if strings.EqualFold(tp.Fields[i].Name, root) {
+			return true
+		}
+	}
+	return false
 }
 
 // keys возвращает отсортированные ключи map прав (детерминированный порядок

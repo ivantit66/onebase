@@ -65,3 +65,79 @@ permissions:
 		t.Errorf("печатная форма с document: general не должна давать ошибку: %+v", issues)
 	}
 }
+
+// Проверка полей: колонки журнала, не резолвящиеся ни в одном документе, и поля
+// таблицы печатной формы, отсутствующие в табличной части.
+func TestCheckCrossRefs_Fields(t *testing.T) {
+	dir := t.TempDir()
+	mkFile(t, filepath.Join(dir, "documents", "реализация.yaml"), `name: Реализация
+fields:
+  - name: Дата
+    type: date
+  - name: Покупатель
+    type: reference:Контрагент
+tableparts:
+  - name: Товары
+    fields:
+      - name: Номенклатура
+        type: reference:Номенклатура
+      - name: Сумма
+        type: number`)
+	mkFile(t, filepath.Join(dir, "catalogs", "контрагент.yaml"), `name: Контрагент
+fields:
+  - name: Наименование
+    type: string`)
+	// журнал: Дата резолвится, НетПоля — нет
+	mkFile(t, filepath.Join(dir, "journals", "ж.yaml"), `name: Ж
+documents: [Реализация]
+columns:
+  - field: Дата
+  - field: НетПоля`)
+	// печатная форма: Сумма есть в ТЧ, НетКолонки — нет; @row допустимо
+	mkFile(t, filepath.Join(dir, "printforms", "накладная.yaml"), `name: Накладная
+document: Реализация
+table:
+  source: Товары
+  columns:
+    - field: "@row"
+    - field: Сумма
+    - field: НетКолонки
+  totals:
+    - field: Сумма
+      sum: true`)
+
+	proj, err := project.Load(dir)
+	if err != nil {
+		t.Fatalf("project.Load: %v", err)
+	}
+	defer proj.Close()
+
+	issues := CheckCrossRefs(proj, nil)
+	var jBad, jGood, pfBad, pfGood, pfRow bool
+	for _, i := range issues {
+		switch {
+		case i.Kind == "Журнал" && strings.Contains(i.Message, "НетПоля"):
+			jBad = true
+		case i.Kind == "Журнал" && strings.Contains(i.Message, `"Дата"`):
+			jGood = true
+		case i.Kind == "Печатная форма" && strings.Contains(i.Message, "НетКолонки"):
+			pfBad = true
+		case i.Kind == "Печатная форма" && strings.Contains(i.Message, `"Сумма"`):
+			pfGood = true
+		case i.Kind == "Печатная форма" && strings.Contains(i.Message, "@row"):
+			pfRow = true
+		}
+	}
+	if !jBad {
+		t.Errorf("ожидалась ошибка журнала о колонке НетПоля: %+v", issues)
+	}
+	if jGood {
+		t.Errorf("колонка Дата резолвится — ошибки быть не должно: %+v", issues)
+	}
+	if !pfBad {
+		t.Errorf("ожидалась ошибка печатной формы о колонке НетКолонки: %+v", issues)
+	}
+	if pfGood || pfRow {
+		t.Errorf("Сумма и @row валидны — ошибки быть не должно: %+v", issues)
+	}
+}
