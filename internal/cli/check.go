@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
+	"github.com/ivantit66/onebase/internal/auth"
 	"github.com/ivantit66/onebase/internal/configcheck"
 	"github.com/ivantit66/onebase/internal/project"
 	"github.com/ivantit66/onebase/internal/storage"
@@ -45,6 +47,11 @@ func runCheck(cmd *cobra.Command, _ []string) error {
 	// project.Load даёт кросс-ссылочные ошибки и Project для компиляции запросов.
 	if proj, lerr := project.Load(bc.Dir); lerr == nil {
 		issues = append(issues, configcheck.CheckQueries(proj)...)
+		// Кросс-ссылки между объектами (документы в журналах/подсистемах/ролях,
+		// виджеты главной страницы, источник печатной формы). Роли грузятся
+		// отдельно — они не часть project.Project.
+		roles, _ := auth.LoadRolesYAML(filepath.Join(bc.Dir, "roles"))
+		issues = append(issues, configcheck.CheckCrossRefs(proj, roles)...)
 		// п.45: исполняемая валидация запросов против in-memory схемы из
 		// метаданных (best-effort — при сбое настройки схемы просто пропускаем,
 		// чтобы не ломать обычную проверку компиляции).
