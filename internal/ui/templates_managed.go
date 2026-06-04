@@ -78,8 +78,8 @@ const tplManagedForm = `
         </select>
       {{else if eq (str $el.Type) "file"}}
         <div style="display:flex;gap:6px;align-items:center">
-          <input type="text" id="file-path-{{$fn}}" placeholder="Выберите файл" style="flex:1"{{if $el.ReadOnly}} readonly{{end}}>
-          <textarea name="{{$fn}}" id="file-content-{{$fn}}" style="display:none"></textarea>
+          <input type="text" name="{{$fn}}" id="file-path-{{$fn}}" placeholder="Путь к файлу или выберите …" style="flex:1"{{if $el.ReadOnly}} readonly{{end}}>
+          <textarea name="_fc_{{$fn}}" id="file-content-{{$fn}}" style="display:none"></textarea>
           <input type="file" id="file-pick-{{$fn}}" style="display:none" onchange="obFilePick(this,'file-path-{{$fn}}','file-content-{{$fn}}')">
           <button type="button" onclick="document.getElementById('file-pick-{{$fn}}').click()" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px;white-space:nowrap" title="Выбрать файл">…</button>
         </div>
@@ -89,8 +89,8 @@ const tplManagedForm = `
     {{else if eq (str $el.Type) "file"}}
       {{/* Поле не найдено в Entity, но элемент объявлен как file */}}
       <div style="display:flex;gap:6px;align-items:center">
-        <input type="text" id="file-path-{{$fn}}" placeholder="Выберите файл" style="flex:1">
-        <textarea name="{{$fn}}" id="file-content-{{$fn}}" style="display:none"></textarea>
+        <input type="text" name="{{$fn}}" id="file-path-{{$fn}}" placeholder="Путь к файлу или выберите …" style="flex:1">
+        <textarea name="_fc_{{$fn}}" id="file-content-{{$fn}}" style="display:none"></textarea>
         <input type="file" id="file-pick-{{$fn}}" style="display:none" onchange="obFilePick(this,'file-path-{{$fn}}','file-content-{{$fn}}')">
         <button type="button" onclick="document.getElementById('file-pick-{{$fn}}').click()" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px;white-space:nowrap" title="Выбрать файл">…</button>
       </div>
@@ -498,7 +498,14 @@ window._tpRefOpts = {{jsJSON .TPRefOptions}};
     fd.set('_kind', 'object');
     if (DOC_ID) fd.set('_id', DOC_ID);
     const body = new URLSearchParams();
-    fd.forEach((v, k) => body.append(k, typeof v === 'string' ? v : ''));
+    fd.forEach((v, k) => {
+      if (k.startsWith('_fc_')) return; // skip file-content helper fields
+      if (typeof v !== 'string') { body.append(k, ''); return; }
+      // If a _fc_ counterpart exists with content, prefer it over the path
+      const fcEl = form.querySelector('[name="_fc_' + k + '"]');
+      if (fcEl && fcEl.value) { body.append(k, fcEl.value); }
+      else { body.append(k, v); }
+    });
     try {
       const res = await fetch(URL, {
         method: 'POST',
