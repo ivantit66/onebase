@@ -578,20 +578,20 @@ func (tr *translator) translateFilterTokens(tokens []tok) string {
 				parts = append(parts, agg)
 			} else {
 				lower := strings.ToLower(t.val)
-				if col, ok := tr.colMap[lower]; ok {
-					parts = append(parts, col)
-				} else {
-					parts = append(parts, lower)
+				col := lower
+				if c, ok := tr.colMap[lower]; ok {
+					col = c
 				}
+				sql := col
+				// PG: cast to ::text before = / != / IN when the right side is
+				// a string literal or another identifier.
+				if dialectName(tr.opts.Dialect) == "postgres" && isNextCompareToString(tokens, i) {
+					sql += "::text"
+				}
+				parts = append(parts, sql)
 			}
 		case tStr:
-			escaped := "'" + strings.ReplaceAll(t.val, "'", "''") + "'"
-			// PG: when a string literal is compared (=/!=/IN) to an identifier,
-			// add ::text to prevent "operator does not exist: uuid = text" errors.
-			if dialectName(tr.opts.Dialect) == "postgres" && isComparisonContext(tokens, i) {
-				escaped += "::text"
-			}
-			parts = append(parts, escaped)
+			parts = append(parts, "'"+strings.ReplaceAll(t.val, "'", "''")+"'")
 		case tNum, tOp, tStar:
 			parts = append(parts, t.val)
 		case tComma:
