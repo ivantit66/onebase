@@ -156,6 +156,18 @@ var tmpl = template.Must(template.New("root").Funcs(template.FuncMap{
 		})
 		return found
 	},
+	// formAttrVT returns ValueTable columns for a form attribute by name.
+	"formAttrVT": func(form *metadata.FormModule, name string) []*metadata.FormAttributeColumn {
+		if form == nil {
+			return nil
+		}
+		for _, attr := range form.Attributes {
+			if attr.Name == name && strings.EqualFold(attr.TypeRef, "ValueTable") {
+				return attr.Columns
+			}
+		}
+		return nil
+	},
 
 	// dict собирает map[string]any из чередующихся ключей и значений —
 	// стандартный приём передать несколько аргументов в подшаблон
@@ -1529,7 +1541,11 @@ function openRefCreate(targetSelect, refEntity) {
 //   { columns:[{name,title,type,editable}], rows:[{id,data:{col:val}}],
 //     config:{title,searchField,qtyField,checkAll} }
 // По «Перенести в документ» собирает отмеченные строки и возвращает их
-// серверу второй фазой: obFire(elementName,'Выбор',{_pick_result: JSON}).
+//
+// STOPGAP: авточек и корзина ниже — документ-специфичный UX, временно зашитый
+// в платформенный JS. По плану (Фаза B) богатый подбор переедет в форму
+// конфигурации через билтин ОткрытьФорму + ОповеститьОВыборе, а здесь останется
+// тривиальный диалог. См. crystalline-drifting-tiger.md / picker.go.
 function openItemPicker(payload, elementName) {
   if (!payload) return;
   var cols = payload.columns || [];
@@ -1559,10 +1575,9 @@ function openItemPicker(payload, elementName) {
   box.appendChild(search);
 
   var scroll = document.createElement('div');
-  scroll.style.cssText = 'overflow:auto;flex:1;border:1px solid #e2e8f0;border-radius:7px';
+  scroll.style.cssText = 'overflow:auto;flex:1;min-height:120px;border:1px solid #e2e8f0;border-radius:7px';
   var table = document.createElement('table');
   table.className = 'tp-table'; table.style.cssText = 'width:100%;font-size:13px;margin:0';
-  // Шапка: чекбокс «выделить все» + колонки.
   var thead = document.createElement('thead');
   var htr = document.createElement('tr');
   var thCb = document.createElement('th'); thCb.style.width = '34px';
@@ -1603,9 +1618,64 @@ function openItemPicker(payload, elementName) {
     });
     tbody.appendChild(tr);
   });
+  // Авточек: при вводе кол-ва > 0 галочка ставится автоматически.
+  tbody.addEventListener('input', function(e) {
+    var inp = e.target;
+    if (!inp.classList.contains('_ip-val')) return;
+    if (cfg.qtyField && inp.getAttribute('data-col') !== cfg.qtyField) return;
+    var tr = inp.closest('tr');
+    if (!tr) return;
+    var cb = tr.querySelector('._ip-cb');
+    if (!cb) return;
+    var val = parseFloat(inp.value);
+    cb.checked = (!isNaN(val) && val > 0);
+    updateCounter();
+    updateBasket();
+  });
   table.appendChild(tbody);
   scroll.appendChild(table);
   box.appendChild(scroll);
+
+  // ── Корзина ──────────────────────────────────────────────────────
+  var displayCol = null;
+  for (var ci = 0; ci < cols.length; ci++) { if (cols[ci].name !== cfg.qtyField) { displayCol = cols[ci]; break; } }
+  var qtyCol = null;
+  for (var qi = 0; qi < cols.length; qi++) { if (cols[qi].name === cfg.qtyField) { qtyCol = cols[qi]; break; } }
+
+  var basketHead = document.createElement('div');
+  basketHead.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-top:10px;padding:6px 10px;background:#f1f5f9;border-radius:7px;cursor:pointer;user-select:none;font-weight:600;font-size:13px;color:#334155';
+  var basketTitle = document.createElement('span');
+  basketTitle.textContent = 'Корзина';
+  var basketBadge = document.createElement('span');
+  basketBadge.style.cssText = 'font-size:12px;color:#64748b;font-weight:400';
+  basketHead.appendChild(basketTitle);
+  basketHead.appendChild(basketBadge);
+  box.appendChild(basketHead);
+
+  var basketScroll = document.createElement('div');
+  basketScroll.style.cssText = 'overflow:auto;max-height:180px;margin-top:4px;border:1px solid #e2e8f0;border-radius:7px;display:none';
+  var basketTable = document.createElement('table');
+  basketTable.className = 'tp-table';
+  basketTable.style.cssText = 'width:100%;font-size:13px;margin:0';
+  var bThead = document.createElement('thead');
+  var bHtr = document.createElement('tr');
+  var bTh1 = document.createElement('th');
+  bTh1.textContent = displayCol ? (displayCol.title || displayCol.name) : 'Номенклатура';
+  bHtr.appendChild(bTh1);
+  var bTh2 = document.createElement('th');
+  bTh2.style.cssText = 'width:90px;text-align:right';
+  bTh2.textContent = qtyCol ? (qtyCol.title || qtyCol.name) : 'Кол-во';
+  bHtr.appendChild(bTh2);
+  bThead.appendChild(bHtr);
+  basketTable.appendChild(bThead);
+  var bTbody = document.createElement('tbody');
+  basketTable.appendChild(bTbody);
+  basketScroll.appendChild(basketTable);
+  box.appendChild(basketScroll);
+
+  basketHead.addEventListener('click', function() {
+    basketScroll.style.display = basketScroll.style.display === 'none' ? '' : 'none';
+  });
 
   var foot = document.createElement('div');
   foot.style.cssText = 'margin-top:12px;display:flex;justify-content:flex-end;gap:8px';
@@ -1622,7 +1692,36 @@ function openItemPicker(payload, elementName) {
 
   function checkedRows(){ return Array.prototype.slice.call(tbody.querySelectorAll('._ip-cb')).filter(function(cb){ return cb.checked && cb.closest('tr').style.display !== 'none'; }); }
   function updateCounter(){ counter.textContent = 'Выбрано: ' + checkedRows().length; }
+  function updateBasket(){
+    bTbody.innerHTML = '';
+    var cnt = 0;
+    if (!cfg.qtyField) return;
+    Array.prototype.forEach.call(tbody.rows, function(tr){
+      if (tr.style.display === 'none') return;
+      var inp = tr.querySelector('._ip-val[data-col="' + cfg.qtyField + '"]');
+      if (!inp) return;
+      var val = parseFloat(inp.value);
+      if (isNaN(val) || val <= 0) return;
+      cnt++;
+      var bTr = document.createElement('tr');
+      var tdName = document.createElement('td');
+      if (displayCol) {
+        var srcTd = tr.querySelector('td[data-col="' + displayCol.name + '"]');
+        tdName.textContent = srcTd ? srcTd.textContent : '';
+      }
+      var tdQty = document.createElement('td');
+      tdQty.style.cssText = 'text-align:right;font-weight:600';
+      tdQty.textContent = inp.value;
+      bTr.appendChild(tdName);
+      bTr.appendChild(tdQty);
+      bTbody.appendChild(bTr);
+    });
+    basketBadge.textContent = cnt > 0 ? (cnt + ' поз.') : 'пусто';
+    if (cnt > 0 && basketScroll.style.display === 'none') basketScroll.style.display = '';
+    if (cnt === 0) basketScroll.style.display = 'none';
+  }
   updateCounter();
+  updateBasket();
   search.focus();
   search.addEventListener('input', function(){
     var q = this.value.toLowerCase();
@@ -1630,6 +1729,7 @@ function openItemPicker(payload, elementName) {
       tr.style.display = (tr.getAttribute('data-search') || '').indexOf(q) >= 0 ? '' : 'none';
     });
     updateCounter();
+    updateBasket();
   });
   cbAll.addEventListener('change', function(){
     Array.prototype.forEach.call(tbody.rows, function(tr){
@@ -1637,6 +1737,7 @@ function openItemPicker(payload, elementName) {
       var cb = tr.querySelector('._ip-cb'); if (cb) cb.checked = cbAll.checked;
     });
     updateCounter();
+    updateBasket();
   });
   btnCancel.addEventListener('click', function(){ modal.remove(); });
   modal.addEventListener('click', function(e){ if (e.target === modal) modal.remove(); });

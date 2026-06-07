@@ -1,4 +1,4 @@
-﻿package ui
+package ui
 
 // tplManagedForm — шаблон рендеринга «управляемой формы» из FormModule
 // (план 37, этап 3). В отличие от tplForm, который автоматически выводит
@@ -210,9 +210,58 @@ const tplManagedForm = `
 {{end}}
   </button>
   {{else}}
+  {{/* ValueTable: формовый атрибут-таблица (не документная ТЧ). */}}
+  {{$vtCols := formAttrVT $ctx.Form $tpName}}
+  {{if $vtCols}}
+  {{$vtRows := index $ctx.TablePartRows $tpName}}
+  {{$vtCmds := tpCommandButtons $el}}
+  <h3 style="margin:18px 0 8px;font-size:14px">{{fieldTitleRU $el.TitleMap $tpName}}</h3>
+  {{if $vtCmds}}
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+    {{range $vtCmds}}
+    <button type="button" class="btn btn-sm" style="background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe"
+      onclick="obFire('{{.Name}}','Нажатие',{_tp:'{{$tpName}}'})">
+      {{fieldTitleRU .TitleMap .Name}}
+    </button>
+    {{end}}
+  </div>
+  {{end}}
+  <table class="tp-table" data-vt="{{$tpName}}">
+    <thead>
+      <tr>
+        {{range $vtCols}}<th>{{if .Title}}{{index .Title "ru"}}{{else}}{{.Name}}{{end}}</th>{{end}}
+        <th style="width:40px"></th>
+      </tr>
+    </thead>
+    <tbody id="vt-body-{{$tpName}}" data-vt-fields="{{range $i, $c := $vtCols}}{{if $i}},{{end}}{{$c.Name}}|{{$c.TypeRef}}{{end}}">
+    {{range $i, $row := $vtRows}}
+      <tr>
+        {{range $c := $vtCols}}
+        <td>
+          {{$v := index $row $c.Name}}
+          {{if eq (lower $c.TypeRef) "number"}}
+            <input type="number" step="any" name="vt.{{$tpName}}.{{$i}}.{{$c.Name}}" value="{{$v}}" data-vt-num="{{$c.Name}}" oninput="recalcTpRow(this)">
+          {{else if eq (lower $c.TypeRef) "bool"}}
+            <input type="checkbox" name="vt.{{$tpName}}.{{$i}}.{{$c.Name}}" value="true" {{if eq (str $v) "true"}}checked{{end}}>
+          {{else}}
+            <input type="text" name="vt.{{$tpName}}.{{$i}}.{{$c.Name}}" value="{{$v}}" oninput="recalcTpRow(this)">
+          {{end}}
+        </td>
+        {{end}}
+        <td><button type="button" class="del-btn" onclick="this.closest('tr').remove()">×</button></td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  <button type="button" class="btn btn-sm" style="background:#e2e8f0;color:#475569;margin:0 0 12px"
+    onclick="addVtRow('{{$tpName}}', [{{range $vtCols}}'{{.Name}}',{{end}}])">
+    + Добавить строку
+  </button>
+  {{else}}
   <div style="background:#fef9c3;padding:8px;border-radius:6px;font-size:12px;color:#92400e">
     Табличная часть «{{$tpName}}» не найдена в метаданных сущности.
   </div>
+  {{end}}
   {{end}}
 {{else if eq (str $el.Kind) "СтраницаКоманднаяПанель"}}
   {{/* пропускаем — отрисовывается через toolbar в обвязке формы */}}
@@ -555,6 +604,59 @@ window._tpRefOpts = {{jsJSON .TPRefOptions}};
   // в цепочку, а не остаётся мёртвым кодом.
   window.applyTableParts = applyTableParts;
 
+  // applyFormTables(vts) — перерисовка ValueTable (формовых атрибутов-таблиц) по
+  // ответу сервера (formTables). Зеркалит applyTableParts, но для tbody
+  // id=vt-body-<name>: имена инпутов vt.<name>.<idx>.<field>, типы берутся из
+  // data-vt-fields ("name|TypeRef,..."). Нужна, чтобы VT обновлялась после
+  // round-trip-события (ПриИзменении и т.п.) — раньше сервер слал formTables, но
+  // клиент их игнорировал, и таблица «застывала».
+  function applyFormTables(vts){
+    if (!vts) return;
+    Object.keys(vts).forEach(function(vtName){
+      var tbody = document.getElementById('vt-body-' + vtName);
+      if (!tbody) return;
+      var fieldsMeta = (tbody.getAttribute('data-vt-fields') || '').split(',').map(function(s){
+        var idx = s.indexOf('|');
+        if (idx < 0) return { name: s, type: 'string' };
+        return { name: s.slice(0, idx), type: (s.slice(idx + 1) || 'string').toLowerCase() };
+      });
+      var rows = vts[vtName] || [];
+      tbody.innerHTML = '';
+      rows.forEach(function(row, idx){
+        var tr = document.createElement('tr');
+        fieldsMeta.forEach(function(f){
+          var td = document.createElement('td');
+          var v = row[f.name];
+          var inp = document.createElement('input');
+          inp.name = 'vt.' + vtName + '.' + idx + '.' + f.name;
+          if (f.type === 'number') {
+            inp.type = 'number'; inp.step = 'any';
+            inp.setAttribute('data-vt-num', f.name);
+            inp.setAttribute('oninput', 'recalcTpRow(this)');
+            inp.value = (v == null ? '' : v);
+          } else if (f.type === 'bool') {
+            inp.type = 'checkbox'; inp.value = 'true';
+            if (String(v) === 'true') inp.checked = true;
+          } else {
+            inp.type = 'text';
+            inp.setAttribute('oninput', 'recalcTpRow(this)');
+            inp.value = (v == null ? '' : v);
+          }
+          td.appendChild(inp);
+          tr.appendChild(td);
+        });
+        var tdDel = document.createElement('td');
+        var btn = document.createElement('button');
+        btn.type = 'button'; btn.className = 'del-btn'; btn.textContent = '×';
+        btn.onclick = function(){ tr.remove(); };
+        tdDel.appendChild(btn);
+        tr.appendChild(tdDel);
+        tbody.appendChild(tr);
+      });
+    });
+  }
+  window.applyFormTables = applyFormTables;
+
   // obFilePick — при выборе файла: имя в текстовое поле, содержимое в скрытый
   // textarea. Кодировка: UTF-8 → fallback Windows-1251 (TextDecoder).
   // В webview/Electron — file.path вместо содержимого.
@@ -661,6 +763,7 @@ window._tpRefOpts = {{jsJSON .TPRefOptions}};
       }
       window.applyTableParts(data.tableparts);
       applyValues(data.values);
+      applyFormTables(data.formTables);
       (data.messages || []).forEach(m => flash(m, 'ok'));
       if (data.error) flash(data.error, 'err');
     } catch (e) {
@@ -716,6 +819,41 @@ window._tpRefOpts = {{jsJSON .TPRefOptions}};
 {{/* Общие JS-функции addTpRow / openRefCreate / openRefPicker — те же,
      что в обычной auto-форме, чтобы "+" рядом со ссылкой и "Добавить
      строку" в ТЧ работали и в managed-форме. */}}
+
+{{/* addVtRow — JS для добавления строки в ValueTable (формовый атрибут-таблица). */}}
+<script>
+function addVtRow(vtName, fields) {
+  var tbody = document.getElementById("vt-body-" + vtName);
+  if (!tbody) return;
+  var idx = tbody.rows.length;
+  var tr = document.createElement("tr");
+  var fieldTypes = (tbody.getAttribute("data-vt-fields") || "").split(",");
+  fields.forEach(function(fn, i) {
+    var td = document.createElement("td");
+    var inp = document.createElement("input");
+    inp.name = "vt." + vtName + "." + idx + "." + fn;
+    var ft = (fieldTypes[i] || "").split("|")[1] || "";
+    if (ft === "number") {
+      inp.type = "number"; inp.step = "any";
+      inp.setAttribute("data-vt-num", fn);
+      inp.setAttribute("oninput", "recalcTpRow(this)");
+    } else if (ft === "bool") {
+      inp.type = "checkbox"; inp.value = "true";
+    } else {
+      inp.type = "text";
+    }
+    td.appendChild(inp);
+    tr.appendChild(td);
+  });
+  var tdDel = document.createElement("td");
+  var btn = document.createElement("button");
+  btn.type = "button"; btn.className = "del-btn"; btn.textContent = "×";
+  btn.onclick = function(){ tr.remove(); };
+  tdDel.appendChild(btn);
+  tr.appendChild(tdDel);
+  tbody.appendChild(tr);
+}
+</script>
 
 {{if hasGridTP .Form}}
 <script src="/vendor/slickgrid/slick.core.js"></script>

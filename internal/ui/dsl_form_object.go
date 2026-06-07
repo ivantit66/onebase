@@ -29,7 +29,9 @@ import (
 type formObjectThis struct {
 	obj    *runtime.Object
 	entity *metadata.Entity
+	form    *metadata.FormModule
 }
+
 
 func (f *formObjectThis) Get(name string) any {
 	if f == nil || f.obj == nil {
@@ -45,6 +47,15 @@ func (f *formObjectThis) Get(name string) any {
 			}
 		}
 	}
+		// Формовые атрибуты-таблицы (ValueTable). Если имя не найдено среди ТЧ сущности,
+		// ищем формовый атрибут ValueTable и возвращаем для него тот же formTpProxy.
+		if f.form != nil {
+			for _, attr := range f.form.Attributes {
+				if strings.EqualFold(attr.Name, name) && strings.EqualFold(attr.TypeRef, "ValueTable") {
+					return &formTpProxy{obj: f.obj, tpName: attr.Name}
+				}
+			}
+		}
 	// Дальше — обычные поля (через Object.Get который ищет в Fields).
 	v := f.obj.Get(name)
 	// Дефолты по типу: пустой numeric → 0, иначе `Объект.Сумма + 100` в DSL

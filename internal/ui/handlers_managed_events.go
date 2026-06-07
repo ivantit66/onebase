@@ -42,6 +42,7 @@ type formEventResponse struct {
 	OK         bool                        `json:"ok"`
 	Values     map[string]any              `json:"values,omitempty"`
 	TableParts map[string][]map[string]any `json:"tableparts,omitempty"`
+	FormTables map[string][]map[string]any `json:"formTables,omitempty"`
 	Messages   []string                    `json:"messages,omitempty"`
 	Error      string                      `json:"error,omitempty"`
 	// PickerData != nil — обработчик фазы 1 вызвал ПоказатьПодбор: клиент
@@ -128,6 +129,15 @@ func (s *Server) handleManagedFormEvent(w http.ResponseWriter, r *http.Request) 
 	// Построить объект из текущих form-values.
 	obj := buildObjectFromForm(r, entity)
 
+	// Подмешать ValueTable-данные из vt.<name>.<idx>.<field>.
+	if vtRows := parseValueTableRows(r, form); vtRows != nil {
+		if obj.TablePartRows == nil {
+			obj.TablePartRows = map[string][]map[string]any{}
+		}
+		for k, v := range vtRows {
+			obj.TablePartRows[k] = v
+		}
+	}
 	// Подмешать ссылки → *runtime.Ref, как при сохранении (нужно для
 	// Объект.Покупатель.Наименование и проч.).
 	s.enrichHeaderRefs(r.Context(), entity, obj)
@@ -144,7 +154,7 @@ func (s *Server) handleManagedFormEvent(w http.ResponseWriter, r *http.Request) 
 	mc := runtime.NewMovementsCollector(entity.Name, obj.ID)
 	var msgs []string
 	vars := s.buildDSLVarsWithMessages(r.Context(), mc, &msgs)
-	thisObj := &formObjectThis{obj: obj, entity: entity}
+	thisObj := &formObjectThis{obj: obj, entity: entity, form: form}
 	vars["Объект"] = thisObj
 	vars["ЭтотОбъект"] = thisObj
 
@@ -186,6 +196,7 @@ func (s *Server) handleManagedFormEvent(w http.ResponseWriter, r *http.Request) 
 			OK:         false,
 			Values:     serializeFieldsForEntity(obj.Fields, entity),
 			TableParts: serializeTablePartRowsForEntity(obj.TablePartRows, entity),
+			FormTables: formTablesFromObj(obj, form),
 			Messages:   msgs,
 			Error:      runErr.Error(),
 			PickerData: picker,
@@ -198,6 +209,7 @@ func (s *Server) handleManagedFormEvent(w http.ResponseWriter, r *http.Request) 
 		Values:     serializeFieldsForEntity(obj.Fields, entity),
 		TableParts: serializeTablePartRowsForEntity(obj.TablePartRows, entity),
 		Messages:   msgs,
+		FormTables: formTablesFromObj(obj, form),
 		PickerData: picker,
 	})
 }
@@ -336,6 +348,148 @@ func buildObjectFromForm(r *http.Request, entity *metadata.Entity) *runtime.Obje
 		Fields:        fields,
 		TablePartRows: tpRows,
 	}
+}
+
+// parseValueTableRows парсит vt.<name>.<idx>.<field> и tp_json.<name> из запроса
+// для формовых атрибутов ValueTable. В отличие от parseTablePartRows, работает
+// не с entity.TableParts, а с формовыми атрибутами типа ValueTable.
+func parseValueTableRows(r *http.Request, form *metadata.FormModule) map[string][]map[string]any {
+	if form == nil {
+		return nil
+	}
+	result := make(map[string][]map[string]any)
+	for _, attr := range form.Attributes {
+		if !strings.EqualFold(attr.TypeRef, "ValueTable") || len(attr.Columns) == 0 {
+			continue
+		}
+		name := attr.Name
+		// SlickGrid-style JSON payload.
+		if jsonBlob := r.FormValue("tp_json." + name); jsonBlob != "" {
+			var rows []map[string]any
+			if err := json.Unmarshal([]byte(jsonBlob), &rows); err == nil {
+				cleaned := make([]map[string]any, 0, len(rows))
+				for _, row := range rows {
+					if len(row) == 0 {
+						continue
+					}
+					converted := make(map[string]any, len(row))
+					for _, col := range attr.Columns {
+						raw := ""
+						if v, ok := row[col.Name]; ok {
+							raw = fmt.Sprintf("%v", v)
+						} else {
+							for k, v := range row {
+								if strings.EqualFold(k, col.Name) {
+									raw = fmt.Sprintf("%v", v)
+									break
+								}
+							}
+						}
+						switch strings.ToLower(col.TypeRef) {
+						case "number":
+							if n, err := strconv.ParseFloat(raw, 64); err == nil {
+								converted[col.Name] = n
+							} else {
+								converted[col.Name] = raw
+							}
+						case "bool":
+							converted[col.Name] = raw == "true"
+						default:
+							converted[col.Name] = raw
+						}
+					}
+					empty := true
+					for _, col := range attr.Columns {
+						if v, ok := converted[col.Name]; ok && fmt.Sprintf("%v", v) != "" {
+							empty = false
+							break
+						}
+					}
+					if !empty {
+						cleaned = append(cleaned, converted)
+					}
+				}
+				result[name] = cleaned
+				continue
+			}
+		}
+		// Legacy vt.<name>.<idx>.<field> parsing.
+		maxIdx := -1
+		prefix := "vt." + name + "."
+		for key := range r.Form {
+			if !strings.HasPrefix(key, prefix) {
+				continue
+			}
+			rest := strings.TrimPrefix(key, prefix)
+			parts := strings.SplitN(rest, ".", 2)
+			if len(parts) < 2 {
+				continue
+			}
+			if idx, err := strconv.Atoi(parts[0]); err == nil && idx > maxIdx {
+				maxIdx = idx
+			}
+		}
+		if maxIdx < 0 {
+			continue
+		}
+		rows := make([]map[string]any, maxIdx+1)
+		for i := range rows {
+			rows[i] = make(map[string]any)
+		}
+		for key, vals := range r.Form {
+			if !strings.HasPrefix(key, prefix) {
+				continue
+			}
+			rest := strings.TrimPrefix(key, prefix)
+			parts := strings.SplitN(rest, ".", 2)
+			if len(parts) < 2 {
+				continue
+			}
+			idx, err := strconv.Atoi(parts[0])
+			if err != nil {
+				continue
+			}
+			fieldName := parts[1]
+			if len(vals) > 0 {
+				rows[idx][fieldName] = vals[0]
+			}
+		}
+		var cleaned []map[string]any
+		for _, row := range rows {
+			empty := true
+			for _, col := range attr.Columns {
+				if v, ok := row[col.Name]; ok && fmt.Sprintf("%v", v) != "" {
+					empty = false
+					break
+				}
+			}
+			if empty {
+				continue
+			}
+			converted := make(map[string]any, len(row))
+			for _, col := range attr.Columns {
+				raw := fmt.Sprintf("%v", row[col.Name])
+				switch strings.ToLower(col.TypeRef) {
+				case "number":
+					if n, err := strconv.ParseFloat(raw, 64); err == nil {
+						converted[col.Name] = n
+					} else {
+						converted[col.Name] = raw
+					}
+				case "bool":
+					converted[col.Name] = raw == "true"
+				default:
+					converted[col.Name] = raw
+				}
+			}
+			cleaned = append(cleaned, converted)
+		}
+		result[name] = cleaned
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func serializeValue(v any) any {
@@ -515,4 +669,34 @@ func (s *Server) handleProcessorFormEvent(w http.ResponseWriter, r *http.Request
 	}
 
 	enc.Encode(formEventResponse{OK: true})
+}
+
+// formTablesFromObj extracts ValueTable rows from obj.TablePartRows by filtering
+// out keys that belong to entity tabular parts. Returns nil if no VT data.
+func formTablesFromObj(obj *runtime.Object, form *metadata.FormModule) map[string][]map[string]any {
+	if obj == nil || obj.TablePartRows == nil || form == nil {
+		return nil
+	}
+	// Collect entity TP names for exclusion.
+	// form is attached to an entity via form.EntityName, but we don't have
+	// the entity here. Instead, check all form attributes for ValueTable.
+	vtNames := map[string]bool{}
+	for _, attr := range form.Attributes {
+		if strings.EqualFold(attr.TypeRef, "ValueTable") {
+			vtNames[attr.Name] = true
+		}
+	}
+	if len(vtNames) == 0 {
+		return nil
+	}
+	result := make(map[string][]map[string]any)
+	for k, v := range obj.TablePartRows {
+		if vtNames[k] && len(v) > 0 {
+			result[k] = v
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
