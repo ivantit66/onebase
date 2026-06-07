@@ -147,6 +147,8 @@ const tplManagedForm = `
   {{if $el.UseGrid}}
   <div id="sg-{{$tpName}}" class="ob-grid" style="height:{{if gt (len $tpRows) 8}}300{{else}}200{{end}}px;width:100%"
        data-sg-tp="{{$tpName}}"
+       data-sg-el="{{$el.Name}}"
+       {{if hasHandler $el "ПриИзменении"}}data-sg-recalc="1"{{end}}
        data-sg-cols='[{{range $i, $f := $tpMeta.Fields}}{{if $i}},{{end}}{"id":"{{$f.Name}}","name":"{{$f.Name}}","type":"{{$f.Type}}"{{if $f.RefEntity}},"ref":"{{$f.RefEntity}}"{{end}}}{{end}}]'
        data-sg-ref='{{jsJSON $tpRef}}'
        data-sg-rows='{{jsJSON $tpRows}}'
@@ -521,6 +523,12 @@ window._tpRefOpts = {{jsJSON .TPRefOptions}};
     });
   }
 
+  // Экспортируем в window, чтобы grid-aware обёртка (план 48) могла
+  // переопределить applyTableParts и обновлять SlickGrid после round-trip.
+  // obFire ниже зовёт именно window.applyTableParts — так обёртка попадает
+  // в цепочку, а не остаётся мёртвым кодом.
+  window.applyTableParts = applyTableParts;
+
   // obFilePick — при выборе файла: имя в текстовое поле, содержимое в скрытый
   // textarea. Кодировка: UTF-8 → fallback Windows-1251 (TextDecoder).
   // В webview/Electron — file.path вместо содержимого.
@@ -612,7 +620,7 @@ window._tpRefOpts = {{jsJSON .TPRefOptions}};
         openItemPicker(data.pickerData, elementName);
         return;
       }
-      applyTableParts(data.tableparts);
+      window.applyTableParts(data.tableparts);
       applyValues(data.values);
       (data.messages || []).forEach(m => flash(m, 'ok'));
       if (data.error) flash(data.error, 'err');
@@ -931,92 +939,120 @@ window._tpRefOpts = {{jsJSON .TPRefOptions}};
     g.grid.setSelectedRows([]);
   };
 
-  // SlickGrid-aware applyTableParts
+  // SlickGrid-aware applyTableParts. Оборачивает window.applyTableParts (DOM-
+  // версию из obFire-IIFE): для ТЧ с гридом обновляет модель грида, для
+  // остальных вызывает origApplyTP. Активную ячейку сохраняем, чтобы серверный
+  // пересчёт сумм (Р2) не сбивал курсор при быстром вводе с клавиатуры.
   var origApplyTP = window.applyTableParts;
   window.applyTableParts = function(tps) {
     if (!tps) return;
     var grids = window._obGrids || {};
     Object.keys(tps).forEach(function(tpName) {
-      if (grids[tpName]) {
-        var rows = tps[tpName] || [];
-        var items = rows.map(function(r, idx) {
-          var item = {id: idx};
-          var cols = grids[tpName].columnsMeta || [];
-          for (var i = 0; i < cols.length; i++) item[cols[i].id] = r[cols[i].id] || "";
-          return item;
-        });
-        grids[tpName].dataView.setItems(items);
-        grids[tpName].grid.invalidate();
+      var g = grids[tpName];
+      if (!g) return;
+      var active = g.grid.getActiveCell();
+      var rows = tps[tpName] || [];
+      var cols = g.columnsMeta || [];
+      var items = rows.map(function(r, idx) {
+        var item = {id: idx};
+        for (var i = 0; i < cols.length; i++) item[cols[i].id] = r[cols[i].id] || "";
+        return item;
+      });
+      g.dataView.setItems(items);
+      g.grid.invalidate();
+      if (active && active.row < items.length) {
+        g.grid.setActiveCell(active.row, active.cell);
       }
     });
     if (origApplyTP) origApplyTP(tps);
   };
 
+  // setupGrid инициализирует один грид. Вынесено из цикла в отдельную функцию,
+  // чтобы каждый грид замыкал свои grid/dataView/tpName (иначе при нескольких
+  // ТЧ на форме все подписки замыкали бы последний грид — классический баг var
+  // в цикле).
+  function setupGrid(div) {
+    var tpName = div.getAttribute("data-sg-tp");
+    if (window._obGrids[tpName]) return;
+
+    var colsRaw = JSON.parse(div.getAttribute("data-sg-cols") || "[]");
+    var refOpts = JSON.parse(div.getAttribute("data-sg-ref") || "null") || {};
+    var rowsRaw = JSON.parse(div.getAttribute("data-sg-rows") || "[]");
+
+    var columns = buildColumns(colsRaw, refOpts);
+    var items = rowsRaw.map(function(r, idx) {
+      var item = {id: idx};
+      for (var i = 0; i < colsRaw.length; i++) item[colsRaw[i].id] = r[colsRaw[i].id] || "";
+      return item;
+    });
+
+    var dataView = new Slick.Data.DataView();
+    dataView.setItems(items);
+
+    var options = {
+      enableCellNavigation: true,
+      enableColumnReorder: false,
+      editable: true,
+      autoEdit: true,
+      autoHeight: false,
+      rowHeight: 28,
+      headerRowHeight: 30,
+      syncColumnCellResize: true,
+      enableTextSelectionOnCells: true,
+      enableAddRow: false,
+      multiSelect: true
+    };
+
+    var grid = new Slick.Grid(div, dataView, columns, options);
+    dataView.onRowCountChanged.subscribe(function() { grid.updateRowCount(); grid.render(); });
+    dataView.onRowsChanged.subscribe(function(e, args) { grid.invalidateRows(args.rows); grid.render(); });
+
+    // Delete key removes selected rows
+    grid.onKeyDown.subscribe(function(e) {
+      if (e.key === 'Delete' && !grid.getEditorLock().isActive()) {
+        var sel = grid.getSelectedRows();
+        if (sel && sel.length) {
+          var its = dataView.getItems();
+          var toRemove = sel.map(function(r) { return its[r]; });
+          for (var i = 0; i < toRemove.length; i++) dataView.deleteItem(toRemove[i].id);
+          grid.invalidate();
+          grid.setSelectedRows([]);
+          e.stopImmediatePropagation();
+        }
+      }
+    });
+
+    // План 48 (Р2): серверный пересчёт зависимых колонок (Сумма = Кол × Цена)
+    // через round-trip. Дёргаем obFire('ПриИзменении') только если у элемента
+    // ТЧ есть такой обработчик (data-sg-recalc) — иначе впустую гоняли бы сеть
+    // на каждый ввод. Debounce 250 мс коалесцирует быстрые правки (вопрос O3).
+    // Деньги считаются на сервере (decimal), клиент лишь отображает результат.
+    if (div.getAttribute("data-sg-recalc") === "1") {
+      var elName = div.getAttribute("data-sg-el") || tpName;
+      var recalcTimer = null;
+      grid.onCellChange.subscribe(function() {
+        if (recalcTimer) clearTimeout(recalcTimer);
+        recalcTimer = setTimeout(function() {
+          if (window.obFire) window.obFire(elName, "ПриИзменении", {_tp: tpName});
+        }, 250);
+      });
+    }
+
+    window._obGrids[tpName] = {
+      grid: grid,
+      dataView: dataView,
+      columns: columns,
+      columnsMeta: colsRaw,
+      refOpts: refOpts
+    };
+
+    grid.autosizeColumns();
+  }
+
   // Initialize all grids
   function initGrids() {
     var divs = document.querySelectorAll(".ob-grid[data-sg-tp]");
-    for (var d = 0; d < divs.length; d++) {
-      var div = divs[d];
-      var tpName = div.getAttribute("data-sg-tp");
-      if (window._obGrids[tpName]) continue;
-
-      var colsRaw = JSON.parse(div.getAttribute("data-sg-cols") || "[]");
-      var refOpts = JSON.parse(div.getAttribute("data-sg-ref") || "null") || {};
-      var rowsRaw = JSON.parse(div.getAttribute("data-sg-rows") || "[]");
-
-      var columns = buildColumns(colsRaw, refOpts);
-      var items = rowsRaw.map(function(r, idx) {
-        var item = {id: idx};
-        for (var i = 0; i < colsRaw.length; i++) item[colsRaw[i].id] = r[colsRaw[i].id] || "";
-        return item;
-      });
-
-      var dataView = new Slick.Data.DataView();
-      dataView.setItems(items);
-
-      var options = {
-        enableCellNavigation: true,
-        enableColumnReorder: false,
-        editable: true,
-        autoEdit: true,
-        autoHeight: false,
-        rowHeight: 28,
-        headerRowHeight: 30,
-        syncColumnCellResize: true,
-        enableTextSelectionOnCells: true,
-        enableAddRow: false,
-        multiSelect: true
-      };
-
-      var grid = new Slick.Grid(div, dataView, columns, options);
-      dataView.onRowCountChanged.subscribe(function() { grid.updateRowCount(); grid.render(); });
-      dataView.onRowsChanged.subscribe(function(e, args) { grid.invalidateRows(args.rows); grid.render(); });
-
-      // Delete key removes selected rows
-      grid.onKeyDown.subscribe(function(e) {
-        if (e.key === 'Delete' && !grid.getEditorLock().isActive()) {
-          var sel = grid.getSelectedRows();
-          if (sel && sel.length) {
-            var items = dataView.getItems();
-            var toRemove = sel.map(function(r) { return items[r]; });
-            for (var i = 0; i < toRemove.length; i++) dataView.deleteItem(toRemove[i].id);
-            grid.invalidate();
-            grid.setSelectedRows([]);
-            e.stopImmediatePropagation();
-          }
-        }
-      });
-
-      window._obGrids[tpName] = {
-        grid: grid,
-        dataView: dataView,
-        columns: columns,
-        columnsMeta: colsRaw,
-        refOpts: refOpts
-      };
-
-      grid.autosizeColumns();
-    }
+    for (var d = 0; d < divs.length; d++) setupGrid(divs[d]);
   }
 
   if (document.readyState === "loading") {

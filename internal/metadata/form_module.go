@@ -23,7 +23,7 @@ const (
 	FormEventOnCreate      FormEventType = "ПриСоздании"         // OnCreate
 	FormEventBeforeDelete  FormEventType = "ПередУдалением"      // BeforeDelete
 	FormEventOnDelete      FormEventType = "ПриУдалении"         // OnDelete
-	FormEventAfterDelete   FormEventType = "ПослеУдалении"       // AfterDelete
+	FormEventAfterDelete   FormEventType = "ПослеУдаления"       // AfterDelete
 	// События для табличных частей (замечание #15): даём YAML-конфигу
 	// возможность их объявлять. UI пока умеет дергать ExecuteElementEvent
 	// generic-маршрутом — кастомные триггеры (auto-fill цены при добавлении

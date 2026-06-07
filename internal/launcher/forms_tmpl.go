@@ -215,6 +215,10 @@ const tplFormsEditor = `
   <button class="btn btn-primary" onclick="saveForm()">Сохранить</button>
   <button class="btn btn-success" onclick="refreshPreview()">Просмотр</button>
   <button class="btn" onclick="validateForm()">Проверить</button>
+  <label style="display:inline-flex;align-items:center;gap:5px;margin-left:6px;font-size:12px;color:#475569;cursor:pointer"
+         title="Включает SlickGrid (Excel-навигация с клавиатуры, выравнивание чисел) для всех табличных частей формы. В YAML проставляется use_grid: true.">
+    <input type="checkbox" id="grid-toggle" onchange="setGridFlag(this.checked)"> Табличные части: SlickGrid
+  </label>
   <form action="/bases/{{.Base.ID}}/configurator/forms/delete" method="POST" style="display:inline" onsubmit="return confirm('Удалить эту форму вместе с модулем и ресурсами?')">
     <input type="hidden" name="entity" value="{{.EditingForm.Entity}}">
     <input type="hidden" name="name" value="{{.EditingForm.Name}}">
@@ -298,9 +302,41 @@ if (typeof require === 'undefined') {
   });
 }
 
-// Единые геттеры — прозрачно работают и с Monaco, и с textarea-fallback.
+// Единые геттеры/сеттеры — прозрачно работают и с Monaco, и с textarea-fallback.
 function getYAML() { return window.yamlEditor ? window.yamlEditor.getValue() : (window._yamlTA ? window._yamlTA.value : ''); }
 function getOS()   { return window.osEditor ? window.osEditor.getValue() : (window._osTA ? window._osTA.value : ''); }
+function setYAML(v) { if (window.yamlEditor) window.yamlEditor.setValue(v); else if (window._yamlTA) window._yamlTA.value = v; }
+
+// setGridFlag — переключатель SlickGrid (план 48). Проставляет/снимает
+// use_grid: true у всех элементов kind: ТабличнаяЧасть в YAML формы.
+// Делаем построчно, без YAML-парсера: сначала убираем все строки use_grid,
+// затем при включении вставляем флаг сразу после строки "- kind: ТабличнаяЧасть"
+// с тем же отступом, что у kind. Идемпотентно. Ограничение: kind должен быть
+// первым ключом элемента списка (как во всех примерах).
+function setGridFlag(enable) {
+  var lines = getYAML().split('\n');
+  var out = [];
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (/^\s*use_grid\s*:/.test(line)) continue; // снять существующие
+    out.push(line);
+    var m = line.match(/^(\s*)-\s+kind\s*:\s*(?:ТабличнаяЧасть|TablePart)\s*$/);
+    if (enable && m) {
+      var keyIndent = m[1].length + 2; // ключи-братья выровнены по kind (после "- ")
+      out.push(new Array(keyIndent + 1).join(' ') + 'use_grid: true');
+    }
+  }
+  setYAML(out.join('\n'));
+  refreshPreview();
+}
+
+// syncGridToggle — отражает текущее состояние YAML в чекбоксе (отмечен, если
+// хоть одна ТЧ уже с use_grid: true). Вызывается после рендера превью.
+function syncGridToggle() {
+  var cb = document.getElementById('grid-toggle');
+  if (!cb) return;
+  cb.checked = /^\s*use_grid\s*:\s*true\s*$/m.test(getYAML());
+}
 
 function switchTab(name) {
   document.querySelectorAll('.editor-tab').forEach(function (el) { el.classList.toggle('active', el.dataset.tab === name); });
@@ -317,6 +353,7 @@ function saveForm() {
 }
 
 function refreshPreview() {
+  syncGridToggle();
   var body = new URLSearchParams();
   body.append('yaml', getYAML());
   body.append('entity', '{{.EditingForm.Entity}}');
@@ -536,7 +573,12 @@ func renderPreviewElement(buf *bytes.Buffer, el *metadata.FormElement, tabsCount
 	case metadata.FormElementPicture:
 		fmt.Fprintf(buf, `<div class="hint">[Картинка: %s]</div>`, html.EscapeString(el.Name))
 	case metadata.FormElementTable, metadata.FormElementTablePart:
-		fmt.Fprintf(buf, `<div class="tp-stub">Табличная часть «%s»: предпросмотр упрощённый.</div>`, html.EscapeString(title))
+		mode := "обычная таблица"
+		if el.UseGrid {
+			mode = "SlickGrid (Excel-навигация)"
+		}
+		fmt.Fprintf(buf, `<div class="tp-stub">Табличная часть «%s» — %s. Предпросмотр упрощённый.</div>`,
+			html.EscapeString(title), mode)
 	case metadata.FormElementCommandBar:
 		// командная панель — обычно рендерится в toolbar над формой;
 		// в preview просто рисуем кнопки в ряд.

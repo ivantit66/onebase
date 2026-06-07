@@ -1,4 +1,4 @@
-﻿package ui
+package ui
 
 import (
 	"encoding/json"
@@ -413,8 +413,8 @@ details[open] summary::before{content:"▼ "}
 .tp-table{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:8px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden}
 .tp-table th{background:#f8fafc;padding:8px 10px;text-align:left;font-size:12px;color:#475569;font-weight:600;border-bottom:2px solid #e2e8f0;white-space:nowrap}
 .tp-table td{padding:5px 6px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
-.tp-table tr:nth-child(even) td{background:#fafbfc}
-.tp-table tr:hover td{background:#f0f4ff}
+.tp-table tbody tr:nth-child(even) td{background:#f8fafc}
+.tp-table tbody tr:hover td{background:#f0f4ff}
 .tp-table input,.tp-table select{padding:5px 8px;font-size:13px;border:1px solid #e2e8f0;border-radius:5px;width:100%;transition:border-color .15s,box-shadow .15s}
 .tp-table input:focus,.tp-table select:focus{outline:none;border-color:#3b82f6;box-shadow:0 0 0 2px rgba(59,130,246,.15)}
 .tp-table input[type=number]{text-align:right;font-variant-numeric:tabular-nums;-moz-appearance:textfield}
@@ -1179,7 +1179,7 @@ const tplForm = `
   {{end}}
   </tbody>
   <tfoot id="tp-foot-{{$tpName}}" class="tp-footer" style="display:none"><tr>
-    {{range .Fields}}{{if eq (str .Type) "number"}}<td class="tp-total" data-tp-total="{{$tpName}}}.{{.Name}}" style="text-align:right;font-variant-numeric:tabular-nums">0</td>{{else}}<td></td>{{end}}{{end}}<td></td>
+    {{range .Fields}}{{if eq (str .Type) "number"}}<td class="tp-total" data-tp-total="{{$tpName}}.{{.Name}}" style="text-align:right;font-variant-numeric:tabular-nums">0</td>{{else}}<td></td>{{end}}{{end}}<td></td>
   </tr></tfoot>
 </table>
 <button type="button" class="btn btn-sm" style="background:#e2e8f0;color:#475569;margin-bottom:8px"
@@ -1368,7 +1368,6 @@ function recalcTpTotals(inp) {
   });
   var hasData = false;
   numFields.forEach(function(fn) {
-    var td = tfoot.querySelector('[data-tp-total]');
     tfoot.querySelectorAll('[data-tp-total]').forEach(function(cell) {
       var key = cell.getAttribute('data-tp-total');
       if (key && key.split('.').pop() === fn) {
