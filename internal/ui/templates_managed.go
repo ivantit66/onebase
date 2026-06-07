@@ -148,6 +148,7 @@ const tplManagedForm = `
   <div id="sg-{{$tpName}}" class="ob-grid" style="height:{{if gt (len $tpRows) 8}}300{{else}}200{{end}}px;width:100%"
        data-sg-tp="{{$tpName}}"
        data-sg-el="{{$el.Name}}"
+       {{if $el.ReadOnly}}data-sg-ro="1"{{end}}
        {{if hasHandler $el "ПриИзменении"}}data-sg-recalc="1"{{end}}
        data-sg-cols='[{{range $i, $f := $tpMeta.Fields}}{{if $i}},{{end}}{"id":"{{$f.Name}}","name":"{{$f.Name}}","type":"{{$f.Type}}"{{if $f.RefEntity}},"ref":"{{$f.RefEntity}}"{{end}}}{{end}}]'
        data-sg-ref='{{jsJSON $tpRef}}'
@@ -567,6 +568,15 @@ window._tpRefOpts = {{jsJSON .TPRefOptions}};
   // добавляются к телу запроса. Используется подбором (план 46): фаза 2
   // шлёт {_pick_result}, команды ТЧ — {_tp, _tp_selected}.
   window.obFire = async function(elementName, eventName, extraParams){
+   try {
+    // Зафиксировать активную правку ячейки грида: иначе её значение не попадёт
+    // в tp_json, а редактор держит editor-lock — из-за чего первый клик по
+    // кнопке лишь закрывает редактор и «не нажимается».
+    var _grids = window._obGrids || {};
+    for (var _t in _grids) {
+      var _lk = _grids[_t].grid && _grids[_t].grid.getEditorLock && _grids[_t].grid.getEditorLock();
+      if (_lk && _lk.isActive()) _lk.commitCurrentEdit();
+    }
     if (window.obGridSync) obGridSync();
     const form = document.getElementById('main-form');
     if (!form) return;
@@ -631,29 +641,50 @@ window._tpRefOpts = {{jsJSON .TPRefOptions}};
     } catch (e) {
       flash('Сетевая ошибка: ' + (e && e.message ? e.message : e), 'err');
     }
+   } catch (e) {
+      // Синхронные ошибки (obGridSync, сборка формы) больше не «глотаются»
+      // как unhandled rejection — показываем баннер, чтобы причина была видна.
+      flash('Ошибка формы: ' + (e && e.message ? e.message : e), 'err');
+   }
   };
+
+  // Отслеживание «грязной» формы — чтобы Esc/закрытие спрашивало подтверждение
+  // только при наличии несохранённых изменений.
+  window._obFormDirty = false;
+  document.addEventListener('input',  function(e){ if (e.target && e.target.closest && e.target.closest('#main-form')) window._obFormDirty = true; }, true);
+  document.addEventListener('change', function(e){ if (e.target && e.target.closest && e.target.closest('#main-form')) window._obFormDirty = true; }, true);
 
   // Esc — отмена незаконченного ввода / закрытие формы (как в 1С). Порядок:
   //   1) открыт модальный диалог (подбор/выбор ссылки) → закрыть его;
-  //   2) активен редактор ячейки грида → отменить правку ячейки;
-  //   3) фокус в поле ввода → снять фокус (отменить ввод), форму не закрываем;
-  //   4) иначе → закрыть форму (эквивалент кнопки «Отмена»).
+  //   2) активен редактор ячейки грида → отменить правку ячейки (форму НЕ
+  //      закрываем);
+  //   3) фокус в поле ввода → снять фокус (отменить ввод);
+  //   4) иначе → закрыть форму (с подтверждением, если были изменения).
+  //
+  // ВАЖНО: слушатель в ФАЗЕ ПЕРЕХВАТА (capture=true). В фазе всплытия SlickGrid
+  // успевал отменить правку РАНЬШЕ нас, editor-lock становился неактивным, и мы
+  // ошибочно закрывали документ прямо из редактирования ячейки.
   document.addEventListener('keydown', function(e){
     if (e.key !== 'Escape' && e.keyCode !== 27) return;
     var modal = document.getElementById('_item-picker-modal') || document.getElementById('_ref-picker-modal');
-    if (modal) { modal.remove(); e.preventDefault(); return; }
+    if (modal) { modal.remove(); e.preventDefault(); e.stopPropagation(); return; }
     var grids = window._obGrids || {};
     for (var tp in grids) {
-      var lock = grids[tp].grid && grids[tp].grid.getEditorLock();
-      if (lock && lock.isActive()) { lock.cancelCurrentEdit(); e.preventDefault(); return; }
+      var lock = grids[tp].grid && grids[tp].grid.getEditorLock && grids[tp].grid.getEditorLock();
+      if (lock && lock.isActive()) { lock.cancelCurrentEdit(); e.preventDefault(); e.stopPropagation(); return; }
     }
     var ae = document.activeElement;
     if (ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && !ae.readOnly && ae.type !== 'submit' && ae.type !== 'button') {
-      ae.blur(); e.preventDefault(); return;
+      ae.blur(); e.preventDefault(); e.stopPropagation(); return;
     }
     var cancel = document.querySelector('a.btn-cancel');
-    if (cancel) { e.preventDefault(); cancel.click(); }
-  });
+    if (cancel) {
+      if (window._obFormDirty && !confirm('Данные были изменены и не записаны. Закрыть форму?')) {
+        e.preventDefault(); e.stopPropagation(); return;
+      }
+      e.preventDefault(); e.stopPropagation(); cancel.click();
+    }
+  }, true);
 })();
 </script>
 
@@ -1000,6 +1031,7 @@ window._tpRefOpts = {{jsJSON .TPRefOptions}};
     var cols = g.columnsMeta || [];
     for (var i = 0; i < cols.length; i++) item[cols[i].id] = "";
     g.dataView.addItem(item);
+    window._obFormDirty = true;
     g.grid.invalidate();
     g.grid.scrollRowIntoView(nextId);
     var rowIdx = g.dataView.getRowById(nextId);
@@ -1018,6 +1050,7 @@ window._tpRefOpts = {{jsJSON .TPRefOptions}};
     var items = g.dataView.getItems();
     var toRemove = sel.map(function(r) { return items[r]; });
     for (var i = 0; i < toRemove.length; i++) g.dataView.deleteItem(toRemove[i].id);
+    window._obFormDirty = true;
     g.grid.invalidate();
     g.grid.setSelectedRows([]);
   };
@@ -1077,11 +1110,12 @@ window._tpRefOpts = {{jsJSON .TPRefOptions}};
     var dataView = new Slick.Data.DataView();
     dataView.setItems(items);
 
+    var readOnly = div.getAttribute("data-sg-ro") === "1";
     var options = {
       enableCellNavigation: true,
       enableColumnReorder: false,
-      editable: true,
-      autoEdit: true,
+      editable: !readOnly,
+      autoEdit: !readOnly,
       autoHeight: false,
       rowHeight: 28,
       headerRowHeight: 30,
@@ -1126,8 +1160,24 @@ window._tpRefOpts = {{jsJSON .TPRefOptions}};
       grid.invalidate(); grid.render();
     });
 
-    // Итоги обновляем при любом изменении ячейки (независимо от data-sg-recalc).
-    grid.onCellChange.subscribe(function() { updateTotals(window._obGrids[tpName]); });
+    // Клиентский авторасчёт «как в старой таблице» (recalcTpRow): если в ТЧ
+    // РОВНО три числовые колонки (количество, цена, сумма) — третья = первая ×
+    // вторая. Это мгновенная подсказка; сервер пересчитает точно (decimal) при
+    // записи/проведении или по кнопке «Пересчитать»/обработчику ПриИзменении.
+    var numCols = colsRaw.filter(function(c) { return c.type === "number"; });
+    function num(v) { var n = Number(String(v == null ? "" : v).replace(/\s/g, "").replace(",", ".")); return isNaN(n) ? 0 : n; }
+    grid.onCellChange.subscribe(function(e, args) {
+      window._obFormDirty = true;
+      if (numCols.length === 3 && args && args.item && args.cell != null) {
+        var changed = columns[args.cell] && columns[args.cell].field;
+        // Не перетираем сумму, если правят саму сумму (3-ю колонку).
+        if (changed !== numCols[2].id) {
+          args.item[numCols[2].id] = num(args.item[numCols[0].id]) * num(args.item[numCols[1].id]);
+          grid.invalidateRow(args.row); grid.render();
+        }
+      }
+      updateTotals(window._obGrids[tpName]);
+    });
 
     // Delete key removes selected rows
     grid.onKeyDown.subscribe(function(e) {
