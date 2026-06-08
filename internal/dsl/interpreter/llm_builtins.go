@@ -80,34 +80,48 @@ func NewLLMFunctions(ai AIAssistant) map[string]any {
 		return askParams(args, strArg(args, 0), true), nil
 	})
 
-	распознатьДокумент := BuiltinFunc(func(args []any, file string, line int) (any, error) {
+	// recognize выполняет vision-запрос по готовым данным изображения.
+	recognize := func(b64, mime, prompt string) string {
 		ensure()
+		out, err := ai.Ask(AIRequest{Task: aiTaskDocuments, Prompt: prompt, ImageB64: b64, MimeType: mime})
+		if err != nil {
+			panic(userError{Msg: "РаспознатьДокумент: " + err.Error()})
+		}
+		return out
+	}
+
+	распознатьДокумент := BuiltinFunc(func(args []any, file string, line int) (any, error) {
 		path := strArg(args, 0)
 		prompt := strArg(args, 1)
 		data, err := os.ReadFile(path)
 		if err != nil {
 			panic(userError{Msg: "РаспознатьДокумент: не удалось прочитать файл: " + err.Error()})
 		}
-		req := AIRequest{
-			Task:     aiTaskDocuments,
-			Prompt:   prompt,
-			ImageB64: base64.StdEncoding.EncodeToString(data),
-			MimeType: mimeByExt(path),
+		return recognize(base64.StdEncoding.EncodeToString(data), mimeByExt(path), prompt), nil
+	})
+
+	// РаспознатьИзображение(ДанныеBase64, ТипMIME, Промпт) — vision по данным из
+	// памяти (загруженный файл/вложение), без записи на диск. Нужна для умной
+	// загрузки документов из UI (план 48, F6).
+	распознатьИзображение := BuiltinFunc(func(args []any, file string, line int) (any, error) {
+		b64 := strArg(args, 0)
+		mime := strArg(args, 1)
+		if mime == "" {
+			mime = "image/png"
 		}
-		out, err := ai.Ask(req)
-		if err != nil {
-			panic(userError{Msg: "РаспознатьДокумент: " + err.Error()})
-		}
-		return out, nil
+		prompt := strArg(args, 2)
+		return recognize(b64, mime, prompt), nil
 	})
 
 	return map[string]any{
-		"ЗапросИИ":           запросИИ,
-		"AIQuery":            запросИИ,
-		"ЗапросИИДжейсон":    запросИИДжейсон,
-		"AIQueryJSON":        запросИИДжейсон,
-		"РаспознатьДокумент": распознатьДокумент,
-		"RecognizeDocument":  распознатьДокумент,
+		"ЗапросИИ":             запросИИ,
+		"AIQuery":              запросИИ,
+		"ЗапросИИДжейсон":      запросИИДжейсон,
+		"AIQueryJSON":          запросИИДжейсон,
+		"РаспознатьДокумент":   распознатьДокумент,
+		"RecognizeDocument":    распознатьДокумент,
+		"РаспознатьИзображение": распознатьИзображение,
+		"RecognizeImage":       распознатьИзображение,
 	}
 }
 

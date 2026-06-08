@@ -59,6 +59,19 @@ func TestЗапросИИДжейсонВключаетJSON(t *testing.T) {
 	assert.True(t, ai.last.JSON)
 }
 
+func TestРаспознатьИзображение(t *testing.T) {
+	ai := &stubAI{configured: true, reply: `{"поставщик":"ООО Ромашка"}`}
+	src := `Процедура Тест()
+  Возврат РаспознатьИзображение("QUJD", "image/jpeg", "Извлеки поставщика");
+КонецПроцедуры`
+	result := runHTTPSrc(t, src, interpreter.NewLLMFunctions(ai))
+	assert.Equal(t, `{"поставщик":"ООО Ромашка"}`, result)
+	assert.Equal(t, "документы", ai.last.Task)
+	assert.Equal(t, "QUJD", ai.last.ImageB64)
+	assert.Equal(t, "image/jpeg", ai.last.MimeType)
+	assert.Equal(t, "Извлеки поставщика", ai.last.Prompt)
+}
+
 func TestИИНеНастроен(t *testing.T) {
 	src := `Процедура Тест()
   Попытка
