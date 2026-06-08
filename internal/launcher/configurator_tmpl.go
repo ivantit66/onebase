@@ -1354,10 +1354,15 @@ function cfgAjaxSubmit(form) {
 function cfgSaveActive() {
   var panel = document.querySelector('.cfg-panel.active');
   if (!panel) { cfgToast('Нет открытого объекта для сохранения', true); return; }
-  var target = null;
-  panel.querySelectorAll('form').forEach(function(f){
-    if (!target && cfgIsAjaxForm(f)) target = f;
-  });
+  var pick = function(scope){
+    var f = null;
+    scope.querySelectorAll('form').forEach(function(x){ if (!f && cfgIsAjaxForm(x)) f = x; });
+    return f;
+  };
+  // Сперва ищем форму в активной вкладке объекта (.obj-pane.active), затем — во
+  // всей панели: Ctrl+S на вкладке «Формы» должен сохранять формы, а не реквизиты.
+  var activePane = panel.querySelector('.obj-pane.active');
+  var target = (activePane && pick(activePane)) || pick(panel);
   if (!target) { cfgToast('В этом разделе нечего сохранять', true); return; }
   if (typeof target.requestSubmit === 'function') target.requestSubmit();
   else target.submit();
