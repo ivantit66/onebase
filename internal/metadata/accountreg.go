@@ -16,6 +16,10 @@ type AccountRegister struct {
 	Titles    map[string]string `yaml:"titles"`
 	Accounts  string            `yaml:"accounts"` // name of the ChartOfAccounts
 	Resources []Field           `yaml:"-"`        // parsed from raw
+	// Subconto — аналитические разрезы на проводках (по аналогии с 1С). Порядок
+	// объявления задаёт нумерацию Субконто1, Субконто2, … для краткой записи в DSL
+	// и стабильные имена колонок субконто<N> в таблице регистра.
+	Subconto []Field `yaml:"-"`
 }
 
 // DisplayName возвращает заголовок регистра бухгалтерии с учётом языка.
@@ -42,6 +46,12 @@ type rawAccountReg struct {
 		Titles map[string]string `yaml:"titles"`
 		Type   string            `yaml:"type"`
 	} `yaml:"resources"`
+	Subconto []struct {
+		Name   string            `yaml:"name"`
+		Title  string            `yaml:"title"`
+		Titles map[string]string `yaml:"titles"`
+		Type   string            `yaml:"type"`
+	} `yaml:"subconto"`
 }
 
 func LoadAccountRegisterFile(path string) (*AccountRegister, error) {
@@ -68,6 +78,14 @@ func LoadAccountRegisterFile(path string) (*AccountRegister, error) {
 			Title:  r.Title,
 			Titles: r.Titles,
 			Type:   r.Type,
+		}))
+	}
+	for _, s := range raw.Subconto {
+		ar.Subconto = append(ar.Subconto, parseField(rawField{
+			Name:   s.Name,
+			Title:  s.Title,
+			Titles: s.Titles,
+			Type:   s.Type,
 		}))
 	}
 	return ar, nil
@@ -98,4 +116,11 @@ func LoadAccountRegisterDir(dir string) ([]*AccountRegister, error) {
 // AccountRegTableName returns the PostgreSQL table name for an account register.
 func AccountRegTableName(name string) string {
 	return "акк_" + strings.ToLower(name)
+}
+
+// SubcontoColumn возвращает имя колонки субконто по его порядковому номеру (1-based).
+// Имя стабильно при переименовании поля субконто, что упрощает краткую запись
+// СубконтоN в DSL и запросах.
+func SubcontoColumn(idx int) string {
+	return fmt.Sprintf("субконто%d", idx)
 }

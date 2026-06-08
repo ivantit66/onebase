@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -97,6 +99,12 @@ func (db *DB) migrateAccountReg(ctx context.Context, ar *metadata.AccountRegiste
 		sb.WriteString(" ")
 		sb.WriteString(fieldType(d, r))
 	}
+	for i, s := range ar.Subconto {
+		sb.WriteString(",\n    ")
+		sb.WriteString(metadata.SubcontoColumn(i + 1))
+		sb.WriteString(" ")
+		sb.WriteString(fieldType(d, s))
+	}
 	sb.WriteString("\n)")
 	if _, err := db.Exec(ctx, sb.String()); err != nil {
 		return fmt.Errorf("migrate account register %s: %w", ar.Name, err)
@@ -112,6 +120,23 @@ func (db *DB) migrateAccountReg(ctx context.Context, ar *metadata.AccountRegiste
 	for _, r := range ar.Resources {
 		if err := db.AddColumnIfMissing(ctx, table, metadata.ColumnName(r), fieldType(d, r)); err != nil {
 			return fmt.Errorf("migrate account register %s.%s: %w", ar.Name, r.Name, err)
+		}
+	}
+	for i, s := range ar.Subconto {
+		col := metadata.SubcontoColumn(i + 1)
+		if err := db.AddColumnIfMissing(ctx, table, col, fieldType(d, s)); err != nil {
+			return fmt.Errorf("migrate account register %s субконто %s: %w", ar.Name, s.Name, err)
+		}
+	}
+	// Индекс по первому субконто ускоряет разворот остатков/оборотов по аналитике.
+	if len(ar.Subconto) > 0 {
+		sb1 := metadata.SubcontoColumn(1)
+		idxDt := fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_%s_dt_сб1 ON %s (счётдт, %s, period)", strings.ToLower(ar.Name), table, sb1)
+		idxKt := fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_%s_kt_сб1 ON %s (счёткт, %s, period)", strings.ToLower(ar.Name), table, sb1)
+		for _, s := range []string{idxDt, idxKt} {
+			if _, err := db.Exec(ctx, s); err != nil {
+				return fmt.Errorf("migrate account register %s субконто index: %w", ar.Name, err)
+			}
 		}
 	}
 	return nil
@@ -149,12 +174,22 @@ func (db *DB) WriteAccountMovements(ctx context.Context, regName, docType string
 		dtCode := fmt.Sprintf("%v", dtRaw)
 		ktCode := fmt.Sprintf("%v", ktRaw)
 
+		if err := validateSubconto(row, ar); err != nil {
+			return fmt.Errorf("account movement %s: %w", regName, err)
+		}
+
 		var extraCols []string
 		var extraArgs []any
 		for _, r := range ar.Resources {
 			col := metadata.ColumnName(r)
 			extraCols = append(extraCols, col)
 			extraArgs = append(extraArgs, ciGet(row, r.Name))
+		}
+		for i, s := range ar.Subconto {
+			col := metadata.SubcontoColumn(i + 1)
+			val := subcontoArg(row, i+1, s.Name)
+			extraCols = append(extraCols, col)
+			extraArgs = append(extraArgs, normalizeRegArg(d, val, metadata.IsReference(s.Type)))
 		}
 
 		colList := "period, регистратор, регистратор_тип, счётдт, счёткт"
@@ -194,6 +229,9 @@ func (db *DB) GetAccountMovements(ctx context.Context, regName string, ar *metad
 	for _, r := range ar.Resources {
 		cols = append(cols, metadata.ColumnName(r))
 	}
+	for i := range ar.Subconto {
+		cols = append(cols, metadata.SubcontoColumn(i+1))
+	}
 
 	sql := fmt.Sprintf("SELECT %s FROM %s ORDER BY period DESC LIMIT 500",
 		strings.Join(cols, ", "), table)
@@ -224,7 +262,10 @@ func (db *DB) GetAccountMovements(ctx context.Context, regName string, ar *metad
 
 // AccountBalances returns balance rows for all accounts in a plan as of a given date.
 // Each row: code, name, kind, оборотдт, оборотkt, сальдо (+ resource-specific amounts).
-func (db *DB) AccountBalances(ctx context.Context, regName, planName string, asOf time.Time, resources []metadata.Field) ([]map[string]any, error) {
+// Если у регистра объявлены субконто, остатки разворачиваются по ним: строка =
+// счёт × комбинация субконто, а каждый субконто попадает в row под ключом субконто<N>
+// (UUID для reference — резолвится в наименование на уровне UI).
+func (db *DB) AccountBalances(ctx context.Context, regName, planName string, asOf time.Time, resources, subconto []metadata.Field) ([]map[string]any, error) {
 	table := metadata.AccountRegTableName(regName)
 
 	var resourceCols []string
@@ -240,6 +281,14 @@ func (db *DB) AccountBalances(ctx context.Context, regName, planName string, asO
 	if len(resourceCols) > 0 {
 		selectCols += ", " + strings.Join(resourceCols, ", ")
 	}
+	// Субконто-колонки идут после ресурсов, чтобы индексация ресурсов в Scan не
+	// сдвигалась.
+	groupBy := "a.code, a.name, a.kind"
+	for i := range subconto {
+		col := metadata.SubcontoColumn(i + 1)
+		selectCols += ", r." + col + " AS " + col
+		groupBy += ", r." + col
+	}
 
 	d := db.dialect
 	query := fmt.Sprintf(`
@@ -247,8 +296,8 @@ SELECT %s
 FROM _accounts a
 LEFT JOIN %s r ON (r.счётдт = a.code OR r.счёткт = a.code) AND r.period <= %s
 WHERE a.plan = %s
-GROUP BY a.code, a.name, a.kind
-ORDER BY a.code`, selectCols, table, d.Placeholder(1), d.Placeholder(2))
+GROUP BY %s
+ORDER BY a.code`, selectCols, table, d.Placeholder(1), d.Placeholder(2), groupBy)
 
 	rows, err := db.Query(ctx, query, asOf, planName)
 	if err != nil {
@@ -260,11 +309,13 @@ ORDER BY a.code`, selectCols, table, d.Placeholder(1), d.Placeholder(2))
 	for rows.Next() {
 		var code, name, kind string
 		dests := []any{&code, &name, &kind}
-		var extraVals []any
 		for range resourceCols {
 			var v float64
-			extraVals = append(extraVals, &v)
 			dests = append(dests, &v)
+		}
+		subVals := make([]sql.NullString, len(subconto))
+		for i := range subconto {
+			dests = append(dests, &subVals[i])
 		}
 		if err := rows.Scan(dests...); err != nil {
 			return nil, err
@@ -289,6 +340,14 @@ ORDER BY a.code`, selectCols, table, d.Placeholder(1), d.Placeholder(2))
 				row[col] = dtVal - ktVal
 			}
 			ei++
+		}
+		for i := range subconto {
+			col := metadata.SubcontoColumn(i + 1)
+			if subVals[i].Valid {
+				row[col] = subVals[i].String
+			} else {
+				row[col] = ""
+			}
 		}
 		result = append(result, row)
 	}
@@ -352,6 +411,58 @@ ORDER BY a.code`, selectCols, table, d.Placeholder(1), d.Placeholder(2), d.Place
 		result = append(result, row)
 	}
 	return result, rows.Err()
+}
+
+// subcontoArg извлекает значение субконто из строки движения. Поддерживает обе
+// формы адресации из DSL: краткую по номеру (Дв.СубконтоN → ключ субконто<N>) и
+// именованную (Дв.Субконто.<Имя> → ключ субконто_<имя>).
+func subcontoArg(row map[string]any, idx int, name string) any {
+	if v := ciGet(row, metadata.SubcontoColumn(idx)); v != nil {
+		return v
+	}
+	if v := ciGet(row, "субконто_"+strings.ToLower(name)); v != nil {
+		return v
+	}
+	return nil
+}
+
+// validateSubconto проверяет, что в строке движения нет присваиваний несуществующим
+// субконто. Главный урок аудита (Plans/44): неизвестное субконто — ошибка проведения,
+// а не молчаливая потеря данных.
+func validateSubconto(row map[string]any, ar *metadata.AccountRegister) error {
+	declared := make(map[string]bool, len(ar.Subconto))
+	for _, s := range ar.Subconto {
+		declared[strings.ToLower(s.Name)] = true
+	}
+	n := len(ar.Subconto)
+	for k := range row {
+		lk := strings.ToLower(k)
+		switch {
+		case strings.HasPrefix(lk, "субконто_"):
+			nm := strings.TrimPrefix(lk, "субконто_")
+			if !declared[nm] {
+				return fmt.Errorf("неизвестное субконто %q (объявлены: %s)", nm, declaredSubcontoNames(ar))
+			}
+		case strings.HasPrefix(lk, "субконто"):
+			numPart := strings.TrimPrefix(lk, "субконто")
+			idx, err := strconv.Atoi(numPart)
+			if err != nil {
+				continue // не нумерованное субконто (напр. опечатка) — пропускаем
+			}
+			if idx < 1 || idx > n {
+				return fmt.Errorf("субконто%d не существует (объявлено субконто: %d)", idx, n)
+			}
+		}
+	}
+	return nil
+}
+
+func declaredSubcontoNames(ar *metadata.AccountRegister) string {
+	names := make([]string, len(ar.Subconto))
+	for i, s := range ar.Subconto {
+		names[i] = s.Name
+	}
+	return strings.Join(names, ", ")
 }
 
 func nullStr(s string) any {

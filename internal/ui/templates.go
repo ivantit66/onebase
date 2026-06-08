@@ -2479,15 +2479,18 @@ const tplAccountReg = `
   <th>{{t $.Lang "Дт"}}</th>
   <th>{{t $.Lang "Кт"}}</th>
   {{range .Register.Resources}}<th>{{.DisplayName $.Lang}}</th>{{end}}
+  {{range .Register.Subconto}}<th>{{.DisplayName $.Lang}}</th>{{end}}
   <th>{{t $.Lang "Регистратор"}}</th>
 </tr></thead>
 <tbody>
 {{range .Rows}}
+{{$row := .}}
 <tr>
   <td style="white-space:nowrap">{{fmtDate (index . "period")}}</td>
   <td><code>{{index . "счётдт"}}</code></td>
   <td><code>{{index . "счёткт"}}</code></td>
-  {{range $.Register.Resources}}<td>{{str (index $ (lower .Name))}}</td>{{end}}
+  {{range $.Register.Resources}}<td>{{str (index $row (lower .Name))}}</td>{{end}}
+  {{range $i, $s := $.Register.Subconto}}<td>{{str (index $row (print "субконто" (add $i 1)))}}</td>{{end}}
   <td style="color:#94a3b8;font-size:12px">{{index . "регистратор"}}</td>
 </tr>
 {{end}}
@@ -2518,6 +2521,7 @@ const tplAccountReg = `
 <table><thead><tr>
   <th style="width:100px">{{t $.Lang "Счёт"}}</th>
   <th>{{t $.Lang "Наименование"}}</th>
+  {{range .Register.Subconto}}<th>{{.DisplayName $.Lang}}</th>{{end}}
   {{range .Register.Resources}}
   <th style="text-align:right">{{.DisplayName $.Lang}} {{t $.Lang "Дт"}}</th>
   <th style="text-align:right">{{.DisplayName $.Lang}} {{t $.Lang "Кт"}}</th>
@@ -2530,6 +2534,7 @@ const tplAccountReg = `
 <tr>
   <td><code>{{index . "code"}}</code></td>
   <td>{{index . "name"}}</td>
+  {{range $i, $s := $.Register.Subconto}}<td>{{str (index $row (print "субконто" (add $i 1)))}}</td>{{end}}
   {{range $.Register.Resources}}
   {{$col := lower .Name}}
   <td style="text-align:right;font-family:monospace">{{str (index $row (print $col "_дт"))}}</td>

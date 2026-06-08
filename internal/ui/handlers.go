@@ -2341,41 +2341,33 @@ func (s *Server) loadTPRefOptions(ctx context.Context, entity *metadata.Entity) 
 
 // resolveRegisterRows enriches register movement rows with human-readable values:
 // recorder_label = "TypeName №Num от Date", dimension UUID values → catalog names.
-func (s *Server) resolveRegisterRows(ctx context.Context, rows []map[string]any, reg *metadata.Register) {
-	// Резолвим UUID и в измерениях, и в атрибутах: reference-атрибут
-	// (например Организация) тоже хранит UUID и должен показываться именем.
-	refFields := append(append([]metadata.Field{}, reg.Dimensions...), reg.Attributes...)
+// refCol описывает колонку строки, значение которой — UUID объекта RefEntity и
+// должно быть заменено на наименование. Пустой RefEntity → поиск по всем сущностям
+// (legacy string-колонки, хранящие UUID).
+type refCol struct {
+	Key       string
+	RefEntity string
+}
 
+// resolveRefColumns заменяет UUID-значения в указанных колонках строк на
+// наименования соответствующих объектов. Общее ядро для регистров накопления и
+// регистра бухгалтерии (субконто).
+func (s *Server) resolveRefColumns(ctx context.Context, rows []map[string]any, cols []refCol) {
 	// Build lookup: RefEntity → set of UUIDs to resolve
 	entityUUIDs := make(map[string]map[string]string) // entityName → {uuid: label}
 	for _, row := range rows {
-		for _, f := range refFields {
-			if f.RefEntity == "" {
-				// Для не-reference полей тоже проверим — вдруг там UUID
-				// (legacy string-измерения, хранящие UUID).
-				v := asString(row[f.Name])
-				if v != "" {
-					if _, err := uuid.Parse(v); err == nil {
-						if entityUUIDs[""] == nil {
-							entityUUIDs[""] = make(map[string]string)
-						}
-						entityUUIDs[""][v] = ""
-					}
-				}
-				continue
-			}
-			v := asString(row[f.Name])
+		for _, c := range cols {
+			v := asString(row[c.Key])
 			if v == "" {
 				continue
 			}
 			if _, err := uuid.Parse(v); err != nil {
 				continue
 			}
-			entName := f.RefEntity
-			if entityUUIDs[entName] == nil {
-				entityUUIDs[entName] = make(map[string]string)
+			if entityUUIDs[c.RefEntity] == nil {
+				entityUUIDs[c.RefEntity] = make(map[string]string)
 			}
-			entityUUIDs[entName][v] = ""
+			entityUUIDs[c.RefEntity][v] = ""
 		}
 	}
 
@@ -2406,9 +2398,31 @@ func (s *Server) resolveRegisterRows(ctx context.Context, rows []map[string]any,
 		}
 	}
 
-	// enrich each row
 	for _, row := range rows {
-		// recorder label
+		for _, c := range cols {
+			v := asString(row[c.Key])
+			if v == "" {
+				continue
+			}
+			if label, found := uuidToLabel[v]; found && label != "" {
+				row[c.Key] = label
+			}
+		}
+	}
+}
+
+func (s *Server) resolveRegisterRows(ctx context.Context, rows []map[string]any, reg *metadata.Register) {
+	// Резолвим UUID и в измерениях, и в атрибутах: reference-атрибут
+	// (например Организация) тоже хранит UUID и должен показываться именем.
+	refFields := append(append([]metadata.Field{}, reg.Dimensions...), reg.Attributes...)
+	cols := make([]refCol, len(refFields))
+	for i, f := range refFields {
+		cols[i] = refCol{Key: f.Name, RefEntity: f.RefEntity}
+	}
+	s.resolveRefColumns(ctx, rows, cols)
+
+	// recorder label
+	for _, row := range rows {
 		recType, _ := row["recorder_type"].(string)
 		recIDStr := asString(row["recorder"])
 		if recType != "" && recIDStr != "" {
@@ -2422,17 +2436,23 @@ func (s *Server) resolveRegisterRows(ctx context.Context, rows []map[string]any,
 				}
 			}
 		}
-		// dimension/attribute UUID → name
-		for _, f := range refFields {
-			v := asString(row[f.Name])
-			if v == "" {
-				continue
-			}
-			if label, found := uuidToLabel[v]; found && label != "" {
-				row[f.Name] = label
-			}
-		}
 	}
+}
+
+// resolveAccountRows резолвит reference-субконто (хранятся под ключами субконто<N>)
+// в наименования. String/enum-субконто оставляет как есть.
+func (s *Server) resolveAccountRows(ctx context.Context, rows []map[string]any, ar *metadata.AccountRegister) {
+	var cols []refCol
+	for i, f := range ar.Subconto {
+		if f.RefEntity == "" {
+			continue
+		}
+		cols = append(cols, refCol{Key: metadata.SubcontoColumn(i + 1), RefEntity: f.RefEntity})
+	}
+	if len(cols) == 0 {
+		return
+	}
+	s.resolveRefColumns(ctx, rows, cols)
 }
 
 // asString returns a string from row values that may be string or []byte

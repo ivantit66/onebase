@@ -688,6 +688,53 @@ func (tr *translator) findAccountRegister(name string) *metadata.AccountRegister
 	return nil
 }
 
+// translateAccountFilter переводит токены фильтра виртуальной таблицы регистра
+// бухгалтерии, временно регистрируя в colMap разрешение имён, специфичных для ВТ:
+// «Счёт» → a.code и «СубконтоN» / «<ИмяСубконто>» → r.субконтоN. Изменения
+// откатываются после перевода, чтобы не повлиять на внешний запрос.
+func (tr *translator) translateAccountFilter(ar *metadata.AccountRegister, tokens []tok) string {
+	if tr.colMap == nil {
+		tr.colMap = make(map[string]string)
+	}
+	saved := make(map[string]*string)
+	set := func(k, v string) {
+		if old, ok := tr.colMap[k]; ok {
+			s := old
+			saved[k] = &s
+		} else {
+			saved[k] = nil
+		}
+		tr.colMap[k] = v
+	}
+	set("счёт", "a.code")
+	set("счет", "a.code")
+	for i := range ar.Subconto {
+		col := metadata.SubcontoColumn(i + 1)
+		set(strings.ToLower(col), "r."+col)
+		set(strings.ToLower(ar.Subconto[i].Name), "r."+col)
+	}
+	res := tr.translateFilterTokens(tokens)
+	for k, v := range saved {
+		if v == nil {
+			delete(tr.colMap, k)
+		} else {
+			tr.colMap[k] = *v
+		}
+	}
+	return res
+}
+
+// accountSubcontoSelect returns SELECT and GROUP BY fragments that roll account
+// balances/turnovers out by every declared subconto (aliased субконтоN).
+func accountSubcontoSelect(ar *metadata.AccountRegister) (selCols []string, groupCols []string) {
+	for i := range ar.Subconto {
+		col := metadata.SubcontoColumn(i + 1)
+		selCols = append(selCols, "r."+col+" AS "+col)
+		groupCols = append(groupCols, "r."+col)
+	}
+	return selCols, groupCols
+}
+
 // buildAccountVT generates a SQL subquery for an accounting register virtual table.
 func (tr *translator) buildAccountVT(vtKind, regName string, args [][]tok) (subq, alias string, err error) {
 	ar := tr.findAccountRegister(regName)
@@ -717,7 +764,12 @@ func (tr *translator) genAccountBalances(ar *metadata.AccountRegister, args [][]
 		)
 	}
 
+	subSel, subGroup := accountSubcontoSelect(ar)
+
 	selectList := "a.code AS счёт, a.name AS наименование"
+	if len(subSel) > 0 {
+		selectList += ", " + strings.Join(subSel, ", ")
+	}
 	if len(resCols) > 0 {
 		selectList += ", " + strings.Join(resCols, ", ")
 	}
@@ -740,13 +792,16 @@ func (tr *translator) genAccountBalances(ar *metadata.AccountRegister, args [][]
 		sb.WriteString(strings.Join(conds, " AND "))
 	}
 	if len(args) > 1 && len(args[1]) > 0 {
-		if s := tr.translateFilterTokens(args[1]); s != "" {
+		if s := tr.translateAccountFilter(ar, args[1]); s != "" {
 			sb.WriteString(" WHERE (")
 			sb.WriteString(s)
 			sb.WriteString(")")
 		}
 	}
 	sb.WriteString(" GROUP BY a.code, a.name")
+	if len(subGroup) > 0 {
+		sb.WriteString(", " + strings.Join(subGroup, ", "))
+	}
 
 	return sb.String(), alias, nil
 }
@@ -764,7 +819,12 @@ func (tr *translator) genAccountTurnovers(ar *metadata.AccountRegister, args [][
 		)
 	}
 
+	subSel, subGroup := accountSubcontoSelect(ar)
+
 	selectList := "a.code AS счёт, a.name AS наименование"
+	if len(subSel) > 0 {
+		selectList += ", " + strings.Join(subSel, ", ")
+	}
 	if len(resCols) > 0 {
 		selectList += ", " + strings.Join(resCols, ", ")
 	}
@@ -791,7 +851,18 @@ func (tr *translator) genAccountTurnovers(ar *metadata.AccountRegister, args [][
 		sb.WriteString(" AND ")
 		sb.WriteString(strings.Join(conds, " AND "))
 	}
-	sb.WriteString(" GROUP BY a.code, a.name HAVING SUM(CASE WHEN r.id IS NOT NULL THEN 1 ELSE 0 END) > 0")
+	if len(args) > 2 && len(args[2]) > 0 {
+		if s := tr.translateAccountFilter(ar, args[2]); s != "" {
+			sb.WriteString(" WHERE (")
+			sb.WriteString(s)
+			sb.WriteString(")")
+		}
+	}
+	sb.WriteString(" GROUP BY a.code, a.name")
+	if len(subGroup) > 0 {
+		sb.WriteString(", " + strings.Join(subGroup, ", "))
+	}
+	sb.WriteString(" HAVING SUM(CASE WHEN r.id IS NOT NULL THEN 1 ELSE 0 END) > 0")
 
 	return sb.String(), alias, nil
 }

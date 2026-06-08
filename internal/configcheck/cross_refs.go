@@ -187,6 +187,21 @@ func CheckCrossRefs(proj *project.Project, roles []*auth.Role) []Issue {
 		}
 	}
 
+	// Регистры бухгалтерии → типы субконто ссылаются на существующие сущности.
+	// Ловит опечатки вида reference:НесуществующийСправочник в блоке subconto,
+	// которые иначе всплыли бы только при проведении (no such column / битый JOIN).
+	for _, ar := range proj.AccountRegisters {
+		for _, s := range ar.Subconto {
+			if metadata.IsReference(s.Type) {
+				target := metadata.RefName(s.Type)
+				if !cats.has(target) && !docs.has(target) {
+					add("accountregs", ar.Name, "Регистр бухгалтерии",
+						fmt.Sprintf("субконто %q ссылается на несуществующую сущность %q", s.Name, target))
+				}
+			}
+		}
+	}
+
 	// Роли → объекты в правах.
 	for _, r := range roles {
 		checkRefs("roles", r.Name, "Роль", keys(r.Permissions.Catalogs), cats, "справочник")

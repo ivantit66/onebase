@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/ivantit66/onebase/internal/dsl/interpreter"
 )
 
 // MovementsCollector accumulates register movement records written by DSL during OnWrite.
@@ -55,13 +54,62 @@ type RegisterMovements struct {
 func (rm *RegisterMovements) Get(name string) any { return nil }
 func (rm *RegisterMovements) Set(name string, v any) {}
 
+// movementRow оборачивает строку движения. Ведёт себя как MapThis (член →
+// плоский ключ карты в нижнем регистре), но дополнительно поддерживает
+// именованную адресацию субконто: Дв.Субконто.<Имя> пишет плоский ключ
+// субконто_<имя>, который storage разбирает при записи движения. Краткая форма
+// Дв.СубконтоN остаётся обычным членом (ключ субконто<n>).
+type movementRow struct{ m map[string]any }
+
+func (r *movementRow) Get(name string) any {
+	if strings.EqualFold(name, "Субконто") {
+		return &subcontoAccessor{m: r.m}
+	}
+	low := strings.ToLower(name)
+	for k, v := range r.m {
+		if strings.ToLower(k) == low {
+			return v
+		}
+	}
+	return nil
+}
+
+func (r *movementRow) Set(name string, v any) {
+	low := strings.ToLower(name)
+	for k := range r.m {
+		if strings.ToLower(k) == low {
+			r.m[k] = v
+			return
+		}
+	}
+	r.m[low] = v
+}
+
+// subcontoAccessor — объект, возвращаемый Дв.Субконто. Присваивание члену пишет
+// в строку движения плоский ключ субконто_<имя>.
+type subcontoAccessor struct{ m map[string]any }
+
+func (s *subcontoAccessor) Get(name string) any {
+	low := "субконто_" + strings.ToLower(name)
+	for k, v := range s.m {
+		if strings.ToLower(k) == low {
+			return v
+		}
+	}
+	return nil
+}
+
+func (s *subcontoAccessor) Set(name string, v any) {
+	s.m["субконто_"+strings.ToLower(name)] = v
+}
+
 // CallMethod implements interpreter.MethodCallable.
 func (rm *RegisterMovements) CallMethod(method string, args []any) any {
 	switch strings.ToLower(method) {
 	case "добавить", "add":
 		row := make(map[string]any)
 		rm.collector.pending[rm.name] = append(rm.collector.pending[rm.name], row)
-		return &interpreter.MapThis{M: row}
+		return &movementRow{m: row}
 	case "очистить", "clear":
 		rm.collector.pending[rm.name] = nil
 		return nil

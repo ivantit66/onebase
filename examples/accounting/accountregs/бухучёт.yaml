@@ -4,3 +4,8 @@ accounts: Основной
 resources:
   - name: Сумма
     type: number
+subconto:
+  - name: Контрагент
+    type: reference:Контрагент
+  - name: Номенклатура
+    type: reference:Номенклатура

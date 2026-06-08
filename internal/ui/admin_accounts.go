@@ -45,6 +45,7 @@ func (s *Server) accountRegMovements(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	s.resolveAccountRows(r.Context(), rows, ar)
 	s.render(w, r, "page-accountreg-movements", map[string]any{
 		"Register": ar,
 		"Rows":     rows,
@@ -77,11 +78,13 @@ func (s *Server) accountRegBalances(w http.ResponseWriter, r *http.Request) {
 		planName = chart.Name
 	}
 
-	rows, err := s.store.AccountBalances(r.Context(), ar.Name, planName, asOf, ar.Resources)
+	rows, err := s.store.AccountBalances(r.Context(), ar.Name, planName, asOf, ar.Resources, ar.Subconto)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+
+	s.resolveAccountRows(r.Context(), rows, ar)
 
 	// Sort rows by code
 	sort.Slice(rows, func(i, j int) bool {
