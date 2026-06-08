@@ -407,23 +407,6 @@ details[open] summary::before{content:"▼ "}
 .breadcrumb span{color:#94a3b8;padding:0 2px}
 /* Чтобы контент не накрывало панелью сообщений */
 body{padding-bottom:32px}
-/* Панель сообщений (как «Окно сообщений» в 1С) */
-#ob-msg-bar{position:fixed;left:0;right:0;bottom:0;z-index:300;background:#fff;border-top:1px solid #cbd5e1;box-shadow:0 -2px 8px rgba(0,0,0,.08);font-family:system-ui,sans-serif;font-size:13px;color:#1e293b;transform:translateY(calc(100% - 30px));transition:transform .18s ease}
-#ob-msg-bar.open{transform:translateY(0)}
-#ob-msg-bar.hidden{display:none}
-#ob-msg-head{height:30px;display:flex;align-items:center;padding:0 10px;cursor:pointer;background:#f1f5f9;user-select:none;gap:10px}
-#ob-msg-head .ttl{font-weight:600;color:#334155;flex:1;display:flex;align-items:center;gap:8px}
-#ob-msg-head .cnt{background:#ef4444;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700;min-width:18px;text-align:center;display:none}
-#ob-msg-head .cnt.show{display:inline-block}
-#ob-msg-head .arr{color:#64748b;font-size:11px;width:14px;text-align:center}
-#ob-msg-bar.open #ob-msg-head .arr{transform:rotate(180deg)}
-#ob-msg-head button{background:none;border:none;color:#64748b;cursor:pointer;font-size:12px;padding:4px 8px;border-radius:5px}
-#ob-msg-head button:hover{background:#e2e8f0;color:#1e293b}
-#ob-msg-list{max-height:200px;overflow-y:auto;padding:6px 0;background:#fff}
-#ob-msg-list .it{padding:5px 14px;border-bottom:1px solid #f1f5f9;display:flex;gap:10px;align-items:flex-start;font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word}
-#ob-msg-list .it:last-child{border-bottom:none}
-#ob-msg-list .it .t{color:#94a3b8;flex-shrink:0;font-size:11px;padding-top:1px}
-#ob-msg-list .empty{padding:10px 14px;color:#94a3b8;font-style:italic}
 /* ИИ-помощник: плавающая кнопка и панель чата (план 48, F3) */
 #ob-ai-btn{position:fixed;right:18px;bottom:44px;z-index:320;width:48px;height:48px;border-radius:50%;background:#2563eb;color:#fff;border:none;cursor:pointer;font-size:22px;box-shadow:0 4px 14px rgba(37,99,235,.4);display:none}
 #ob-ai-btn:hover{background:#1d4ed8}
@@ -442,45 +425,24 @@ body{padding-bottom:32px}
 #ob-ai-input{flex:1;resize:none;border:1px solid #cbd5e1;border-radius:8px;padding:8px;font-size:13px;font-family:inherit;max-height:90px}
 #ob-ai-send{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:0 14px;cursor:pointer;font-size:14px}
 #ob-ai-send:disabled{opacity:.5;cursor:default}
+/* Панель сообщений (как «Окно сообщений» в 1С) */
+#ob-msg-bar{position:fixed;left:0;right:0;bottom:0;z-index:300;background:#fff;border-top:1px solid #cbd5e1;box-shadow:0 -2px 8px rgba(0,0,0,.08);font-family:system-ui,sans-serif;font-size:13px;color:#1e293b;transform:translateY(calc(100% - 30px));transition:transform .18s ease}
+#ob-msg-bar.open{transform:translateY(0)}
+#ob-msg-bar.hidden{display:none}
+#ob-msg-head{height:30px;display:flex;align-items:center;padding:0 10px;cursor:pointer;background:#f1f5f9;user-select:none;gap:10px}
+#ob-msg-head .ttl{font-weight:600;color:#334155;flex:1;display:flex;align-items:center;gap:8px}
+#ob-msg-head .cnt{background:#ef4444;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700;min-width:18px;text-align:center;display:none}
+#ob-msg-head .cnt.show{display:inline-block}
+#ob-msg-head .arr{color:#64748b;font-size:11px;width:14px;text-align:center}
+#ob-msg-bar.open #ob-msg-head .arr{transform:rotate(180deg)}
+#ob-msg-head button{background:none;border:none;color:#64748b;cursor:pointer;font-size:12px;padding:4px 8px;border-radius:5px}
+#ob-msg-head button:hover{background:#e2e8f0;color:#1e293b}
+#ob-msg-list{max-height:200px;overflow-y:auto;padding:6px 0;background:#fff}
+#ob-msg-list .it{padding:5px 14px;border-bottom:1px solid #f1f5f9;display:flex;gap:10px;align-items:flex-start;font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word}
+#ob-msg-list .it:last-child{border-bottom:none}
+#ob-msg-list .it .t{color:#94a3b8;flex-shrink:0;font-size:11px;padding-top:1px}
+#ob-msg-list .empty{padding:10px 14px;color:#94a3b8;font-style:italic}
 </style>
-<script>
-(function(){
-  if(window.__obMsgInit)return;window.__obMsgInit=true;
-  function init(){
-    if(document.getElementById('ob-msg-bar'))return;
-    var bar=document.createElement('div');bar.id='ob-msg-bar';bar.className='hidden';
-    bar.innerHTML='<div id="ob-msg-head"><span class="ttl">Сообщения <span class="cnt" id="ob-msg-cnt">0</span></span><button type="button" id="ob-msg-clear" title="Очистить">Очистить</button><span class="arr">▲</span></div><div id="ob-msg-list"><div class="empty">Сообщений нет</div></div>';
-    document.body.appendChild(bar);
-    var list=document.getElementById('ob-msg-list'),cnt=document.getElementById('ob-msg-cnt'),head=document.getElementById('ob-msg-head'),btnClear=document.getElementById('ob-msg-clear');
-    var prevSig=sessionStorage.getItem('obMsgSig')||'',prevOpen=sessionStorage.getItem('obMsgOpen')==='1',lastHtml='';
-    function fmtTime(ts){try{var d=new Date(ts);var h=String(d.getHours()).padStart(2,'0'),m=String(d.getMinutes()).padStart(2,'0'),s=String(d.getSeconds()).padStart(2,'0');return h+':'+m+':'+s;}catch(e){return '';}}
-    function escapeHtml(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
-    function render(msgs){
-      if(!msgs||!msgs.length){bar.classList.add('hidden');bar.classList.remove('open');list.innerHTML='<div class="empty">Сообщений нет</div>';lastHtml='';cnt.classList.remove('show');prevSig='';sessionStorage.removeItem('obMsgSig');return;}
-      bar.classList.remove('hidden');
-      var html='';for(var i=0;i<msgs.length;i++){var m=msgs[i];html+='<div class="it"><span class="t">'+fmtTime(m.time)+'</span><span>'+escapeHtml(m.text)+'</span></div>';}
-      if(html!==lastHtml){
-        // не перерисовывать пока пользователь выделяет текст внутри панели — иначе сбрасывается выделение
-        var sel=window.getSelection?window.getSelection():null;
-        if(!(sel&&!sel.isCollapsed&&sel.anchorNode&&list.contains(sel.anchorNode))){
-          list.innerHTML=html;lastHtml=html;list.scrollTop=list.scrollHeight;
-        }
-      }
-      cnt.textContent=msgs.length;cnt.classList.add('show');
-      var sig=msgs.length?msgs[msgs.length-1].time+'|'+msgs.length:'';
-      if(sig!==prevSig){bar.classList.add('open');prevOpen=true;sessionStorage.setItem('obMsgOpen','1');}
-      else if(prevOpen){bar.classList.add('open');}
-      prevSig=sig;sessionStorage.setItem('obMsgSig',sig);
-    }
-    head.addEventListener('click',function(e){if(e.target===btnClear)return;bar.classList.toggle('open');prevOpen=bar.classList.contains('open');sessionStorage.setItem('obMsgOpen',prevOpen?'1':'0');});
-    btnClear.addEventListener('click',function(e){e.stopPropagation();fetch('/ui/messages/clear',{method:'POST'}).then(function(){render([]);});});
-    function load(){fetch('/ui/messages').then(function(r){return r.json();}).then(function(d){render(d.messages||[]);}).catch(function(){});}
-    load();setInterval(load,3000);
-    document.addEventListener('submit',function(){setTimeout(load,400);},true);
-  }
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
-})();
-</script>
 <script>
 (function(){
   if(window.__obAiInit)return;window.__obAiInit=true;
@@ -523,6 +485,44 @@ body{padding-bottom:32px}
     send.addEventListener('click',doSend);
     input.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();doSend();}});
     btn.style.display='';
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+})();
+</script>
+<script>
+(function(){
+  if(window.__obMsgInit)return;window.__obMsgInit=true;
+  function init(){
+    if(document.getElementById('ob-msg-bar'))return;
+    var bar=document.createElement('div');bar.id='ob-msg-bar';bar.className='hidden';
+    bar.innerHTML='<div id="ob-msg-head"><span class="ttl">Сообщения <span class="cnt" id="ob-msg-cnt">0</span></span><button type="button" id="ob-msg-clear" title="Очистить">Очистить</button><span class="arr">▲</span></div><div id="ob-msg-list"><div class="empty">Сообщений нет</div></div>';
+    document.body.appendChild(bar);
+    var list=document.getElementById('ob-msg-list'),cnt=document.getElementById('ob-msg-cnt'),head=document.getElementById('ob-msg-head'),btnClear=document.getElementById('ob-msg-clear');
+    var prevSig=sessionStorage.getItem('obMsgSig')||'',prevOpen=sessionStorage.getItem('obMsgOpen')==='1',lastHtml='';
+    function fmtTime(ts){try{var d=new Date(ts);var h=String(d.getHours()).padStart(2,'0'),m=String(d.getMinutes()).padStart(2,'0'),s=String(d.getSeconds()).padStart(2,'0');return h+':'+m+':'+s;}catch(e){return '';}}
+    function escapeHtml(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+    function render(msgs){
+      if(!msgs||!msgs.length){bar.classList.add('hidden');bar.classList.remove('open');list.innerHTML='<div class="empty">Сообщений нет</div>';lastHtml='';cnt.classList.remove('show');prevSig='';sessionStorage.removeItem('obMsgSig');return;}
+      bar.classList.remove('hidden');
+      var html='';for(var i=0;i<msgs.length;i++){var m=msgs[i];html+='<div class="it"><span class="t">'+fmtTime(m.time)+'</span><span>'+escapeHtml(m.text)+'</span></div>';}
+      if(html!==lastHtml){
+        // не перерисовывать пока пользователь выделяет текст внутри панели — иначе сбрасывается выделение
+        var sel=window.getSelection?window.getSelection():null;
+        if(!(sel&&!sel.isCollapsed&&sel.anchorNode&&list.contains(sel.anchorNode))){
+          list.innerHTML=html;lastHtml=html;list.scrollTop=list.scrollHeight;
+        }
+      }
+      cnt.textContent=msgs.length;cnt.classList.add('show');
+      var sig=msgs.length?msgs[msgs.length-1].time+'|'+msgs.length:'';
+      if(sig!==prevSig){bar.classList.add('open');prevOpen=true;sessionStorage.setItem('obMsgOpen','1');}
+      else if(prevOpen){bar.classList.add('open');}
+      prevSig=sig;sessionStorage.setItem('obMsgSig',sig);
+    }
+    head.addEventListener('click',function(e){if(e.target===btnClear)return;bar.classList.toggle('open');prevOpen=bar.classList.contains('open');sessionStorage.setItem('obMsgOpen',prevOpen?'1':'0');});
+    btnClear.addEventListener('click',function(e){e.stopPropagation();fetch('/ui/messages/clear',{method:'POST'}).then(function(){render([]);});});
+    function load(){fetch('/ui/messages').then(function(r){return r.json();}).then(function(d){render(d.messages||[]);}).catch(function(){});}
+    load();setInterval(load,3000);
+    document.addEventListener('submit',function(){setTimeout(load,400);},true);
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })();
