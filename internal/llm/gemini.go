@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 )
 
@@ -16,8 +15,8 @@ func completeGemini(ctx context.Context, hc *http.Client, rm ResolvedModel, req 
 	if base == "" {
 		base = "https://generativelanguage.googleapis.com/v1beta"
 	}
-	endpoint := fmt.Sprintf("%s/models/%s:generateContent?key=%s",
-		strings.TrimRight(base, "/"), rm.Model.Name, url.QueryEscape(rm.Endpoint.APIKey))
+	endpoint := fmt.Sprintf("%s/models/%s:generateContent",
+		strings.TrimRight(base, "/"), rm.Model.Name)
 
 	type part struct {
 		Text       string         `json:"text,omitempty"`
@@ -63,7 +62,7 @@ func completeGemini(ctx context.Context, hc *http.Client, rm ResolvedModel, req 
 		body["systemInstruction"] = map[string]any{"parts": []part{{Text: req.System}}}
 	}
 
-	data, err := postJSON(ctx, hc, "gemini", endpoint, body, nil, rm.Endpoint.Headers)
+	data, err := postJSON(ctx, hc, "gemini", endpoint, body, map[string]string{"x-goog-api-key": rm.Endpoint.APIKey}, rm.Endpoint.Headers)
 	if err != nil {
 		return ChatResponse{}, err
 	}

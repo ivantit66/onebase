@@ -150,7 +150,7 @@ func (h *handler) cfgAdminAITest(w http.ResponseWriter, r *http.Request) {
 		MaxTokens: 64,
 	})
 	if err != nil {
-		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
+		writeJSON(w, 200, map[string]any{"ok": false, "error": llm.SafeErr(err)})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "text": resp.Text, "model": resp.Model})

@@ -1,6 +1,9 @@
 package llm
 
-import "fmt"
+import (
+	"fmt"
+	"regexp"
+)
 
 // Role — роль сообщения в диалоге.
 type Role string
@@ -91,4 +94,16 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+var secretQueryRe = regexp.MustCompile(`([?&](?:key|api_key|apikey|access_token|token)=)[^&\s"']+`)
+
+// SafeErr возвращает текст ошибки с замаскированными секретами в query-параметрах URL.
+// Защита второго уровня на случай, если провайдер или base_url содержит ключ в URL,
+// а *url.Error встраивает полный URL в строку ошибки.
+func SafeErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	return secretQueryRe.ReplaceAllString(err.Error(), "${1}REDACTED")
 }

@@ -68,7 +68,7 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 	tools, exec := s.aiTools(r)
 	resp, err := runner.RunWithTools(r.Context(), "чат", chatReq, tools, exec)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"error": err.Error()})
+		writeJSON(w, http.StatusOK, map[string]any{"error": llm.SafeErr(err)})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "text": resp.Text, "model": resp.Model})

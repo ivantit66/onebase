@@ -95,7 +95,7 @@ func (h *handler) cfgAIAssist(w http.ResponseWriter, r *http.Request) {
 		Messages: []llm.Message{llm.UserText(prompt)},
 	})
 	if err != nil {
-		writeJSON(w, 200, map[string]any{"error": err.Error()})
+		writeJSON(w, 200, map[string]any{"error": llm.SafeErr(err)})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "text": resp.Text, "model": resp.Model})
