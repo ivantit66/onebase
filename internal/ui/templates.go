@@ -486,8 +486,11 @@ body{padding-bottom:32px}
   aside a{padding:10px 14px}
   .btn{padding:10px 18px}
   .filter-body{grid-template-columns:1fr}
-  /* широкие таблицы скроллятся по горизонтали внутри своей области, а не «едет» вся страница */
+  /* широкие таблицы-гриды скроллятся по горизонтали внутри своей области, а не «едет» вся страница */
   main table{display:block;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
+  /* …но верстальные key/value-таблицы (О программе, карточка задания, вывод
+     обработки) остаются обычными: текст переносится, ширина не схлопывается. */
+  main table.tbl-plain{display:table;white-space:normal;overflow:visible}
 }
 </style>
 <script>
@@ -536,7 +539,7 @@ body{padding-bottom:32px}
 const tplNav = `
 {{define "nav"}}
 <header class="topbar">
-  <button class="nav-toggle" type="button" aria-label="{{t $.Lang "Меню"}}" onclick="document.body.classList.toggle('nav-open')">&#9776;</button>
+  <button class="nav-toggle" type="button" aria-label="{{t $.Lang "Меню"}}" aria-controls="ob-nav" aria-expanded="false" onclick="obNavToggle()">&#9776;</button>
   <a href="/ui/" class="topbar-title" style="text-decoration:none;color:inherit" title="{{t $.Lang "Главная"}}">{{if .Cfg.Logo}}<img src="/ui/logo" alt="" style="height:22px;max-width:90px;vertical-align:middle;margin-right:6px;border-radius:2px">{{end}}⚡ {{if .Cfg.AppName}}{{.Cfg.AppName}}{{else}}onebase{{end}}</a>
   <div class="sys-menu">
     <button class="sys-btn" onclick="var d=document.getElementById('sysd');d.classList.toggle('open')">&#9881; {{t $.Lang "Система"}} &#9660;</button>
@@ -573,7 +576,7 @@ const tplNav = `
 </nav>
 {{end}}
 <div class="app-body">
-<aside>
+<aside id="ob-nav">
   {{if not .Subsystems}}<a href="/ui/" style="display:block;padding:12px 14px 8px;color:#7dd3fc;font-weight:700;font-size:15px;text-decoration:none">{{t $.Lang "Главная"}}</a>{{end}}
   {{if .CollapsibleNav}}
   {{range .Nav}}
@@ -592,16 +595,28 @@ const tplNav = `
 </aside>
 <script>
 (function(){
-  // Закрытие мобильного drawer: тап по затемнению (вне меню и вне кнопки ☰)
-  // снимает класс nav-open. На десктопе меню всегда видно, обработчик безвреден.
-  if(window.__obNavInit)return;window.__obNavInit=true;
+  if(window.__obNavInit)return;window.__obNavInit=true; // ob-nav drawer
+  // Управление мобильным drawer. Состояние — класс body.nav-open; синхронно
+  // обновляем aria-expanded кнопки ☰ (для скринридеров). На десктопе меню видно
+  // всегда, обработчики безвредны (nav-open там не выставляется).
+  function setNav(open){
+    document.body.classList.toggle('nav-open',open);
+    var btn=document.querySelector('.nav-toggle');
+    if(btn)btn.setAttribute('aria-expanded',open?'true':'false');
+  }
+  window.obNavToggle=function(){setNav(!document.body.classList.contains('nav-open'));};
+  // Тап по затемнению (вне меню и вне кнопки ☰) закрывает drawer.
   document.addEventListener('click',function(e){
     if(!document.body.classList.contains('nav-open'))return;
     if(e.target.closest&&e.target.closest('.nav-toggle'))return;
-    var as=document.querySelector('.app-body>aside');
+    var as=document.getElementById('ob-nav');
     if(as&&as.contains(e.target))return;
-    document.body.classList.remove('nav-open');
+    setNav(false);
   },true);
+  // Esc закрывает drawer (клавиатурная доступность).
+  document.addEventListener('keydown',function(e){
+    if(e.key==='Escape'&&document.body.classList.contains('nav-open'))setNav(false);
+  });
 })();
 </script>
 {{if .CollapsibleNav}}
@@ -2082,7 +2097,7 @@ const tplProcessor = `
 {{if .RunError}}
   <div class="error">{{.RunError}}</div>
 {{else if .Messages}}
-  <table><tbody>
+  <table class="tbl-plain"><tbody>
   {{range .Messages}}<tr><td style="font-family:monospace;font-size:13px;padding:6px 12px;border-bottom:1px solid #f1f5f9">{{.}}</td></tr>{{end}}
   </tbody></table>
 {{else}}
@@ -2101,7 +2116,7 @@ const tplAbout = `
 <h2>{{t $.Lang "О программе"}}</h2>
 <div class="card" style="max-width:560px">
   {{if .Cfg.Logo}}<div style="text-align:center;margin-bottom:20px"><img src="/ui/logo" alt="Logo" style="max-height:160px;max-width:360px"></div>{{end}}
-  <table style="width:100%;border-collapse:collapse">
+  <table class="tbl-plain" style="width:100%;border-collapse:collapse">
     {{if .User}}
     <tr>
       <td style="padding:14px 0;border-bottom:1px solid #f1f5f9;color:#64748b;width:180px;font-size:14px">{{t $.Lang "Пользователь"}}</td>
@@ -2460,7 +2475,7 @@ const tplScheduled = `
 </div>
 
 <div class="card" style="margin-bottom:20px">
-<table style="width:100%;border-collapse:collapse">
+<table class="tbl-plain" style="width:100%;border-collapse:collapse">
   <tr><td style="padding:6px 12px;color:#64748b;width:160px">{{t $.Lang "Расписание"}}</td><td><code>{{.Job.Schedule}}</code></td></tr>
   <tr><td style="padding:6px 12px;color:#64748b">{{t $.Lang "Обработка"}}</td><td>{{.Job.Processor}}</td></tr>
   <tr><td style="padding:6px 12px;color:#64748b">{{t $.Lang "При ошибке"}}</td><td>{{.Job.OnError}}</td></tr>

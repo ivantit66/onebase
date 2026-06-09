@@ -1538,12 +1538,14 @@ document.addEventListener('DOMContentLoaded', function(){
 .managed-tab-btn:hover{color:#1a4a80;background:#f5f8ff}
 .managed-tab-btn.active{color:#1a4a80;border-bottom-color:#1a4a80;font-weight:600}
 /* Мобильная адаптация управляемых форм (этап 45): заголовки вкладок скроллятся
-   по горизонтали, поля в одну колонку. ТЧ-таблицы (.tp-table) уже скроллятся
-   общим правилом main table из tplHead. */
+   по горизонтали, поля в одну колонку. ТЧ по умолчанию рендерятся SlickGrid'ом
+   (.ob-grid) — у него собственный горизонтальный скролл; .tp-table (режим
+   NoGrid и виртуальные ТЧ) скроллятся общим правилом main table из tplHead. */
 @media (max-width:820px){
   .managed-tab-headers{overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch}
   .managed-tab-btn{white-space:nowrap}
   .form-group-box{padding:10px 12px}
+  .ob-grid{max-width:100%}
 }
 </style>
 
