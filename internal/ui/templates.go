@@ -821,6 +821,10 @@ const tplList = `
   data-folder-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}?parent={{index $row "id"}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}"
   data-mark-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/delete?mark=1"
   data-del-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/delete"
+  data-posted="{{if index $row "posted"}}1{{end}}"
+  data-marked="{{if index $row "deletion_mark"}}1{{end}}"
+  data-unpost-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/unpost"
+  data-unmark-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/delete?mark=0"
   data-open-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}{{if $.CurrentSubsystem}}?subsystem={{$.CurrentSubsystem}}{{end}}">
   {{range $.Entity.Fields}}
     {{if eq .Name "Наименование"}}
@@ -874,6 +878,10 @@ const tplList = `
   data-folder-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}?parent={{index $row "id"}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}"
   data-mark-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/delete?mark=1"
   data-del-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/delete"
+  data-posted="{{if index $row "posted"}}1{{end}}"
+  data-marked="{{if index $row "deletion_mark"}}1{{end}}"
+  data-unpost-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/unpost"
+  data-unmark-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/delete?mark=0"
   data-open-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}{{if $.CurrentSubsystem}}?subsystem={{$.CurrentSubsystem}}{{end}}">
   {{if eq (str $.Entity.Kind) "document"}}
     <td style="text-align:center">
@@ -912,6 +920,7 @@ const tplList = `
 <script>
 var _isAdmin={{if .IsAdmin}}true{{else}}false{{end}};
 var _canDelete={{if .CanDelete}}true{{else}}false{{end}};
+var _canUnpost={{if .CanUnpost}}true{{else}}false{{end}};
 var _listSel=null;
 function listRowClick(e,tr){
   if(e.target.closest('a,button'))return;
@@ -964,6 +973,8 @@ function listCtxMenu(e,tr){
     if(!isPredefined)items.push({label:'{{t $.Lang "Пометить на удаление"}}',danger:true,fn:function(){listSubmit(tr.dataset.markUrl,'Пометить на удаление?');}});
     else items.push({label:'{{t $.Lang "Предопределённый — нельзя удалить"}}',disabled:true});
   }
+  if(_canUnpost&&tr.dataset.posted==='1')items.push({label:'{{t $.Lang "Отменить проведение"}}',fn:function(){listSubmit(tr.dataset.unpostUrl,'{{t $.Lang "Отменить проведение?"}}');}});
+  if(_canDelete&&tr.dataset.marked==='1'&&!isPredefined)items.push({label:'{{t $.Lang "Снять пометку на удаление"}}',fn:function(){listSubmit(tr.dataset.unmarkUrl,'{{t $.Lang "Снять пометку на удаление?"}}');}});
   if(_isAdmin&&!isPredefined)items.push({label:'{{t $.Lang "Удалить навсегда"}}',danger:true,fn:function(){listSubmit(tr.dataset.delUrl,'Удалить запись навсегда?');}});
   items.forEach(function(item){
     var mi=document.createElement('div');
@@ -1023,13 +1034,20 @@ const tplForm = `
   {{end}}
   {{if .CanWrite}}<button class="btn btn-secondary" type="submit" name="_action" value="" form="main-form">{{t $.Lang "Записать"}}</button>{{end}}
   {{if .Entity.Posting}}
-    {{if $.CanPost}}<button class="btn btn-primary" type="submit" name="_action" value="post" form="main-form">{{t $.Lang "Провести"}}</button>{{end}}
-    {{if $.CanPost}}<button class="btn btn-post" type="submit" name="_action" value="post_and_close" form="main-form">{{t $.Lang "Провести и закрыть"}}</button>{{end}}
+    {{if ne (index .Values "deletion_mark") "true"}}
+      {{if $.CanPost}}<button class="btn btn-primary" type="submit" name="_action" value="post" form="main-form">{{t $.Lang "Провести"}}</button>{{end}}
+      {{if $.CanPost}}<button class="btn btn-post" type="submit" name="_action" value="post_and_close" form="main-form">{{t $.Lang "Провести и закрыть"}}</button>{{end}}
+    {{end}}
     {{if not .IsNew}}
       {{if eq (index .Values "posted") "true"}}
         {{if $.CanUnpost}}<button class="btn btn-sm" style="background:#e2e8f0;color:#374151" form="form-unpost" type="submit">{{t $.Lang "Отменить проведение"}}</button>{{end}}
       {{end}}
     {{end}}
+  {{end}}
+  {{if and .CanDelete (not .IsNew) (eq (index .Values "deletion_mark") "true")}}
+    <form method="POST" action="/ui/{{lower (str .Entity.Kind)}}/{{.Entity.Name}}/{{.ID}}/delete?mark=0" style="display:inline">
+      <button class="btn btn-sm btn-secondary" type="submit">{{t $.Lang "Снять пометку на удаление"}}</button>
+    </form>
   {{end}}
   {{if not .IsNew}}
     <a href="/ui/{{lower (str .Entity.Kind)}}/{{.Entity.Name}}/{{.ID}}/history" class="btn btn-sm btn-secondary">{{t $.Lang "История"}}</a>

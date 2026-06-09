@@ -329,13 +329,20 @@ const tplManagedForm = `
   {{end}}
   {{if .CanWrite}}<button class="btn btn-secondary" type="submit" name="_action" value="" form="main-form">Записать</button>{{end}}
   {{if .Entity.Posting}}
-    {{if .CanPost}}<button class="btn btn-primary" type="submit" name="_action" value="post" form="main-form">Провести</button>{{end}}
-    {{if .CanPost}}<button class="btn btn-post" type="submit" name="_action" value="post_and_close" form="main-form">Провести и закрыть</button>{{end}}
+    {{if ne (index .Values "deletion_mark") "true"}}
+      {{if .CanPost}}<button class="btn btn-primary" type="submit" name="_action" value="post" form="main-form">Провести</button>{{end}}
+      {{if .CanPost}}<button class="btn btn-post" type="submit" name="_action" value="post_and_close" form="main-form">Провести и закрыть</button>{{end}}
+    {{end}}
     {{if not .IsNew}}
       {{if eq (index .Values "posted") "true"}}
         {{if $.CanUnpost}}<button class="btn btn-sm" style="background:#e2e8f0;color:#374151" form="form-unpost" type="submit">Отменить проведение</button>{{end}}
       {{end}}
     {{end}}
+  {{end}}
+  {{if and .CanDelete (not .IsNew) (eq (index .Values "deletion_mark") "true")}}
+    <form method="POST" action="/ui/{{lower (str .Entity.Kind)}}/{{.Entity.Name}}/{{.ID}}/delete?mark=0" style="display:inline">
+      <button class="btn btn-sm btn-secondary" type="submit">Снять пометку на удаление</button>
+    </form>
   {{end}}
   {{if not .IsNew}}
     <a href="/ui/{{lower (str .Entity.Kind)}}/{{.Entity.Name}}/{{.ID}}/history" class="btn btn-sm btn-secondary">История</a>
