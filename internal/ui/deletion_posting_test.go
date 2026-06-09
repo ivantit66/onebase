@@ -118,3 +118,44 @@ func TestDocWriterPost_BlockedWhenMarked(t *testing.T) {
 		t.Error("помеченный документ не должен быть проведён")
 	}
 }
+
+// Пометка проведённого документа на удаление авто-отменяет проведение
+// (чистит движения, снимает posted). Снятие пометки проведение не возвращает.
+func TestServerMarkForDeletion_AutoUnposts(t *testing.T) {
+	ctx, db, s, dp, doc := newPostingDoc(t)
+	w := postOne(t, dp)
+
+	var mov int
+	db.QueryRow(ctx, "SELECT COUNT(*) FROM рег_остаткитоваров").Scan(&mov)
+	if mov != 1 {
+		t.Fatalf("до пометки ожидалось 1 движение, получили %d", mov)
+	}
+
+	if err := s.markForDeletion(ctx, doc, w.obj.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	db.QueryRow(ctx, "SELECT COUNT(*) FROM рег_остаткитоваров").Scan(&mov)
+	if mov != 0 {
+		t.Errorf("после пометки движений должно быть 0, получили %d", mov)
+	}
+	var posted, marked bool
+	db.QueryRow(ctx, "SELECT posted, deletion_mark FROM поступлениетоваров LIMIT 1").Scan(&posted, &marked)
+	if posted {
+		t.Error("проведение должно быть снято при пометке")
+	}
+	if !marked {
+		t.Error("документ должен быть помечен на удаление")
+	}
+
+	// Снятие пометки проведение НЕ возвращает.
+	if err := s.markForDeletion(ctx, doc, w.obj.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	db.QueryRow(ctx, "SELECT posted, deletion_mark FROM поступлениетоваров LIMIT 1").Scan(&posted, &marked)
+	if posted {
+		t.Error("снятие пометки не должно проводить документ")
+	}
+	if marked {
+		t.Error("пометка должна быть снята")
+	}
+}
