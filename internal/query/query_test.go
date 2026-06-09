@@ -332,6 +332,71 @@ func TestCompile_DateFuncs_EnglishAliases(t *testing.T) {
 	}
 }
 
+// Скалярные математические 1С-функции (ОКР/АБС/ЦЕЛ) должны транслироваться в
+// нативный SQL, а не уходить в БД сырым русским именем (issue #39).
+// SQL case-insensitive — идентификаторы лоуэркейсятся транслятором, ключевые
+// слова (AS) остаются в верхнем регистре.
+func TestCompile_MathFuncs_SQLite(t *testing.T) {
+	cases := []struct {
+		src  string
+		want string
+	}{
+		{`ВЫБРАТЬ ОКР(Сумма, 2) ИЗ РегистрНакопления.Х`, "round(сумма, 2)"},
+		{`ВЫБРАТЬ ОКР(Сумма) ИЗ РегистрНакопления.Х`, "round(сумма)"},
+		{`ВЫБРАТЬ АБС(Сумма) ИЗ РегистрНакопления.Х`, "abs(сумма)"},
+		{`ВЫБРАТЬ ЦЕЛ(Сумма) ИЗ РегистрНакопления.Х`, "cast(сумма AS integer)"},
+		// пример из issue: ОКР поверх агрегата СУММА.
+		{`ВЫБРАТЬ ОКР(СУММА(Выручка), 0) КАК Значение ИЗ РегистрНакопления.Х`, "round(SUM(выручка), 0)"},
+	}
+	for _, c := range cases {
+		r, err := query.Compile(c.src, query.CompileOpts{Dialect: storage.SQLiteDialect{}})
+		if err != nil {
+			t.Errorf("Compile(%q): %v", c.src, err)
+			continue
+		}
+		if !strings.Contains(r.SQL, c.want) {
+			t.Errorf("Compile(%q):\n  got: %s\n want substring: %s", c.src, r.SQL, c.want)
+		}
+	}
+}
+
+func TestCompile_MathFuncs_PG(t *testing.T) {
+	cases := []struct {
+		src  string
+		want string
+	}{
+		{`ВЫБРАТЬ ОКР(Сумма, 2) ИЗ РегистрНакопления.Х`, "round(сумма, 2)"},
+		{`ВЫБРАТЬ АБС(Сумма) ИЗ РегистрНакопления.Х`, "abs(сумма)"},
+		// На PG усечение к нулю — TRUNC, а не CAST AS INTEGER (тот округлял бы).
+		{`ВЫБРАТЬ ЦЕЛ(Сумма) ИЗ РегистрНакопления.Х`, "trunc(сумма)"},
+	}
+	for _, c := range cases {
+		r, err := query.Compile(c.src, query.CompileOpts{}) // default = PG
+		if err != nil {
+			t.Errorf("Compile(%q): %v", c.src, err)
+			continue
+		}
+		if !strings.Contains(r.SQL, c.want) {
+			t.Errorf("Compile(%q):\n  got: %s\n want substring: %s", c.src, r.SQL, c.want)
+		}
+	}
+}
+
+// Английские алиасы математики (round/abs/int) тоже должны разворачиваться, в
+// частности int → усечение, согласованное с DSL-builtin int/цел.
+func TestCompile_MathFuncs_EnglishAliases(t *testing.T) {
+	r, err := query.Compile(
+		`ВЫБРАТЬ int(Сумма) ИЗ РегистрНакопления.Х`,
+		query.CompileOpts{Dialect: storage.SQLiteDialect{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.SQL, "cast(сумма AS integer)") {
+		t.Errorf("int не развернулся в усечение: %s", r.SQL)
+	}
+}
+
 // вариант 1 — внешний ГДЕ на атрибут поверх .Остатки().
 // Inner subquery должен экспортировать атрибут, чтобы outer WHERE сработал.
 func TestCompile_Balances_OuterWhereOnAttribute(t *testing.T) {

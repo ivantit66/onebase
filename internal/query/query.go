@@ -203,12 +203,12 @@ func sourceToTable(typeUpper, entityName string) string {
 // --- virtual table kind maps ---
 
 var accumVTKinds = map[string]string{
-	"ОСТАТКИ":               "balances",
-	"BALANCES":              "balances",
-	"ОБОРОТЫ":               "turnovers",
-	"TURNOVERS":             "turnovers",
-	"ОСТАТКИИОБОРОТЫ":       "balances_turnovers",
-	"BALANCESANDTURNOVERS":  "balances_turnovers",
+	"ОСТАТКИ":              "balances",
+	"BALANCES":             "balances",
+	"ОБОРОТЫ":              "turnovers",
+	"TURNOVERS":            "turnovers",
+	"ОСТАТКИИОБОРОТЫ":      "balances_turnovers",
+	"BALANCESANDTURNOVERS": "balances_turnovers",
 }
 
 // periodicityLevels maps RU/EN periodicity keywords (for Обороты third argument)
@@ -392,7 +392,7 @@ func sqlAgg(ident string) (string, bool) {
 type querySection int
 
 const (
-	sectionSelect  querySection = iota
+	sectionSelect querySection = iota
 	sectionFrom
 	sectionWhere
 	sectionGroupBy
@@ -402,12 +402,12 @@ const (
 )
 
 type refDimInfo struct {
-	fieldName  string // lowercase dim name: "номенклатура"
-	idCol      string // DB column: "номенклатура_id"
-	joinAlias  string // SQL alias for auto-JOIN: "ref_номенклатура"
-	joinTable  string // referenced catalog table: "номенклатура"
-	isVT       bool   // true: VT outer query, JOIN ON uses fieldName instead of idCol
-	refIsDoc   bool   // true: referenced entity is a document → display "номер", not "наименование"
+	fieldName string // lowercase dim name: "номенклатура"
+	idCol     string // DB column: "номенклатура_id"
+	joinAlias string // SQL alias for auto-JOIN: "ref_номенклатура"
+	joinTable string // referenced catalog table: "номенклатура"
+	isVT      bool   // true: VT outer query, JOIN ON uses fieldName instead of idCol
+	refIsDoc  bool   // true: referenced entity is a document → display "номер", not "наименование"
 }
 
 func (rd refDimInfo) displayCol() string {
@@ -901,8 +901,8 @@ func (tr *translator) genAccountTurnovers(ar *metadata.AccountRegister, args [][
 func (tr *translator) genBalances(reg *metadata.Register, args [][]tok) (string, string, error) {
 	tableName := metadata.RegisterTableName(reg.Name)
 	alias := "остатки_" + strings.ToLower(reg.Name)
-	dims := dimCols(reg.Dimensions)        // actual col names for GROUP BY / WHERE
-	selDims := dimSelCols(reg.Dimensions)  // aliased names for SELECT
+	dims := dimCols(reg.Dimensions)       // actual col names for GROUP BY / WHERE
+	selDims := dimSelCols(reg.Dimensions) // aliased names for SELECT
 
 	var cols []string
 	cols = append(cols, selDims...)
@@ -1613,9 +1613,9 @@ func translate(tokens []tok, opts CompileOpts) (Result, error) {
 	if opts.Params == nil {
 		opts.Params = map[string]any{}
 	}
-	// расширяем НачалоДня/Год/Месяц/... в SQL-эквиваленты
+	// расширяем НачалоДня/Год/Месяц/ОКР/АБС/ЦЕЛ/... в SQL-эквиваленты
 	// до основной трансляции, чтобы остальные шаги ничего не знали о них.
-	tokens = rewriteDateFuncs(tokens, dialectName(opts.Dialect))
+	tokens = rewriteScalarFuncs(tokens, dialectName(opts.Dialect))
 	tokens = rewriteStrftime(tokens, dialectName(opts.Dialect))
 	tr := &translator{
 		tokens:      tokens,
@@ -1905,9 +1905,10 @@ func dialectName(d storage.Dialect) string {
 	return d.Name()
 }
 
-// dateFuncRewrite — пара prefix/suffix токенов, которые оборачивают исходный
-// аргумент функции даты. Например, Год(x) в SQLite → CAST(strftime('%Y', x) AS INTEGER).
-type dateFuncRewrite struct {
+// funcRewrite — пара prefix/suffix токенов, которые оборачивают исходный
+// аргумент скалярной функции. Например, Год(x) в SQLite → CAST(strftime('%Y', x)
+// AS INTEGER), а ОКР(x, 2) → ROUND(x, 2).
+type funcRewrite struct {
 	prefix []tok
 	suffix []tok
 }
@@ -1921,59 +1922,77 @@ func tokenizeFragment(s string) []tok {
 	return t
 }
 
-// dateFuncRewrites возвращает таблицу замен для функций даты под нужный диалект.
-// Ключи в нижнем регистре, сопоставление case-insensitive.
-func dateFuncRewrites(dialect string) map[string]dateFuncRewrite {
-	rw := func(prefix, suffix string) dateFuncRewrite {
-		return dateFuncRewrite{prefix: tokenizeFragment(prefix), suffix: tokenizeFragment(suffix)}
+// scalarFuncRewrites возвращает таблицу замен скалярных 1С-функций под нужный
+// диалект: функции даты (Год/НачалоДня/…) и математика (ОКР/АБС/ЦЕЛ). Ключи в
+// нижнем регистре, сопоставление case-insensitive. Набор имён согласован со
+// скриптовым DSL (см. interpreter/builtins.go), чтобы Окр/Абс/Цел работали и в
+// модуле, и в тексте запроса (issue #39).
+func scalarFuncRewrites(dialect string) map[string]funcRewrite {
+	rw := func(prefix, suffix string) funcRewrite {
+		return funcRewrite{prefix: tokenizeFragment(prefix), suffix: tokenizeFragment(suffix)}
+	}
+	// Математика. ROUND/ABS существуют в обоих диалектах с той же сигнатурой,
+	// поэтому общие. round/abs-алиасы — для симметрии с RU-именами (фактически
+	// no-op, нативный SQL и так бы прошёл).
+	m := map[string]funcRewrite{
+		"окр":   rw("ROUND(", ")"),
+		"round": rw("ROUND(", ")"),
+		"абс":   rw("ABS(", ")"),
+		"abs":   rw("ABS(", ")"),
 	}
 	switch dialect {
 	case "sqlite":
-		return map[string]dateFuncRewrite{
-			"началодня":   rw("date(", ")"),
-			"startofday":  rw("date(", ")"),
-			"конецдня":    rw("datetime(date(", "), '+1 day', '-1 second')"),
-			"endofday":    rw("datetime(date(", "), '+1 day', '-1 second')"),
-			"началомесяца": rw("date(", ", 'start of month')"),
-			"startofmonth": rw("date(", ", 'start of month')"),
-			"началогода":   rw("date(", ", 'start of year')"),
-			"startofyear":  rw("date(", ", 'start of year')"),
-			"год":          rw("CAST(strftime('%Y',", ") AS INTEGER)"),
-			"year":         rw("CAST(strftime('%Y',", ") AS INTEGER)"),
-			"месяц":        rw("CAST(strftime('%m',", ") AS INTEGER)"),
-			"month":        rw("CAST(strftime('%m',", ") AS INTEGER)"),
-			"день":         rw("CAST(strftime('%d',", ") AS INTEGER)"),
-			"day":          rw("CAST(strftime('%d',", ") AS INTEGER)"),
-		}
+		// Цел — усечение к нулю (как decimal.Truncate(0) в DSL). В SQLite
+		// CAST(x AS INTEGER) усекает к нулю.
+		m["цел"] = rw("CAST(", " AS INTEGER)")
+		m["int"] = rw("CAST(", " AS INTEGER)")
+		m["началодня"] = rw("date(", ")")
+		m["startofday"] = rw("date(", ")")
+		m["конецдня"] = rw("datetime(date(", "), '+1 day', '-1 second')")
+		m["endofday"] = rw("datetime(date(", "), '+1 day', '-1 second')")
+		m["началомесяца"] = rw("date(", ", 'start of month')")
+		m["startofmonth"] = rw("date(", ", 'start of month')")
+		m["началогода"] = rw("date(", ", 'start of year')")
+		m["startofyear"] = rw("date(", ", 'start of year')")
+		m["год"] = rw("CAST(strftime('%Y',", ") AS INTEGER)")
+		m["year"] = rw("CAST(strftime('%Y',", ") AS INTEGER)")
+		m["месяц"] = rw("CAST(strftime('%m',", ") AS INTEGER)")
+		m["month"] = rw("CAST(strftime('%m',", ") AS INTEGER)")
+		m["день"] = rw("CAST(strftime('%d',", ") AS INTEGER)")
+		m["day"] = rw("CAST(strftime('%d',", ") AS INTEGER)")
 	default: // pg
-		return map[string]dateFuncRewrite{
-			"началодня":    rw("date_trunc('day',", ")"),
-			"startofday":   rw("date_trunc('day',", ")"),
-			"конецдня":     rw("(date_trunc('day',", ") + INTERVAL '1 day' - INTERVAL '1 microsecond')"),
-			"endofday":     rw("(date_trunc('day',", ") + INTERVAL '1 day' - INTERVAL '1 microsecond')"),
-			"началомесяца": rw("date_trunc('month',", ")"),
-			"startofmonth": rw("date_trunc('month',", ")"),
-			"началогода":   rw("date_trunc('year',", ")"),
-			"startofyear":  rw("date_trunc('year',", ")"),
-			// CAST(... AS INTEGER) — портативно (PG поддерживает обе формы,
-			// :: не транслируется нашим токенизатором).
-			"год":   rw("CAST(EXTRACT(YEAR FROM", ") AS INTEGER)"),
-			"year":  rw("CAST(EXTRACT(YEAR FROM", ") AS INTEGER)"),
-			"месяц": rw("CAST(EXTRACT(MONTH FROM", ") AS INTEGER)"),
-			"month": rw("CAST(EXTRACT(MONTH FROM", ") AS INTEGER)"),
-			"день":  rw("CAST(EXTRACT(DAY FROM", ") AS INTEGER)"),
-			"day":   rw("CAST(EXTRACT(DAY FROM", ") AS INTEGER)"),
-		}
+		// Цел — усечение к нулю. В PG CAST(x AS INTEGER) округлял бы (half-even),
+		// поэтому берём TRUNC, которое усекает к нулю.
+		m["цел"] = rw("TRUNC(", ")")
+		m["int"] = rw("TRUNC(", ")")
+		m["началодня"] = rw("date_trunc('day',", ")")
+		m["startofday"] = rw("date_trunc('day',", ")")
+		m["конецдня"] = rw("(date_trunc('day',", ") + INTERVAL '1 day' - INTERVAL '1 microsecond')")
+		m["endofday"] = rw("(date_trunc('day',", ") + INTERVAL '1 day' - INTERVAL '1 microsecond')")
+		m["началомесяца"] = rw("date_trunc('month',", ")")
+		m["startofmonth"] = rw("date_trunc('month',", ")")
+		m["началогода"] = rw("date_trunc('year',", ")")
+		m["startofyear"] = rw("date_trunc('year',", ")")
+		// CAST(... AS INTEGER) — портативно (PG поддерживает обе формы,
+		// :: не транслируется нашим токенизатором).
+		m["год"] = rw("CAST(EXTRACT(YEAR FROM", ") AS INTEGER)")
+		m["year"] = rw("CAST(EXTRACT(YEAR FROM", ") AS INTEGER)")
+		m["месяц"] = rw("CAST(EXTRACT(MONTH FROM", ") AS INTEGER)")
+		m["month"] = rw("CAST(EXTRACT(MONTH FROM", ") AS INTEGER)")
+		m["день"] = rw("CAST(EXTRACT(DAY FROM", ") AS INTEGER)")
+		m["day"] = rw("CAST(EXTRACT(DAY FROM", ") AS INTEGER)")
 	}
+	return m
 }
 
-// rewriteDateFuncs обходит токены и разворачивает Год(x), НачалоДня(x), … в
-// соответствующий SQL-шаблон диалекта. Раскрытие — на уровне токенов:
-// сохраняются tIdent/tStr/tLParen и т.п., чтобы основной транслятор обработал
-// внутренний аргумент через обычные правила (resolve ref dims, параметры и т.п.).
-// Рекурсивно для вложенных вызовов: Месяц(НачалоМесяца(x)) тоже разворачивается.
-func rewriteDateFuncs(tokens []tok, dialect string) []tok {
-	rewrites := dateFuncRewrites(dialect)
+// rewriteScalarFuncs обходит токены и разворачивает скалярные 1С-функции —
+// Год(x), НачалоДня(x), ОКР(x, n), ЦЕЛ(x), … — в соответствующий SQL-шаблон
+// диалекта. Раскрытие — на уровне токенов: сохраняются tIdent/tStr/tLParen и
+// т.п., чтобы основной транслятор обработал внутренний аргумент через обычные
+// правила (resolve ref dims, параметры и т.п.). Рекурсивно для вложенных
+// вызовов: Месяц(НачалоМесяца(x)) и ОКР(СУММА(x), 0) тоже разворачиваются.
+func rewriteScalarFuncs(tokens []tok, dialect string) []tok {
+	rewrites := scalarFuncRewrites(dialect)
 	var out []tok
 	for i := 0; i < len(tokens); i++ {
 		t := tokens[i]
@@ -2003,7 +2022,7 @@ func rewriteDateFuncs(tokens []tok, dialect string) []tok {
 					continue
 				}
 				inner := tokens[i+2 : end]
-				inner = rewriteDateFuncs(inner, dialect) // рекурсия
+				inner = rewriteScalarFuncs(inner, dialect) // рекурсия
 				out = append(out, rw.prefix...)
 				out = append(out, inner...)
 				out = append(out, rw.suffix...)
