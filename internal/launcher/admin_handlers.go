@@ -90,17 +90,25 @@ func (h *handler) cfgAdminUsers(w http.ResponseWriter, r *http.Request) {
 			listTitle = "Убрать из списка выбора"
 			listStyle = "background:#2563eb;color:#fff"
 		}
+		aiIcon := "🤖"
+		aiTitle := "Разрешить ИИ-чату доступ к данным (без прав администратора)"
+		aiStyle := "background:#e2e8f0;color:#374151"
+		if u.AIDataAccess {
+			aiTitle = "Запретить ИИ-чату доступ к данным"
+			aiStyle = "background:#7c3aed;color:#fff"
+		}
 		langLabel := "—"
 		if u.Lang != "" {
 			langLabel = u.Lang
 		}
-		html += fmt.Sprintf(`<tr%s><td style="padding:5px 8px">%s</td><td style="padding:5px 8px">%s</td><td style="padding:5px 8px;text-align:center">%s</td><td style="padding:5px 8px;color:#888">%s</td><td style="padding:5px 8px"><button onclick="cfgUserLang('%s','%s')" style="background:#7c3aed;color:#fff;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px">%s</button></td><td style="padding:5px 8px;white-space:nowrap"><button onclick="cfgUserRoles('%s')" style="background:#0e7490;color:#fff;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-right:4px">Роли</button><button onclick="cfgUserPasswd('%s')" style="background:#f59e0b;color:#fff;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-right:4px">Пароль</button><button onclick="cfgUserDenyPasswd('%s',%v)" title="%s" style="%s;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-right:4px">%s</button><button onclick="cfgUserShowInList('%s',%v)" title="%s" style="%s;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-right:4px">%s</button><button onclick="cfgUserDel('%s')" style="color:#c00;background:none;border:none;cursor:pointer;font-size:11px" title="Удалить">✕</button></td></tr>`,
+		html += fmt.Sprintf(`<tr%s><td style="padding:5px 8px">%s</td><td style="padding:5px 8px">%s</td><td style="padding:5px 8px;text-align:center">%s</td><td style="padding:5px 8px;color:#888">%s</td><td style="padding:5px 8px"><button onclick="cfgUserLang('%s','%s')" style="background:#7c3aed;color:#fff;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px">%s</button></td><td style="padding:5px 8px;white-space:nowrap"><button onclick="cfgUserRoles('%s')" style="background:#0e7490;color:#fff;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-right:4px">Роли</button><button onclick="cfgUserPasswd('%s')" style="background:#f59e0b;color:#fff;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-right:4px">Пароль</button><button onclick="cfgUserDenyPasswd('%s',%v)" title="%s" style="%s;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-right:4px">%s</button><button onclick="cfgUserShowInList('%s',%v)" title="%s" style="%s;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-right:4px">%s</button><button onclick="cfgUserAIData('%s',%v)" title="%s" style="%s;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-right:4px">%s</button><button onclick="cfgUserDel('%s')" style="color:#c00;background:none;border:none;cursor:pointer;font-size:11px" title="Удалить">✕</button></td></tr>`,
 			bg, escHTML(u.Login), escHTML(u.FullName), admin, u.CreatedAt.Format("02.01.2006"),
 			u.ID, u.Lang, langLabel,
 			u.ID,
 			u.ID,
 			u.ID, u.DenyPasswdChange, denyTitle, denyStyle, denyIcon,
 			u.ID, u.ShowInList, listTitle, listStyle, listIcon,
+			u.ID, u.AIDataAccess, aiTitle, aiStyle, aiIcon,
 			u.ID)
 	}
 	if len(users) == 0 {
@@ -187,6 +195,12 @@ function cfgUserDenyPasswd(id,current){
 }
 function cfgUserShowInList(id,current){
   fetch('/bases/` + b.ID + `/configurator/admin/users/show-in-list',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,show:!current})})
+    .then(function(r){return r.json()}).then(function(r){
+      if(r.error){alert('Ошибка: '+r.error)}else{cfgAdmin('users')}
+    })
+}
+function cfgUserAIData(id,current){
+  fetch('/bases/` + b.ID + `/configurator/admin/users/ai-data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,allow:!current})})
     .then(function(r){return r.json()}).then(function(r){
       if(r.error){alert('Ошибка: '+r.error)}else{cfgAdmin('users')}
     })
@@ -364,6 +378,35 @@ func (h *handler) cfgAdminUserShowInList(w http.ResponseWriter, r *http.Request)
 	}
 	repo := auth.NewRepo(db)
 	if err := repo.SetShowInList(r.Context(), req.ID, req.Show); err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// cfgAdminUserAIData переключает доступ пользователя к данным ИИ-чата
+// (инструменты описание_данных/выполнить_запрос без прав администратора).
+func (h *handler) cfgAdminUserAIData(w http.ResponseWriter, r *http.Request) {
+	b, err := h.store.Get(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, 404, map[string]any{"error": "not found"})
+		return
+	}
+	var req struct {
+		ID    string `json:"id"`
+		Allow bool   `json:"allow"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]any{"error": err.Error()})
+		return
+	}
+	db, err := getAuthDB(r.Context(), b)
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	repo := auth.NewRepo(db)
+	if err := repo.SetAIDataAccess(r.Context(), req.ID, req.Allow); err != nil {
 		writeJSON(w, 500, map[string]any{"error": err.Error()})
 		return
 	}

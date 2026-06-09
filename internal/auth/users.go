@@ -151,6 +151,14 @@ func (r *Repo) SetShowInList(ctx context.Context, userID string, show bool) erro
 	return err
 }
 
+// SetAIDataAccess toggles the ai_data_access flag for a user.
+func (r *Repo) SetAIDataAccess(ctx context.Context, userID string, allow bool) error {
+	d := r.db.Dialect()
+	q := fmt.Sprintf(`UPDATE _users SET ai_data_access = %s WHERE id = %s`, d.Placeholder(1), d.Placeholder(2))
+	_, err := r.db.Exec(ctx, q, allow, userID)
+	return err
+}
+
 // SetUserLang sets the preferred UI language for a user.
 func (r *Repo) SetUserLang(ctx context.Context, userID, lang string) error {
 	d := r.db.Dialect()
