@@ -24,6 +24,7 @@
 | 17 | [17-scheduled-jobs.md](17-scheduled-jobs.md) | Фоновые / регламентные задания | ✅ Реализовано |
 | 11 | [11-account-register.md](11-account-register.md) | Регистр бухгалтерии (план счетов + проводки) | ✅ Реализовано |
 | 38 | [38-fill-on-based.md](38-fill-on-based.md) | Ввод на основании (ОбработкаЗаполнения) | ✅ Реализовано |
+| 50 | [50-deletion-mark-posting.md](50-deletion-mark-posting.md) | Пометка на удаление ↔ проведение (issue #36) | ✅ Реализовано |
 
 ## Планы развития (roadmap)
 
