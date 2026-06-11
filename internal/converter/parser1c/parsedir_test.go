@@ -375,6 +375,20 @@ func TestParseDirFlatConstantsAndInfoRegs(t *testing.T) {
 	}
 }
 
+// Платформа поддерживает тип enum:Имя (metadata/yaml.go), а конвертер
+// деградировал ссылки на перечисления в string (issue #48 п.5).
+func TestMapTypeEnumRef(t *testing.T) {
+	for _, primary := range []string{"cfg:EnumRef.ВидКонтрагента", "ПеречислениеСсылка.ВидКонтрагента"} {
+		got, note := MapType(FieldType{Primary: primary, RefObject: "ВидКонтрагента"})
+		if got != "enum:ВидКонтрагента" {
+			t.Errorf("%s → %q, ожидалось enum:ВидКонтрагента", primary, got)
+		}
+		if note != "" {
+			t.Errorf("%s: неожиданное предупреждение %q", primary, note)
+		}
+	}
+}
+
 // scanForms находит управляемые формы объекта в Forms/<X>/Ext/Form.xml
 // (issue #26 п.4).
 func TestParseDirFindsForms(t *testing.T) {
