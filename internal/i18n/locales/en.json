@@ -642,5 +642,11 @@
   "Тип графика": "Chart type",
   "Ось X": "X axis",
   "Серии": "Series",
-  "Заполняется из колонок запроса после предпросмотра; изменение правит YAML ниже.": "Filled from query columns after preview; editing updates the YAML below."
+  "Заполняется из колонок запроса после предпросмотра; изменение правит YAML ниже.": "Filled from query columns after preview; editing updates the YAML below.",
+  "id обязателен": "id is required",
+  "Конфигурация не загружена в базу данных. Воспользуйтесь вкладкой «Файлы».": "Configuration is not loaded into the database. Use the \"Files\" tab.",
+  "Нет подключения к БД": "No database connection",
+  "Ошибка загрузки конфигурации": "Configuration load error",
+  "Укажите имя подсистемы": "Specify subsystem name",
+  "Укажите путь к папке XML-выгрузки конфигурации": "Specify the path to the 1C XML export folder"
 }

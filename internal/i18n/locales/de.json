@@ -615,5 +615,11 @@
   "Форма объекта": "Objektformular",
   "есть": "ja",
   "нет управляемых форм.": "keine verwalteten Formulare.",
-  "Длина, Точность": "Länge, Präzision"
+  "Длина, Точность": "Länge, Präzision",
+  "id обязателен": "ID ist erforderlich",
+  "Конфигурация не загружена в базу данных. Воспользуйтесь вкладкой «Файлы».": "Konfiguration ist nicht in die Datenbank geladen. Verwenden Sie die Registerkarte \"Dateien\".",
+  "Нет подключения к БД": "Keine Datenbankverbindung",
+  "Ошибка загрузки конфигурации": "Fehler beim Laden der Konfiguration",
+  "Укажите имя подсистемы": "Geben Sie den Subsystemnamen an",
+  "Укажите путь к папке XML-выгрузки конфигурации": "Geben Sie den Pfad zum XML-Exportordner der 1C-Konfiguration an"
 }

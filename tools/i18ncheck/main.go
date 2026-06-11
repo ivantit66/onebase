@@ -1,8 +1,9 @@
 // i18ncheck — проверка покрытия i18n: собирает все {{t $.Lang "..."}}
-// из шаблонов в internal/ui и internal/launcher, сверяет с JSON-словарями
-// в internal/i18n/locales и сообщает о ключах, которых нет ни в одной
-// локали (кроме ru.json, который служит индексом языков — T() для ru
-// возвращает ключ как есть).
+// из шаблонов в internal/ui и internal/launcher, а также Go-ключи
+// i18nerr.New/Errorf/Wrapf и tr()/s.tr() в нескольких пакетах движка;
+// сверяет с JSON-словарями в internal/i18n/locales и сообщает о ключах,
+// которых нет ни в одной локали (кроме ru.json, который служит индексом
+// языков — T() для ru возвращает ключ как есть).
 //
 // Запуск: go run ./tools/i18ncheck
 // Exit 1 — если найдены непереведённые ключи (используется pre-commit-хуком).
@@ -19,14 +20,35 @@ import (
 	"strings"
 )
 
-var keyPattern = regexp.MustCompile(`\{\{t\s+\$[.\w]*\s+"((?:[^"\\]|\\.)*)"\s*\}\}`)
+// keyPatterns — список регулярных выражений для извлечения i18n-ключей.
+//
+// 1. Шаблонные ключи: {{t $.Lang "..."}} и {{t .Lang "..."}}
+// 2. i18nerr.New("ключ") и i18nerr.Errorf("ключ", args...)
+// 3. i18nerr.Wrapf(err, "ключ", args...)
+// 4. tr(lang, "ключ") и s.tr(lang, "ключ")
+//
+// Ограничение: ключи с Go-экранированием (например \n или \") не раскодируются —
+// такие строки редки в UI-ключах; при необходимости добавьте strconv.Unquote.
+var keyPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`\{\{t\s+\$[.\w]*\s+"((?:[^"\\]|\\.)*)"\s*\}\}`),
+	regexp.MustCompile(`i18nerr\.(?:New|Errorf)\(\s*"((?:[^"\\]|\\.)*)"`),
+	regexp.MustCompile(`i18nerr\.Wrapf\([^,]+,\s*"((?:[^"\\]|\\.)*)"`),
+	regexp.MustCompile(`\btr\(\s*\w+,\s*"((?:[^"\\]|\\.)*)"\s*\)`),
+}
 
 func main() {
 	root, err := repoRoot()
 	if err != nil {
 		fail(err.Error())
 	}
-	keys, err := collectKeys(root, []string{"internal/ui", "internal/launcher"})
+	keys, err := collectKeys(root, []string{
+		"internal/ui",
+		"internal/launcher",
+		"internal/storage",
+		"internal/dsl",
+		"internal/query",
+		"internal/entityservice",
+	})
 	if err != nil {
 		fail(err.Error())
 	}
@@ -116,12 +138,20 @@ func collectKeys(root string, subdirs []string) ([]string, error) {
 			if d.IsDir() || !strings.HasSuffix(path, ".go") {
 				return nil
 			}
+			// Пропускаем тестовые файлы: i18nerr-вызовы в *_test.go
+			// не требуют переводов (тесты проверяют внутреннее поведение,
+			// а не пользовательский интерфейс).
+			if strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return err
 			}
-			for _, m := range keyPattern.FindAllSubmatch(data, -1) {
-				seen[string(m[1])] = struct{}{}
+			for _, p := range keyPatterns {
+				for _, m := range p.FindAllSubmatch(data, -1) {
+					seen[string(m[1])] = struct{}{}
+				}
 			}
 			return nil
 		})
