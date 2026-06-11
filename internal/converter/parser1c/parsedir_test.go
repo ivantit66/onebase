@@ -315,6 +315,66 @@ func TestParseDirFlatCatalog(t *testing.T) {
 	}
 }
 
+const constantXML = `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject>
+  <Constant>
+    <Properties>
+      <Name>ВалютаУчета</Name>
+      <Type><Type xmlns="http://v8.1c.ru/8.1/data/core">xs:string</Type></Type>
+    </Properties>
+  </Constant>
+</MetaDataObject>`
+
+const infoRegFlatXML = `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject>
+  <InformationRegister>
+    <Properties><Name>КурсыВалют</Name></Properties>
+    <ChildObjects>
+      <Dimension><Properties>
+        <Name>Валюта</Name>
+        <Type><Type xmlns="http://v8.1c.ru/8.1/data/core">xs:string</Type></Type>
+      </Properties></Dimension>
+      <Resource><Properties>
+        <Name>Курс</Name>
+        <Type><Type xmlns="http://v8.1c.ru/8.1/data/core">xs:decimal</Type></Type>
+      </Properties></Resource>
+    </ChildObjects>
+  </InformationRegister>
+</MetaDataObject>`
+
+// Константы и регистры сведений тоже бывают «плоскими» (issue #48 п.1:
+// «НЕ ИМПОРТИРОВАНЫ 4 КОНСТАНТЫ»).
+func TestParseDirFlatConstantsAndInfoRegs(t *testing.T) {
+	src := t.TempDir()
+	for dir, files := range map[string]map[string]string{
+		"Constants":            {"ВалютаУчета.xml": constantXML},
+		"InformationRegisters": {"КурсыВалют.xml": infoRegFlatXML},
+	} {
+		if err := os.MkdirAll(filepath.Join(src, dir), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		for name, content := range files {
+			if err := os.WriteFile(filepath.Join(src, dir, name), []byte(content), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+		}
+	}
+
+	dump, err := ParseDir(src)
+	if err != nil {
+		t.Fatalf("ParseDir: %v", err)
+	}
+	if len(dump.Constants) != 1 || dump.Constants[0].Name != "ВалютаУчета" {
+		t.Fatalf("константа из плоского xml не разобрана: %+v", dump.Constants)
+	}
+	if len(dump.InfoRegisters) != 1 || dump.InfoRegisters[0].Name != "КурсыВалют" {
+		t.Fatalf("регистр сведений из плоского xml не разобран: %+v", dump.InfoRegisters)
+	}
+	if len(dump.InfoRegisters[0].Dimensions) != 1 || dump.InfoRegisters[0].Dimensions[0].Name != "Валюта" {
+		t.Fatalf("измерения регистра не разобраны: %+v", dump.InfoRegisters[0].Dimensions)
+	}
+}
+
 // scanForms находит управляемые формы объекта в Forms/<X>/Ext/Form.xml
 // (issue #26 п.4).
 func TestParseDirFindsForms(t *testing.T) {
