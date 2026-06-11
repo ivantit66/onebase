@@ -635,7 +635,10 @@ func workspacePath(baseID string) (string, error) {
 
 func resolveLang(r *http.Request) string {
 	if launcherBundle != nil {
-		return i18n.Resolve("", "ru", r.Header.Get("Accept-Language"), launcherBundle)
+		// baseLang пустой: иначе Resolve возвращает его сразу и до
+		// Accept-Language не доходит (issue #49 п.1); фолбэк "ru" встроен
+		// в Resolve.
+		return i18n.Resolve("", "", r.Header.Get("Accept-Language"), launcherBundle)
 	}
 	return "ru"
 }
