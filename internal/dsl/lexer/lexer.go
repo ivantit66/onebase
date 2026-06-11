@@ -54,6 +54,13 @@ func (l *Lexer) skip() {
 			for l.pos < len(l.input) && l.peek() != '\n' {
 				l.next()
 			}
+		case r == '#':
+			// Директива препроцессора 1С (#Область, #Если…) — пропускаем
+			// строку как комментарий: конвертер 1С→OneBase вырезает их сам,
+			// но копипаст из 1С не должен валить разбор (issue #48 п.2).
+			for l.pos < len(l.input) && l.peek() != '\n' {
+				l.next()
+			}
 		default:
 			return
 		}
