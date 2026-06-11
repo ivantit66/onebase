@@ -128,7 +128,11 @@ func writeProcessorLayouts(groups map[string][]templateSource, outDir string, no
 			lt.Areas[t.Name] = &printform.LayoutArea{Rows: []printform.LayoutRow{{
 				Cells: []printform.LayoutCell{{Text: "TODO: перенесите оформление макета 1С «" + t.Name + "»" + srcNote}},
 			}}}
-			notes.Templates++
+			// notes.Templates НЕ инкрементируем: макеты обработок теперь не
+			// printform-шаблоны, а заготовки src/*.proc.layout.yaml. Они
+			// перечисляются отдельно в секции ProcessorLayouts отчёта, поэтому
+			// строка «Шаблонов (макетов): N → N printform» остаётся честной
+			// (считает только реальные printform макеты документов/справочников).
 		}
 		data, err := yaml.Marshal(&lt)
 		if err != nil {

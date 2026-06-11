@@ -264,6 +264,38 @@ func (p *Project) loadProcessors() error {
 		return fmt.Errorf("project: load processors: %w", err)
 	}
 	p.Processors = procs
+	if err := p.loadProcessorLayouts(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// loadProcessorLayouts подхватывает для каждой обработки заготовку макета
+// src/<имя>.proc.layout.yaml (если она лежит рядом с .proc.os), которую
+// генерирует конвертер 1С→OneBase. Имя файла строится по той же схеме, что и
+// .proc.os (см. converter/writer): нижний регистр, пробелы → подчёркивания.
+// Загруженный макет позже инжектируется в DSL как переменная «Макет» во всех
+// путях запуска обработки.
+//
+// Режим конфигурации из БД (LoadFromDB) работает прозрачно: ExportToDir
+// выгружает ВСЕ файлы конфигурации (включая src/*.proc.layout.yaml) во
+// временный каталог и затем вызывает Load(tmpDir) — поэтому отдельной ветки
+// для БД здесь не требуется, файловая загрузка покрывает оба случая.
+func (p *Project) loadProcessorLayouts() error {
+	srcDir := filepath.Join(p.Dir, "src")
+	for _, proc := range p.Processors {
+		base := strings.ToLower(strings.ReplaceAll(proc.Name, " ", "_"))
+		osPath := filepath.Join(srcDir, base+".proc.os")
+		layoutPath := printform.FindLayoutFile(osPath)
+		if layoutPath == "" {
+			continue
+		}
+		lt, err := printform.LoadLayout(layoutPath)
+		if err != nil {
+			return fmt.Errorf("project: load processor layout %s: %w", layoutPath, err)
+		}
+		proc.Layout = lt
+	}
 	return nil
 }
 

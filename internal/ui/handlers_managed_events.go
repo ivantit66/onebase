@@ -596,6 +596,7 @@ func (s *Server) handleProcessorFormEvent(w http.ResponseWriter, r *http.Request
 				vars["Объект"] = thisObj
 				vars["ЭтотОбъект"] = thisObj
 				vars["Параметры"] = thisObj
+				interpreter.InjectMaket(vars, proc.Layout)
 
 				// Передаём все процедуры формы для вызовов из .form.os.
 				formProcs := make(map[string]*ast.ProcedureDecl, len(program.Procedures))
@@ -670,6 +671,7 @@ func (s *Server) handleProcessorFormEvent(w http.ResponseWriter, r *http.Request
 		dslVars["Параметры"] = paramsThis
 		dslVars["Сообщить"] = msgFunc
 		dslVars["Message"] = msgFunc
+		interpreter.InjectMaket(dslVars, proc.Layout)
 
 		err := s.interp.Run(procDecl, paramsThis, dslVars)
 		if err != nil {

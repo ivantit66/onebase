@@ -64,4 +64,49 @@ func TestWriteTemplatesProcessorLayouts(t *testing.T) {
 	if len(rep.ProcessorLayouts) != 1 || !strings.Contains(rep.String(), "загрузкакурсов.proc.layout.yaml") {
 		t.Errorf("отчёт не упоминает layout: %+v", rep.ProcessorLayouts)
 	}
+	// Макеты обработок (2 области) НЕ должны попадать в счётчик printform-шаблонов
+	// (issue #48 п.4) — там только макет документа «Реализация/Накладная».
+	if rep.Templates != 1 {
+		t.Errorf("Templates (printform-шаблоны): got %d, want 1 (только макет документа)", rep.Templates)
+	}
+}
+
+// writeCommonTemplateSrc создаёт CommonTemplates/<name>/Ext/Template.mxl.
+func writeCommonTemplateSrc(t *testing.T, sourceDir, name string) {
+	t.Helper()
+	ext := filepath.Join(sourceDir, "CommonTemplates", name, "Ext")
+	if err := os.MkdirAll(ext, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ext, "Template.mxl"), []byte("mxl"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+}
+
+// TestWriteTemplatesCommonTemplates — регрессия: общий макет
+// (CommonTemplates/<Имя>/Ext/Template.mxl) по-прежнему даёт
+// printforms/common_<имя>.yaml (issue #48: правка макетов обработок не должна
+// ломать общие макеты).
+func TestWriteTemplatesCommonTemplates(t *testing.T) {
+	src := t.TempDir()
+	out := t.TempDir()
+	writeCommonTemplateSrc(t, src, "ЛоготипКомпании")
+
+	rep := &ConversionReport{}
+	if err := WriteTemplates(src, out, rep); err != nil {
+		t.Fatalf("WriteTemplates: %v", err)
+	}
+
+	want := filepath.Join(out, "printforms", "common_логотипкомпании.yaml")
+	if _, err := os.Stat(want); err != nil {
+		t.Errorf("общий макет должен давать printforms/common_логотипкомпании.yaml: %v", err)
+	}
+	// Общий макет считается printform-шаблоном.
+	if rep.Templates != 1 {
+		t.Errorf("Templates: got %d, want 1 (общий макет)", rep.Templates)
+	}
+	// И в ProcessorLayouts он не попадает.
+	if len(rep.ProcessorLayouts) != 0 {
+		t.Errorf("общий макет не должен попадать в ProcessorLayouts: %+v", rep.ProcessorLayouts)
+	}
 }

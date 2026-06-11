@@ -18,6 +18,17 @@ func NewMaket(lt *printform.LayoutTemplate) *Макет {
 	return &Макет{template: lt}
 }
 
+// InjectMaket adds the «Макет» DSL variable to vars when a layout template is
+// present. With a nil layout it is a no-op (the variable is not added, so DSL
+// without a макет behaves exactly as before). Used by all processor run paths
+// (UI, CLI procrun, scheduler) to expose src/<имя>.proc.layout.yaml as Макет.
+func InjectMaket(vars map[string]any, lt *printform.LayoutTemplate) {
+	if vars == nil || lt == nil {
+		return
+	}
+	vars["Макет"] = NewMaket(lt)
+}
+
 // Get allows property access: Макет.Заголовок → same as Макет.Область("Заголовок").
 func (m *Макет) Get(field string) any {
 	return m.getArea(field)
