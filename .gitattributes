@@ -6,3 +6,7 @@ internal/onec_forms/fixtures/* -text
 # Вендоренный Monaco — минифицированные ассеты, храним байт-в-байт без
 # нормализации EOL, чтобы апгрейд версии давал чистый предсказуемый diff.
 internal/webassets/monaco/** -text
+
+# Встроенные TTF-шрифты для PDF (PT Serif/PT Sans, OFL) — бинарные, без
+# нормализации EOL.
+internal/sheet/fonts/*.ttf binary
