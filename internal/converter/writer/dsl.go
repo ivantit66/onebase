@@ -4,10 +4,34 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/ivantit66/onebase/internal/converter/parser1c"
 )
+
+// preprocDirectiveLow матчит строку-директиву препроцессора 1С (рус/англ),
+// применяется к strings.ToLower(line) — обходит ограничение RE2 на (?i) с кириллицей.
+// \b не используется (RE2 работает только с ASCII-границами); вместо этого
+// после ключевого слова требуется пробел, конец строки или скобка.
+var preprocDirectiveLow = regexp.MustCompile(`^\s*#\s*(область|конецобласти|иначеесли|иначе|конецесли|если|endregion|region|elsif|endif|else|if)(\s|$)`)
+
+// sanitizeBSL убирает из исходника 1С строки-директивы препроцессора:
+// DSL OneBase их не поддерживает (issue #48 п.2). Содержимое блоков #Если
+// сохраняется целиком (обе ветки).
+func sanitizeBSL(src string) string {
+	// .bsl из 1С обычно начинается с BOM — без среза первая директива не распознаётся.
+	src = strings.TrimPrefix(src, "\xef\xbb\xbf")
+	lines := strings.Split(src, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if preprocDirectiveLow.MatchString(strings.ToLower(line)) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
 
 // WriteDSLStubs создаёт заготовки .os файлов для документов.
 // Если рядом есть .bsl-модуль из 1С — добавляет его содержимое как комментарий.
@@ -57,7 +81,7 @@ func buildStub(doc *parser1c.DocumentMeta, srcDir1C string) string {
 	bslPath := filepath.Join(srcDir1C, "Documents", doc.Name, "Ext", "ObjectModule.bsl")
 	if bsl, err := os.ReadFile(bslPath); err == nil {
 		sb.WriteString("\n  // ======= Исходный модуль 1С (.bsl) =======\n")
-		for _, line := range strings.Split(string(bsl), "\n") {
+		for _, line := range strings.Split(sanitizeBSL(string(bsl)), "\n") {
 			sb.WriteString("  // ")
 			sb.WriteString(line)
 			sb.WriteString("\n")
@@ -76,7 +100,7 @@ func WriteModules(mods []*parser1c.ModuleMeta, outDir string, notes *ConversionR
 		return err
 	}
 	for _, mod := range mods {
-		source := mod.Source
+		source := sanitizeBSL(mod.Source)
 		if source == "" {
 			source = fmt.Sprintf("// %s\n// Общий модуль\n\nПроцедура Главная()\nКонецПроцедуры\n", mod.Name)
 		}

@@ -56,6 +56,37 @@ func TestMaketGetArea_NewFields(t *testing.T) {
 	}
 }
 
+// TestInjectMaket проверяет функцию инъекции переменной «Макет» в vars:
+// при наличии layout переменная добавляется, при nil — нет (поведение DSL без
+// макета не меняется). Используется всеми путями запуска обработок.
+func TestInjectMaket(t *testing.T) {
+	lt := &printform.LayoutTemplate{
+		Name:  "T",
+		Areas: map[string]*printform.LayoutArea{"A": {Rows: []printform.LayoutRow{{Cells: []printform.LayoutCell{{Text: "x"}}}}}},
+	}
+
+	// С layout — переменная добавлена и это *Макет.
+	vars := map[string]any{}
+	InjectMaket(vars, lt)
+	got, ok := vars["Макет"]
+	if !ok {
+		t.Fatal("переменная Макет не добавлена при наличии layout")
+	}
+	if _, ok := got.(*Макет); !ok {
+		t.Fatalf("ожидался *Макет, получено %T", got)
+	}
+
+	// Без layout (nil) — переменная не добавляется.
+	vars2 := map[string]any{}
+	InjectMaket(vars2, nil)
+	if _, ok := vars2["Макет"]; ok {
+		t.Error("при nil layout переменная Макет не должна добавляться")
+	}
+
+	// nil-карта не паникует.
+	InjectMaket(nil, lt)
+}
+
 // TestMaketGetArea_DefaultsPreserved ensures old layouts without new fields
 // still produce cells with sensible defaults.
 func TestMaketGetArea_DefaultsPreserved(t *testing.T) {

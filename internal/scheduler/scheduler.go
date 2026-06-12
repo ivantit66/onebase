@@ -219,6 +219,7 @@ func (s *Scheduler) runProcessor(ctx context.Context, job *metadata.ScheduledJob
 	dslVars["Параметры"] = paramsThis
 	dslVars["Сообщить"] = msgFunc
 	dslVars["Message"] = msgFunc
+	interpreter.InjectMaket(dslVars, proc.Layout)
 
 	err := s.interp.Run(procDecl, paramsThis, dslVars)
 	output = strings.Join(messages, "\n")

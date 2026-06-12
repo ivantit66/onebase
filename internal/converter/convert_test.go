@@ -174,6 +174,79 @@ func TestConvertRequiresDirs(t *testing.T) {
 	}
 }
 
+// Поле с EnumRef.X: если перечисление импортировано — в YAML уходит enum:X;
+// если его нет в выгрузке — деградация в string с предупреждением, иначе
+// конфигурация не пройдёт metadata.Validate (ревью задачи 5, issue #48 п.5).
+func TestConvertEnumFieldResolution(t *testing.T) {
+	src := t.TempDir()
+	out := t.TempDir()
+
+	catXML := `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject>
+  <Catalog>
+    <Properties><Name>Контрагенты</Name></Properties>
+    <ChildObjects>
+      <Attribute><Properties>
+        <Name>Вид</Name>
+        <Type><Type xmlns="http://v8.1c.ru/8.1/data/core">cfg:EnumRef.ВидКонтрагента</Type></Type>
+      </Properties></Attribute>
+      <Attribute><Properties>
+        <Name>Статус</Name>
+        <Type><Type xmlns="http://v8.1c.ru/8.1/data/core">cfg:EnumRef.НесуществующееПеречисление</Type></Type>
+      </Properties></Attribute>
+    </ChildObjects>
+  </Catalog>
+</MetaDataObject>`
+	enumXML := `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject>
+  <Enumeration>
+    <Properties><Name>ВидКонтрагента</Name></Properties>
+    <ChildObjects>
+      <EnumValue><Properties><Name>ЮрЛицо</Name></Properties></EnumValue>
+    </ChildObjects>
+  </Enumeration>
+</MetaDataObject>`
+
+	if err := os.MkdirAll(filepath.Join(src, "Catalogs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "Catalogs", "Контрагенты.xml"), []byte(catXML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(src, "Enumerations"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "Enumerations", "ВидКонтрагента.xml"), []byte(enumXML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := converter.Convert(converter.Options{SourceDir: src, OutDir: out})
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(out, "catalogs", "контрагенты.yaml"))
+	if err != nil {
+		t.Fatalf("каталог не записан: %v", err)
+	}
+	y := string(data)
+	if !strings.Contains(y, "type: enum:ВидКонтрагента") {
+		t.Errorf("импортированное перечисление должно дать enum:-тип, yaml:\n%s", y)
+	}
+	if strings.Contains(y, "НесуществующееПеречисление") {
+		t.Errorf("висячая ссылка не должна остаться enum:-типом, yaml:\n%s", y)
+	}
+	var found bool
+	for _, w := range report.TypeWarnings {
+		if strings.Contains(w, "НесуществующееПеречисление") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("нет предупреждения о висячем перечислении: %v", report.TypeWarnings)
+	}
+}
+
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)

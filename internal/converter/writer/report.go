@@ -24,6 +24,7 @@ type ConversionReport struct {
 	Skipped          []string
 	TypeWarnings     []string
 	FormWarnings     []string
+	ProcessorLayouts []string // src/*.proc.layout.yaml — заготовки макетов обработок
 }
 
 // String форматирует итоговый отчёт.
@@ -71,6 +72,13 @@ func (r *ConversionReport) String() string {
 	if len(r.DSLStubs) > 0 {
 		sb.WriteString("\nTODO: перенесите бизнес-логику из 1С вручную:\n")
 		for _, name := range r.DSLStubs {
+			sb.WriteString("  src/" + name + "\n")
+		}
+	}
+
+	if len(r.ProcessorLayouts) > 0 {
+		sb.WriteString("\nМакеты обработок → заготовки макетов (перенесите оформление вручную):\n")
+		for _, name := range r.ProcessorLayouts {
 			sb.WriteString("  src/" + name + "\n")
 		}
 	}

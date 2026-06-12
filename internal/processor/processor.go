@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/ivantit66/onebase/internal/metadata"
+	"github.com/ivantit66/onebase/internal/printform"
 	"gopkg.in/yaml.v3"
 )
 
@@ -33,6 +34,12 @@ type Processor struct {
 	// заполняются программно при загрузке; в YAML не сериализуются.
 	External bool `yaml:"-"`
 	Trusted  bool `yaml:"-"`
+
+	// Layout — макет-заготовка обработки из src/<имя>.proc.layout.yaml (если
+	// файл есть рядом с .proc.os). Заполняется программно при загрузке проекта
+	// (см. project.loadProcessorLayouts) и инжектируется в DSL как переменная
+	// «Макет» во всех путях запуска обработки. В YAML не сериализуется.
+	Layout *printform.LayoutTemplate `yaml:"-"`
 }
 
 // DisplayLabel возвращает подпись параметра с учётом языка.

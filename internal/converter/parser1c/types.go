@@ -21,7 +21,7 @@ type DocumentMeta struct {
 // FormSource — управляемая форма объекта, найденная в выгрузке 1С.
 // Импортируется отдельным шагом через пакет onec_forms.
 type FormSource struct {
-	Entity   string // имя объекта-владельца OneBase (справочник/документ)
+	Entity   string // имя объекта-владельца OneBase (справочник/документ/обработка)
 	FormName string // имя формы (имя каталога Forms/<FormName>)
 	ExtDir   string // путь к каталогу Ext (содержит Form.xml, Form/Module.bsl, Form/Items)
 }
@@ -121,6 +121,7 @@ type ProcessorMeta struct {
 	Synonym    string
 	Attributes []Attribute
 	Source     string
+	Forms      []FormSource // управляемые формы объекта (Forms/<X>/Ext/Form.xml)
 }
 
 // ConfigDump — всё содержимое выгрузки конфигурации

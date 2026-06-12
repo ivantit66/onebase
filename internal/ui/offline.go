@@ -89,6 +89,7 @@ func RunProcessorOffline(ctx context.Context, proj *project.Project, db *storage
 	dslVars["Параметры"] = paramsThis
 	dslVars["Сообщить"] = msgFunc
 	dslVars["Message"] = msgFunc
+	interpreter.InjectMaket(dslVars, proc.Layout)
 
 	runErr = s.interp.Run(procDecl, paramsThis, dslVars)
 	return messages, runErr, nil

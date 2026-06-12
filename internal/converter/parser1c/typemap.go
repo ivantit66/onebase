@@ -36,7 +36,11 @@ func MapType(t FieldType) (onebaseType string, note string) {
 		}
 		return "reference:" + obj, ""
 	case strings.HasPrefix(p, "EnumRef.") || strings.HasPrefix(p, "ПеречислениеСсылка."):
-		return "string", "перечисление → string"
+		obj := extractRefName(p)
+		if t.RefObject != "" {
+			obj = t.RefObject
+		}
+		return "enum:" + obj, ""
 	case p == "":
 		return "string", ""
 	default:

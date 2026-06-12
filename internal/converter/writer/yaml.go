@@ -384,7 +384,7 @@ func WriteProcessors(procs []*parser1c.ProcessorMeta, outDir string, notes *Conv
 		if err := writeYAML(filepath.Join(dir, fileName(proc.Name)+".yaml"), obj); err != nil {
 			return err
 		}
-		source := proc.Source
+		source := sanitizeBSL(proc.Source)
 		if source == "" {
 			source = fmt.Sprintf("// %s\n// Обработка\n\nПроцедура Главная()\nКонецПроцедуры\n", proc.Name)
 		}

@@ -93,6 +93,23 @@ func TestLexer_LeadingBOM(t *testing.T) {
 	}
 }
 
+// Строки с директивами препроцессора 1С (#Область и т.п.) пропускаются как
+// комментарии — спасает копипаст кода из 1С (issue #48 п.2).
+func TestSkipsPreprocessorLines(t *testing.T) {
+	src := "#Область Сервис\nПроцедура П()\nКонецПроцедуры\n#КонецОбласти\n"
+	l := lexer.New(src, "t.os")
+	tok := l.NextToken()
+	if tok.Type != token.LookupIdent("Процедура") || tok.Literal != "Процедура" {
+		t.Fatalf("первый токен: %+v, ожидалась Процедура", tok)
+	}
+	for tok.Type != token.EOF {
+		if tok.Type == token.ILLEGAL {
+			t.Fatalf("ILLEGAL токен: %+v", tok)
+		}
+		tok = l.NextToken()
+	}
+}
+
 func TestLexer_MultilineStringPipe(t *testing.T) {
 	// 1C-style: '|' at start of continuation line is stripped
 	input := "\"ВЫБРАТЬ\n|  Номер,\n|  Дата\n|ИЗ Документ.Заявка\""

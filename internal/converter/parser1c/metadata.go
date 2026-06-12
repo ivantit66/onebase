@@ -288,17 +288,38 @@ func ParseDir(dir string) (*ConfigDump, error) {
 	return dump, nil
 }
 
-func parseCatalogs(dir string) ([]*CatalogMeta, error) {
-	var result []*CatalogMeta
+// objectNames возвращает имена объектов раздела выгрузки: объединение имён
+// подкаталогов и одиночных *.xml-файлов (без расширения), без дубликатов.
+// Объект без подчинённых элементов представлен в выгрузке 1С только файлом
+// «Имя.xml» — перебор одних подкаталогов молча терял такие объекты
+// (issue #16 для перечислений, issue #48 п.1 для остальных типов).
+func objectNames(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, nil
+		return nil
+	}
+	seen := make(map[string]bool)
+	var names []string
+	add := func(n string) {
+		if n == "" || seen[n] {
+			return
+		}
+		seen[n] = true
+		names = append(names, n)
 	}
 	for _, e := range entries {
-		if !e.IsDir() {
-			continue
+		if e.IsDir() {
+			add(e.Name())
+		} else if strings.EqualFold(filepath.Ext(e.Name()), ".xml") {
+			add(strings.TrimSuffix(e.Name(), filepath.Ext(e.Name())))
 		}
-		name := e.Name()
+	}
+	return names
+}
+
+func parseCatalogs(dir string) ([]*CatalogMeta, error) {
+	var result []*CatalogMeta
+	for _, name := range objectNames(dir) {
 
 		if v8, _ := parseV83File(filepath.Join(dir, name+".xml")); v8 != nil {
 			obj := v8.Catalog
@@ -351,15 +372,7 @@ func parseCatalogs(dir string) ([]*CatalogMeta, error) {
 
 func parseDocuments(dir string) ([]*DocumentMeta, error) {
 	var result []*DocumentMeta
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, nil
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
+	for _, name := range objectNames(dir) {
 
 		if v8, _ := parseV83File(filepath.Join(dir, name+".xml")); v8 != nil && v8.Document != nil {
 			obj := v8.Document
@@ -407,15 +420,7 @@ func parseDocuments(dir string) ([]*DocumentMeta, error) {
 
 func parseRegisters(dir string) ([]*RegisterMeta, error) {
 	var result []*RegisterMeta
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, nil
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
+	for _, name := range objectNames(dir) {
 
 		if v8, _ := parseV83File(filepath.Join(dir, name+".xml")); v8 != nil && v8.AccReg != nil {
 			obj := v8.AccReg
@@ -544,33 +549,7 @@ func orDefault(s, def string) string {
 
 func parseEnumerations(dir string) ([]*EnumMeta, error) {
 	var result []*EnumMeta
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, nil
-	}
-	// Перечисления в выгрузке 1С часто представлены ТОЛЬКО файлом «Имя.xml» без
-	// папки-компаньона (в отличие от справочников/документов). Раньше цикл
-	// перебирал лишь подкаталоги и пропускал такие enum целиком — issue #16.
-	// Поэтому собираем имена и из директорий, и из одиночных .xml-файлов,
-	// обрабатывая каждое имя один раз.
-	seen := make(map[string]bool)
-	var names []string
-	addName := func(n string) {
-		if n == "" || seen[n] {
-			return
-		}
-		seen[n] = true
-		names = append(names, n)
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			addName(e.Name())
-		} else if strings.EqualFold(filepath.Ext(e.Name()), ".xml") {
-			addName(strings.TrimSuffix(e.Name(), filepath.Ext(e.Name())))
-		}
-	}
-
-	for _, name := range names {
+	for _, name := range objectNames(dir) {
 		if v8, _ := parseV83File(filepath.Join(dir, name+".xml")); v8 != nil && v8.Enum != nil {
 			em := &EnumMeta{Name: orDefault(v8.Enum.Props.Name, name)}
 			for _, v := range v8.Enum.ChildObjects.Values {
@@ -586,15 +565,7 @@ func parseEnumerations(dir string) ([]*EnumMeta, error) {
 
 func parseConstants(dir string) ([]*ConstantMeta, error) {
 	var result []*ConstantMeta
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, nil
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
+	for _, name := range objectNames(dir) {
 
 		if v8, _ := parseV83File(filepath.Join(dir, name+".xml")); v8 != nil && v8.Constant != nil {
 			result = append(result, &ConstantMeta{
@@ -610,15 +581,7 @@ func parseConstants(dir string) ([]*ConstantMeta, error) {
 
 func parseInfoRegisters(dir string) ([]*InfoRegMeta, error) {
 	var result []*InfoRegMeta
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, nil
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
+	for _, name := range objectNames(dir) {
 
 		if v8, _ := parseV83File(filepath.Join(dir, name+".xml")); v8 != nil && v8.InfoReg != nil {
 			obj := v8.InfoReg
@@ -637,15 +600,7 @@ func parseInfoRegisters(dir string) ([]*InfoRegMeta, error) {
 
 func parseAccountingRegisters(dir string) ([]*AccountRegMeta, error) {
 	var result []*AccountRegMeta
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, nil
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
+	for _, name := range objectNames(dir) {
 
 		if v8, _ := parseV83File(filepath.Join(dir, name+".xml")); v8 != nil && v8.AcctReg != nil {
 			obj := v8.AcctReg
@@ -664,15 +619,7 @@ func parseAccountingRegisters(dir string) ([]*AccountRegMeta, error) {
 
 func parseChartsOfAccounts(dir string) ([]*ChartOfAccountsMeta, error) {
 	var result []*ChartOfAccountsMeta
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, nil
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
+	for _, name := range objectNames(dir) {
 
 		if v8, _ := parseV83File(filepath.Join(dir, name+".xml")); v8 != nil && v8.ChartOfAccounts != nil {
 			obj := v8.ChartOfAccounts
@@ -689,15 +636,7 @@ func parseChartsOfAccounts(dir string) ([]*ChartOfAccountsMeta, error) {
 
 func parseScheduledJobs(dir string) ([]*ScheduledJobMeta, error) {
 	var result []*ScheduledJobMeta
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, nil
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
+	for _, name := range objectNames(dir) {
 
 		if v8, _ := parseV83File(filepath.Join(dir, name+".xml")); v8 != nil && v8.ScheduledJob != nil {
 			p := v8.ScheduledJob.Props
@@ -715,15 +654,7 @@ func parseScheduledJobs(dir string) ([]*ScheduledJobMeta, error) {
 
 func parseCommonModules(dir string) ([]*ModuleMeta, error) {
 	var result []*ModuleMeta
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, nil
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
+	for _, name := range objectNames(dir) {
 		mod := &ModuleMeta{Name: name}
 
 		if v8, _ := parseV83File(filepath.Join(dir, name+".xml")); v8 != nil {
@@ -752,15 +683,7 @@ func parseCommonModules(dir string) ([]*ModuleMeta, error) {
 
 func parseDataProcessors(dir string) ([]*ProcessorMeta, error) {
 	var result []*ProcessorMeta
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, nil
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
+	for _, name := range objectNames(dir) {
 		proc := &ProcessorMeta{Name: name}
 
 		if v8, _ := parseV83File(filepath.Join(dir, name+".xml")); v8 != nil {
@@ -794,6 +717,7 @@ func parseDataProcessors(dir string) ([]*ProcessorMeta, error) {
 			}
 		}
 
+		proc.Forms = scanForms(filepath.Join(dir, name), proc.Name)
 		result = append(result, proc)
 	}
 	return result, nil

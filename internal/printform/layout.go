@@ -14,7 +14,7 @@ import (
 // Each area contains rows of cells with static text or parameter placeholders.
 type LayoutTemplate struct {
 	Name     string                 `yaml:"name"`
-	Document string                 `yaml:"document"`
+	Document string                 `yaml:"document,omitempty"`
 	Columns  []LayoutColumn         `yaml:"columns,omitempty"`
 	Areas    map[string]*LayoutArea `yaml:"areas"`
 }

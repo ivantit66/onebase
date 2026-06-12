@@ -193,6 +193,7 @@ func (s *Server) processorRun(w http.ResponseWriter, r *http.Request) {
 	dslVars["Параметры"] = paramsThis
 	dslVars["Сообщить"] = msgFunc
 	dslVars["Message"] = msgFunc
+	interpreter.InjectMaket(dslVars, proc.Layout)
 	err := s.interp.Run(procDecl, paramsThis, dslVars)
 
 	var runErr string

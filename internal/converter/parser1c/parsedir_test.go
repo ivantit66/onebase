@@ -285,6 +285,147 @@ func TestParseDirCatalogTabularSection(t *testing.T) {
 	}
 }
 
+// Объект без подчинённых элементов (форм, макетов) лежит в выгрузке ОДНИМ
+// файлом «Имя.xml» без папки-компаньона. Раньше все парсеры, кроме
+// parseEnumerations, перебирали только подкаталоги и молча теряли такие
+// объекты (issue #48 п.1: «не импортированы 2 справочника и 4 константы»).
+func TestParseDirFlatCatalog(t *testing.T) {
+	src := t.TempDir()
+	catsDir := filepath.Join(src, "Catalogs")
+	if err := os.MkdirAll(catsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Одиночный .xml без папки-компаньона.
+	if err := os.WriteFile(filepath.Join(catsDir, "Контрагенты.xml"), []byte(catalogXML), 0o644); err != nil {
+		t.Fatalf("write xml: %v", err)
+	}
+
+	dump, err := ParseDir(src)
+	if err != nil {
+		t.Fatalf("ParseDir: %v", err)
+	}
+	if len(dump.Catalogs) != 1 {
+		t.Fatalf("ожидался 1 справочник из плоского xml, получено %d", len(dump.Catalogs))
+	}
+	if dump.Catalogs[0].Name != "Контрагенты" {
+		t.Errorf("имя справочника: %q", dump.Catalogs[0].Name)
+	}
+	if len(dump.Catalogs[0].Attributes) != 1 || dump.Catalogs[0].Attributes[0].Name != "ИНН" {
+		t.Fatalf("реквизиты не разобраны: %+v", dump.Catalogs[0].Attributes)
+	}
+}
+
+const constantXML = `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject>
+  <Constant>
+    <Properties>
+      <Name>ВалютаУчета</Name>
+      <Type><Type xmlns="http://v8.1c.ru/8.1/data/core">xs:string</Type></Type>
+    </Properties>
+  </Constant>
+</MetaDataObject>`
+
+const infoRegFlatXML = `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject>
+  <InformationRegister>
+    <Properties><Name>КурсыВалют</Name></Properties>
+    <ChildObjects>
+      <Dimension><Properties>
+        <Name>Валюта</Name>
+        <Type><Type xmlns="http://v8.1c.ru/8.1/data/core">xs:string</Type></Type>
+      </Properties></Dimension>
+      <Resource><Properties>
+        <Name>Курс</Name>
+        <Type><Type xmlns="http://v8.1c.ru/8.1/data/core">xs:decimal</Type></Type>
+      </Properties></Resource>
+    </ChildObjects>
+  </InformationRegister>
+</MetaDataObject>`
+
+// Константы и регистры сведений тоже бывают «плоскими» (issue #48 п.1:
+// «НЕ ИМПОРТИРОВАНЫ 4 КОНСТАНТЫ»).
+func TestParseDirFlatConstantsAndInfoRegs(t *testing.T) {
+	src := t.TempDir()
+	for dir, files := range map[string]map[string]string{
+		"Constants":            {"ВалютаУчета.xml": constantXML},
+		"InformationRegisters": {"КурсыВалют.xml": infoRegFlatXML},
+	} {
+		if err := os.MkdirAll(filepath.Join(src, dir), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		for name, content := range files {
+			if err := os.WriteFile(filepath.Join(src, dir, name), []byte(content), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+		}
+	}
+
+	dump, err := ParseDir(src)
+	if err != nil {
+		t.Fatalf("ParseDir: %v", err)
+	}
+	if len(dump.Constants) != 1 || dump.Constants[0].Name != "ВалютаУчета" {
+		t.Fatalf("константа из плоского xml не разобрана: %+v", dump.Constants)
+	}
+	if len(dump.InfoRegisters) != 1 || dump.InfoRegisters[0].Name != "КурсыВалют" {
+		t.Fatalf("регистр сведений из плоского xml не разобран: %+v", dump.InfoRegisters)
+	}
+	if len(dump.InfoRegisters[0].Dimensions) != 1 || dump.InfoRegisters[0].Dimensions[0].Name != "Валюта" {
+		t.Fatalf("измерения регистра не разобраны: %+v", dump.InfoRegisters[0].Dimensions)
+	}
+}
+
+// Платформа поддерживает тип enum:Имя (metadata/yaml.go), а конвертер
+// деградировал ссылки на перечисления в string (issue #48 п.5).
+func TestMapTypeEnumRef(t *testing.T) {
+	for _, primary := range []string{"cfg:EnumRef.ВидКонтрагента", "ПеречислениеСсылка.ВидКонтрагента"} {
+		got, note := MapType(FieldType{Primary: primary, RefObject: "ВидКонтрагента"})
+		if got != "enum:ВидКонтрагента" {
+			t.Errorf("%s → %q, ожидалось enum:ВидКонтрагента", primary, got)
+		}
+		if note != "" {
+			t.Errorf("%s: неожиданное предупреждение %q", primary, note)
+		}
+	}
+}
+
+const processorXML = `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject>
+  <DataProcessor>
+    <Properties><Name>ЗагрузкаКурсов</Name></Properties>
+    <ChildObjects/>
+  </DataProcessor>
+</MetaDataObject>`
+
+// Формы обработок поддерживаются платформой (loadProcessorForms грузит их из
+// forms/<обработка>/), но конвертер их не сканировал (issue #48 п.3).
+func TestParseDirProcessorForms(t *testing.T) {
+	src := t.TempDir()
+	writeV83(t, filepath.Join(src, "DataProcessors"), "ЗагрузкаКурсов", processorXML)
+	extDir := filepath.Join(src, "DataProcessors", "ЗагрузкаКурсов", "Forms", "Форма", "Ext")
+	if err := os.MkdirAll(extDir, 0o755); err != nil {
+		t.Fatalf("mkdir form: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(extDir, "Form.xml"), []byte("<Form/>"), 0o644); err != nil {
+		t.Fatalf("write form xml: %v", err)
+	}
+
+	dump, err := ParseDir(src)
+	if err != nil {
+		t.Fatalf("ParseDir: %v", err)
+	}
+	if len(dump.Processors) != 1 {
+		t.Fatalf("ожидалась 1 обработка, получено %d", len(dump.Processors))
+	}
+	p := dump.Processors[0]
+	if len(p.Forms) != 1 {
+		t.Fatalf("ожидалась 1 форма обработки, получено %d", len(p.Forms))
+	}
+	if p.Forms[0].Entity != "ЗагрузкаКурсов" || p.Forms[0].FormName != "Форма" {
+		t.Errorf("источник формы: %+v", p.Forms[0])
+	}
+}
+
 // scanForms находит управляемые формы объекта в Forms/<X>/Ext/Form.xml
 // (issue #26 п.4).
 func TestParseDirFindsForms(t *testing.T) {
