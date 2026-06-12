@@ -90,7 +90,7 @@ areas:
             - border: all
             - border: all
             - border: all
-            - parameter: Итог5
+            - text: 'Итого: {{Итог.Строки.Сумма | number:2}}'
               bold: true
               align: right
               border: all
@@ -136,8 +136,6 @@ binding:
         - Строка
         - Итоги
         - Подвал
-    parameters:
-        Итог5: Итог.Строки.Сумма | number:2
     repeat:
         - area: Строка
           source: Строки

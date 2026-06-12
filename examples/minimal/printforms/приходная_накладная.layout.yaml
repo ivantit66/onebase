@@ -84,7 +84,7 @@ areas:
               align: right
               border: all
             - border: all
-            - parameter: Итог4
+            - text: 'Итого: {{Итог.Товары.Сумма | number:2}}'
               bold: true
               align: right
               border: all
@@ -116,7 +116,6 @@ binding:
         - Подвал
     parameters:
         Итог2: Итог.Товары.Количество | number:0
-        Итог4: Итог.Товары.Сумма | number:2
     repeat:
         - area: Строка
           source: Товары

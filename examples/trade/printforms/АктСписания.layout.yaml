@@ -62,7 +62,7 @@ areas:
             - border: all
             - border: all
             - border: all
-            - parameter: Итог3
+            - text: 'Итого: {{Итог.Товары.Себестоимость | number:2}}'
               bold: true
               align: right
               border: all
@@ -87,8 +87,6 @@ binding:
         - Строка
         - Итоги
         - Подвал
-    parameters:
-        Итог3: Итог.Товары.Себестоимость | number:2
     repeat:
         - area: Строка
           source: Товары

@@ -98,7 +98,7 @@ areas:
             - border: all
             - border: all
             - border: all
-            - parameter: Итог4
+            - text: 'Итого: {{Итог.ТоварыУслуги.Сумма | number:2}}'
               bold: true
               align: right
               border: all
@@ -128,8 +128,6 @@ binding:
         - Строка
         - Итоги
         - Подвал
-    parameters:
-        Итог4: Итог.ТоварыУслуги.Сумма | number:2
     repeat:
         - area: Строка
           source: ТоварыУслуги

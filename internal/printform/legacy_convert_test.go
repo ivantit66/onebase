@@ -161,18 +161,18 @@ func TestConvertLegacy_Totals(t *testing.T) {
 	if totals == nil {
 		t.Fatal("нет области Итоги")
 	}
-	// Должна быть ячейка-параметр с выражением Итог.Товары.Сумма.
+	// Итог с меткой («Итого») → интерполируемый текст с Итог.Товары.Сумма,
+	// сохраняющий метку (как в legacy «Итого: 650.00»).
 	found := false
 	for _, row := range totals.Rows {
 		for _, c := range row.Cells {
-			if c.Parameter != "" {
-				// параметр должен резолвиться через binding в Итог.<source>.<поле>
+			if strings.Contains(c.Text, "Итог.Товары.Сумма") && strings.Contains(c.Text, "Итого") {
 				found = true
 			}
 		}
 	}
 	if !found {
-		t.Error("в Итогах нет ячейки-параметра")
+		t.Error("в Итогах нет ячейки с меткой и выражением Итог.Товары.Сумма")
 	}
 }
 

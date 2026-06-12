@@ -84,11 +84,11 @@ areas:
             - border: all
             - border: all
             - border: all
-            - parameter: Итог4
+            - text: 'Итого: {{Итог.Товары.Сумма | number:2}}'
               bold: true
               align: right
               border: all
-            - parameter: Итог5
+            - text: 'НДС: {{Итог.Товары.НДС | number:2}}'
               bold: true
               align: right
               border: all
@@ -124,9 +124,6 @@ binding:
         - Строка
         - Итоги
         - Подвал
-    parameters:
-        Итог4: Итог.Товары.Сумма | number:2
-        Итог5: Итог.Товары.НДС | number:2
     repeat:
         - area: Строка
           source: Товары

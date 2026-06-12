@@ -186,6 +186,22 @@ func convertTotals(ts *TableSection) (*LayoutArea, map[string]string) {
 	params := make(map[string]string)
 	for ci, col := range ts.Columns {
 		if tot, ok := totByCol[ci]; ok {
+			expr := "Итог." + ts.Source + "." + tot.Field
+			if f := mapFormat(col.Format); f != "" {
+				expr += " | " + f
+			}
+			if strings.TrimSpace(tot.Label) != "" {
+				// Метка итога (как в legacy: «Итого: 650.00») сохраняется через
+				// интерполируемый текст — параметр не несёт произвольного префикса.
+				cells = append(cells, LayoutCell{
+					Text:   tot.Label + ": {{" + expr + "}}",
+					Align:  col.Align,
+					Bold:   true,
+					Border: "all",
+				})
+				continue
+			}
+			// Без метки — простая ячейка-параметр.
 			name := totalParamName(ci)
 			cells = append(cells, LayoutCell{
 				Parameter: name,
@@ -193,10 +209,6 @@ func convertTotals(ts *TableSection) (*LayoutArea, map[string]string) {
 				Bold:      true,
 				Border:    "all",
 			})
-			expr := "Итог." + ts.Source + "." + tot.Field
-			if f := mapFormat(col.Format); f != "" {
-				expr += " | " + f
-			}
 			params[name] = expr
 			continue
 		}

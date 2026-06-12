@@ -63,7 +63,7 @@ areas:
         - cells:
             - border: all
             - border: all
-            - parameter: Итог2
+            - text: 'Итого: {{Итог.Товары.Количество | number:0}}'
               bold: true
               align: right
               border: all
@@ -108,8 +108,6 @@ binding:
         - Строка
         - Итоги
         - Подвал
-    parameters:
-        Итог2: Итог.Товары.Количество | number:0
     repeat:
         - area: Строка
           source: Товары

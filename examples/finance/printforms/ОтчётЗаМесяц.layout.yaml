@@ -71,7 +71,7 @@ areas:
       rows:
         - cells:
             - border: all
-            - parameter: Итог1
+            - text: 'Итого: {{Итог.РасходыПоКатегориям.Сумма | number:2}}'
               bold: true
               align: right
               border: all
@@ -102,8 +102,6 @@ binding:
         - Строка
         - Итоги
         - Подвал
-    parameters:
-        Итог1: Итог.РасходыПоКатегориям.Сумма | number:2
     repeat:
         - area: Строка
           source: РасходыПоКатегориям

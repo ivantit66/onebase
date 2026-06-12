@@ -81,7 +81,7 @@ areas:
             - border: all
             - border: all
             - border: all
-            - parameter: Итог4
+            - text: 'Итого к оплате: {{Итог.Товары.Сумма | number:2}}'
               bold: true
               align: right
               border: all
@@ -116,8 +116,6 @@ binding:
         - Строка
         - Итоги
         - Подвал
-    parameters:
-        Итог4: Итог.Товары.Сумма | number:2
     repeat:
         - area: Строка
           source: Товары
