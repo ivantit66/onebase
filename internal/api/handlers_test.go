@@ -300,7 +300,7 @@ func TestAPI_PostDocument_WritesMovements(t *testing.T) {
 	}
 
 	// Проверим что движения реально записались.
-	rows, err := db.GetMovements(ctx, "Остатки", reg)
+	rows, err := db.GetMovements(ctx, "Остатки", reg, storage.RegFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +403,7 @@ func TestAPI_PostDocument_EmptyBody_KeepsTableParts(t *testing.T) {
 	}
 
 	// 2) OnPost увидел строку ТЧ → ровно одно движение.
-	movs, err := db.GetMovements(ctx, "Остатки", reg)
+	movs, err := db.GetMovements(ctx, "Остатки", reg, storage.RegFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}

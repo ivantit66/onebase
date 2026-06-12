@@ -204,16 +204,22 @@ func (db *DB) WriteMovements(ctx context.Context, regName, recorderType string, 
 	return nil
 }
 
-// GetMovements returns all movement rows for a register, ordered by period and recorder.
-func (db *DB) GetMovements(ctx context.Context, regName string, reg *metadata.Register) ([]map[string]any, error) {
+// GetMovements returns movement rows for a register, ordered by period and
+// recorder. Если f задан — выборка сужается по измерениям и периоду (issue #45).
+func (db *DB) GetMovements(ctx context.Context, regName string, reg *metadata.Register, f RegFilter) ([]map[string]any, error) {
 	table := metadata.RegisterTableName(regName)
 	cols := []string{"recorder", "recorder_type", "line_number", "period", "вид_движения"}
 	allFields := append(append([]metadata.Field{}, reg.Dimensions...), append(reg.Resources, reg.Attributes...)...)
 	for _, f := range allFields {
 		cols = append(cols, metadata.ColumnName(f))
 	}
-	query := fmt.Sprintf("SELECT %s FROM %s ORDER BY period, recorder, line_number", strings.Join(cols, ", "), table)
-	rows, err := db.Query(ctx, query)
+	where, args := dimWhereClause(db.dialect, reg.Dimensions, f, 1, true, true)
+	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), table)
+	if where != "" {
+		query += " WHERE " + where
+	}
+	query += " ORDER BY period, recorder, line_number"
+	rows, err := db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("get movements %s: %w", regName, err)
 	}
@@ -299,7 +305,9 @@ func (db *DB) GetDocumentMovements(ctx context.Context, recorderID uuid.UUID, re
 }
 
 // GetBalances returns aggregated balances grouped by dimension fields.
-func (db *DB) GetBalances(ctx context.Context, regName string, reg *metadata.Register) ([]map[string]any, error) {
+// Если f задан — учитываются движения только по выбранным измерениям и до
+// f.To включительно («остатки на дату»); f.From для остатков игнорируется (#45).
+func (db *DB) GetBalances(ctx context.Context, regName string, reg *metadata.Register, f RegFilter) ([]map[string]any, error) {
 	table := metadata.RegisterTableName(regName)
 
 	var selectParts, groupBy []string
@@ -318,13 +326,17 @@ func (db *DB) GetBalances(ctx context.Context, regName string, reg *metadata.Reg
 		resNames = append(resNames, f.Name)
 	}
 
+	where, args := dimWhereClause(db.dialect, reg.Dimensions, f, 1, false /*from игнорируем*/, true)
 	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(selectParts, ", "), table)
+	if where != "" {
+		query += " WHERE " + where
+	}
 	if len(groupBy) > 0 {
 		query += " GROUP BY " + strings.Join(groupBy, ", ")
 	}
 	query += " ORDER BY " + strings.Join(groupBy, ", ")
 
-	rows, err := db.Query(ctx, query)
+	rows, err := db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("get balances %s: %w", regName, err)
 	}

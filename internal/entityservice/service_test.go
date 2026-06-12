@@ -67,7 +67,7 @@ func TestSave_UnpostClearsInfoRegisterMovements(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if rows, err := db.InfoRegList(ctx, ir); err != nil {
+	if rows, err := db.InfoRegList(ctx, ir, storage.RegFilter{}); err != nil {
 		t.Fatal(err)
 	} else if len(rows) != 1 {
 		t.Fatalf("предусловие: ожидалась 1 строка инфорегистра, получено %d", len(rows))
@@ -84,7 +84,7 @@ func TestSave_UnpostClearsInfoRegisterMovements(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	rows, err := db.InfoRegList(ctx, ir)
+	rows, err := db.InfoRegList(ctx, ir, storage.RegFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}

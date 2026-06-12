@@ -92,8 +92,9 @@ func (db *DB) InfoRegGetLast(ctx context.Context, ir *metadata.InfoRegister, dim
 	return db.infoRegScan(ctx, ir, sql, args)
 }
 
-// InfoRegList returns all records, optionally filtered by dimension values.
-func (db *DB) InfoRegList(ctx context.Context, ir *metadata.InfoRegister) ([]map[string]any, error) {
+// InfoRegList returns records, optionally filtered by dimension values and
+// period (период учитывается только для periodic-регистров, issue #45).
+func (db *DB) InfoRegList(ctx context.Context, ir *metadata.InfoRegister, f RegFilter) ([]map[string]any, error) {
 	table := metadata.InfoRegTableName(ir.Name)
 	var selCols []string
 	if ir.Periodic {
@@ -106,11 +107,15 @@ func (db *DB) InfoRegList(ctx context.Context, ir *metadata.InfoRegister) ([]map
 		selCols = append(selCols, metadata.ColumnName(f))
 	}
 
+	where, args := dimWhereClause(db.dialect, ir.Dimensions, f, 1, ir.Periodic, ir.Periodic)
 	orderBy := strings.Join(pkCols(ir), ", ")
-	sql := fmt.Sprintf("SELECT %s FROM %s ORDER BY %s",
-		strings.Join(selCols, ", "), table, orderBy)
+	sql := fmt.Sprintf("SELECT %s FROM %s", strings.Join(selCols, ", "), table)
+	if where != "" {
+		sql += " WHERE " + where
+	}
+	sql += " ORDER BY " + orderBy
 
-	rows, err := db.Query(ctx, sql)
+	rows, err := db.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("info reg list %s: %w", ir.Name, err)
 	}
