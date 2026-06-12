@@ -444,6 +444,7 @@ window.MonacoEnvironment = { getWorkerUrl: function () {
       <a href="#" onclick="cfgAdmin('audit');return false">{{t $.Lang "Журнал регистрации"}}</a>
       <a href="#" onclick="cfgAdmin('settings');return false">{{t $.Lang "Параметры базы"}}</a>
       <a href="#" onclick="cfgAdmin('ai');return false">{{t $.Lang "ИИ-помощник"}}</a>
+      <a href="#" onclick="toggleSyntaxRef();cfgMenuToggle();return false">{{t $.Lang "Справка по встроенному языку"}} (F1)</a>
       <a href="/bases/{{.Base.ID}}/configurator/logout" style="color:#c00;border-top:1px solid #e5e7eb;margin-top:2px">🚪 {{t $.Lang "Выйти"}}</a>
     </div>
   </div>
@@ -453,6 +454,7 @@ window.MonacoEnvironment = { getWorkerUrl: function () {
   <button id="cfg-save-topbar" onclick="cfgSaveActive()" title="{{t $.Lang "Сохранить (Ctrl+S)"}}" class="cfg-save-topbar">&#128190; {{t $.Lang "Сохранить"}}</button>
   <button onclick="launchEnterprise()" title="{{t $.Lang "Запустить предприятие"}}" class="run-enterprise-btn"><svg viewBox="0 0 24 24" fill="#333"><polygon points="6,3 20,12 6,21"/></svg></button>
   <button id="dbg-toggle" class="dbg-topbar-btn" onclick="dbgToggle()">&#128027; {{t $.Lang "Отладка: ВЫКЛ"}}</button>
+  <button onclick="toggleSyntaxRef()" title="{{t $.Lang "Синтакс-помощник"}} (F1)" class="dbg-topbar-btn">&#10067; {{t $.Lang "Справка"}}</button>
   <span id="monaco-status" style="font-size:9px;color:#94a3b8">Monaco:...</span>
 </div>
 <div class="tabs">

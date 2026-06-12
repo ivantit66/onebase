@@ -712,5 +712,8 @@
   "Ошибка чтения архива": "Fehler beim Lesen des Archivs",
   "Form.xml не найден в загруженных файлах": "Form.xml in den hochgeladenen Dateien nicht gefunden",
   "Импорт не удался": "Import fehlgeschlagen",
-  "Сохранение в БД": "Speichern in der Datenbank"
+  "Сохранение в БД": "Speichern in der Datenbank",
+  "Справка по встроенному языку": "Referenz der integrierten Sprache",
+  "Синтакс-помощник": "Syntax-Assistent",
+  "Справка": "Hilfe"
 }

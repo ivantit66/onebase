@@ -739,5 +739,8 @@
   "Ошибка чтения архива": "Archive read error",
   "Form.xml не найден в загруженных файлах": "Form.xml not found in the uploaded files",
   "Импорт не удался": "Import failed",
-  "Сохранение в БД": "Saving to database"
+  "Сохранение в БД": "Saving to database",
+  "Справка по встроенному языку": "Built-in language reference",
+  "Синтакс-помощник": "Syntax assistant",
+  "Справка": "Help"
 }
