@@ -344,7 +344,7 @@ func (s *Server) printDocumentDSLPF(w http.ResponseWriter, r *http.Request) {
 
 	// Set back URL for the Назад button
 	backPath := fmt.Sprintf("/ui/%s/%s/%s", strings.ToLower(string(entity.Kind)), strings.ToLower(entity.Name), id.String())
-	sd.BackURL = backPath
+	sd.SetBackURL(backPath)
 
 	html := sd.HTMLString()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ivantit66/onebase/internal/printform"
+	"github.com/ivantit66/onebase/internal/sheet"
 )
 
 // Макет wraps a LayoutTemplate as a DSL-accessible object.
@@ -89,56 +90,52 @@ func (m *Макет) getArea(name string) *SpreadsheetDocumentArea {
 	}
 
 	area := &SpreadsheetDocumentArea{
-		cells:  make(map[string]*SpreadsheetDocumentCell),
-		top:    0,
-		left:   0,
-		bottom: rows - 1,
-		right:  cols - 1,
+		Area: sheet.NewArea(0, 0, rows-1, cols-1),
 	}
 
 	for r, row := range areaDef.Rows {
 		colIdx := 0
 		for _, cellDef := range row.Cells {
 			cell := NewSpreadsheetDocumentCell(cellDef.Text)
-			cell.bold = cellDef.Bold
-			cell.italic = cellDef.Italic
+			cell.Bold = cellDef.Bold
+			cell.Italic = cellDef.Italic
 			if cellDef.Align != "" {
-				cell.align = strings.ToLower(cellDef.Align)
+				cell.Align = strings.ToLower(cellDef.Align)
 			}
 			if cellDef.VAlign != "" {
-				cell.vertical = strings.ToLower(cellDef.VAlign)
+				cell.Vertical = strings.ToLower(cellDef.VAlign)
 			}
 			if cellDef.FontSize > 0 {
-				cell.fontSize = cellDef.FontSize
+				cell.FontSize = cellDef.FontSize
 			}
 			if cellDef.FontFamily != "" {
-				cell.fontFamily = cellDef.FontFamily
+				cell.FontFamily = cellDef.FontFamily
 			}
 			if cellDef.BackColor != "" {
-				cell.backColor = cellDef.BackColor
+				cell.BackColor = cellDef.BackColor
 			}
 			if cellDef.TextColor != "" {
-				cell.textColor = cellDef.TextColor
+				cell.TextColor = cellDef.TextColor
 			}
 			if cellDef.Border != "" {
-				cell.border = strings.ToLower(cellDef.Border)
+				cell.Border = strings.ToLower(cellDef.Border)
 			}
 			if cellDef.ColSpan > 1 {
-				cell.colSpan = cellDef.ColSpan
+				cell.ColSpan = cellDef.ColSpan
 			}
 			if cellDef.RowSpan > 1 {
-				cell.rowSpan = cellDef.RowSpan
+				cell.RowSpan = cellDef.RowSpan
 			}
 			// Store parameter name for named parameter access
 			if cellDef.Parameter != "" {
-				cell.parameterName = cellDef.Parameter
+				cell.ParameterName = cellDef.Parameter
 			}
 
 			key := fmt.Sprintf("%d,%d", r, colIdx)
-			area.cells[key] = cell
+			area.Area.Cells[key] = cell
 
-			colIdx += cell.colSpan
-			if cell.colSpan <= 0 {
+			colIdx += cell.ColSpan
+			if cell.ColSpan <= 0 {
 				colIdx++
 			}
 		}

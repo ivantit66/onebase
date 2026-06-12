@@ -35,24 +35,24 @@ func TestMaketGetArea_NewFields(t *testing.T) {
 	if area == nil {
 		t.Fatal("area is nil")
 	}
-	cell, ok := area.cells["0,0"]
+	cell, ok := area.Area.Cells["0,0"]
 	if !ok {
-		t.Fatalf("cell 0,0 missing in area: %#v", area.cells)
+		t.Fatalf("cell 0,0 missing in area: %#v", area.Area.Cells)
 	}
-	if cell.vertical != "middle" {
-		t.Errorf("vertical: got %q, want middle", cell.vertical)
+	if cell.Vertical != "middle" {
+		t.Errorf("vertical: got %q, want middle", cell.Vertical)
 	}
-	if cell.fontFamily != "Arial" {
-		t.Errorf("fontFamily: got %q, want Arial", cell.fontFamily)
+	if cell.FontFamily != "Arial" {
+		t.Errorf("fontFamily: got %q, want Arial", cell.FontFamily)
 	}
-	if cell.border != "thick" {
-		t.Errorf("border: got %q, want thick", cell.border)
+	if cell.Border != "thick" {
+		t.Errorf("border: got %q, want thick", cell.Border)
 	}
-	if cell.rowSpan != 2 {
-		t.Errorf("rowSpan: got %d, want 2", cell.rowSpan)
+	if cell.RowSpan != 2 {
+		t.Errorf("rowSpan: got %d, want 2", cell.RowSpan)
 	}
-	if cell.colSpan != 3 {
-		t.Errorf("colSpan: got %d, want 3", cell.colSpan)
+	if cell.ColSpan != 3 {
+		t.Errorf("colSpan: got %d, want 3", cell.ColSpan)
 	}
 }
 
@@ -98,8 +98,8 @@ func TestMaketGetArea_DefaultsPreserved(t *testing.T) {
 		},
 	}
 	area := NewMaket(lt).getArea("A")
-	cell := area.cells["0,0"]
-	if cell.vertical != "top" || cell.fontFamily != "Times New Roman" || cell.border != "all" {
+	cell := area.Area.Cells["0,0"]
+	if cell.Vertical != "top" || cell.FontFamily != "Times New Roman" || cell.Border != "all" {
 		t.Errorf("defaults overwritten unexpectedly: %+v", cell)
 	}
 }
