@@ -1653,8 +1653,12 @@ function _ldNormAreas(d){
     var out=[];
     for(var k in a){
       if(!Object.prototype.hasOwnProperty.call(a,k))continue;
-      var ar=a[k]||{};
-      out.push({name:k,rows:Array.isArray(ar.rows)?ar.rows:[]});
+      var ar=(a[k]&&typeof a[k]==='object')?a[k]:{};
+      // переносим все ключи области (rows + будущие), задаём name и rows.
+      var area={};for(var p in ar){if(Object.prototype.hasOwnProperty.call(ar,p))area[p]=ar[p];}
+      area.name=k;
+      if(!Array.isArray(area.rows))area.rows=[];
+      out.push(area);
     }
     d.areas=out;
     return;
