@@ -5,25 +5,38 @@ import (
 	"strings"
 
 	"github.com/go-pdf/fpdf"
+	"github.com/ivantit66/onebase/internal/sheet"
 )
 
 const (
-	pdfFontSize     = 10.0
-	pdfLineHeight   = 5.5
-	pdfMargin       = 15.0
-	pdfHeaderSize   = 13.0
-	pdfTitleSize    = 14.0
-	pdfCellPadding  = 2.0
+	pdfFontSize    = 10.0
+	pdfLineHeight  = 5.5
+	pdfMargin      = 15.0
+	pdfHeaderSize  = 13.0
+	pdfTitleSize   = 14.0
+	pdfCellPadding = 2.0
+	// pdfFont — встроенный кириллический шрифт (PT Serif). Заменил Helvetica
+	// + latinize (план 64, этап 2): транслитерация мертва.
+	pdfFont = "PTSerif"
 )
+
+// registerPDFFonts регистрирует встроенные PT-шрифты из internal/sheet.
+func registerPDFFonts(pdf *fpdf.Fpdf) {
+	pdf.AddUTF8FontFromBytes(pdfFont, "", sheet.PTSerifRegular)
+	pdf.AddUTF8FontFromBytes(pdfFont, "B", sheet.PTSerifBold)
+	pdf.AddUTF8FontFromBytes(pdfFont, "I", sheet.PTSerifItalic)
+	pdf.AddUTF8FontFromBytes(pdfFont, "BI", sheet.PTSerifBoldItalic)
+}
 
 // RenderPDF produces a PDF for the given print form and data context.
 func RenderPDF(form *PrintForm, ctx *RenderContext) ([]byte, error) {
 	pdf := fpdf.New("P", "mm", "A4", "")
 	pdf.SetMargins(pdfMargin, pdfMargin, pdfMargin)
+	registerPDFFonts(pdf)
 	pdf.AddPage()
 
-	// Register UTF-8 font (built-in Helvetica with Unicode transliteration)
-	pdf.SetFont("Helvetica", "", pdfFontSize)
+	// Встроенный кириллический шрифт PT Serif (без транслитерации).
+	pdf.SetFont(pdfFont, "", pdfFontSize)
 
 	title := interpolate(form.Title, ctx, 0)
 	header := interpolate(form.Header, ctx, 0)
@@ -34,14 +47,14 @@ func RenderPDF(form *PrintForm, ctx *RenderContext) ([]byte, error) {
 
 	// Title
 	if title != "" {
-		pdf.SetFont("Helvetica", "B", pdfTitleSize)
-		pdf.MultiCell(usable, 7, latinize(title), "", "C", false)
+		pdf.SetFont(pdfFont, "B", pdfTitleSize)
+		pdf.MultiCell(usable, 7, title, "", "C", false)
 		pdf.Ln(4)
 	}
 
 	// Header block
 	if header != "" {
-		pdf.SetFont("Helvetica", "", pdfFontSize)
+		pdf.SetFont(pdfFont, "", pdfFontSize)
 		for _, line := range splitMarkdownLines(header) {
 			if line == "---" || line == "___" {
 				pdf.Line(pdfMargin, pdf.GetY(), pw-pdfMargin, pdf.GetY())
@@ -53,18 +66,18 @@ func RenderPDF(form *PrintForm, ctx *RenderContext) ([]byte, error) {
 			if strings.HasPrefix(line, "## ") {
 				text = strings.TrimPrefix(line, "## ")
 				bold = true
-				pdf.SetFont("Helvetica", "B", pdfFontSize+1)
+				pdf.SetFont(pdfFont, "B", pdfFontSize+1)
 			} else if strings.HasPrefix(line, "# ") {
 				text = strings.TrimPrefix(line, "# ")
 				bold = true
-				pdf.SetFont("Helvetica", "B", pdfHeaderSize)
+				pdf.SetFont(pdfFont, "B", pdfHeaderSize)
 			} else {
 				// inline **bold**
 				text = stripMarkdown(text)
 			}
-			pdf.MultiCell(usable, pdfLineHeight, latinize(text), "", "L", false)
+			pdf.MultiCell(usable, pdfLineHeight, text, "", "L", false)
 			if bold {
-				pdf.SetFont("Helvetica", "", pdfFontSize)
+				pdf.SetFont(pdfFont, "", pdfFontSize)
 			}
 		}
 		pdf.Ln(3)
@@ -80,9 +93,9 @@ func RenderPDF(form *PrintForm, ctx *RenderContext) ([]byte, error) {
 	if footer != "" {
 		pdf.Line(pdfMargin, pdf.GetY(), pw-pdfMargin, pdf.GetY())
 		pdf.Ln(2)
-		pdf.SetFont("Helvetica", "", pdfFontSize-1)
+		pdf.SetFont(pdfFont, "", pdfFontSize-1)
 		for _, line := range splitMarkdownLines(footer) {
-			pdf.MultiCell(usable, pdfLineHeight-1, latinize(stripMarkdown(line)), "", "L", false)
+			pdf.MultiCell(usable, pdfLineHeight-1, stripMarkdown(line), "", "L", false)
 		}
 	}
 
@@ -105,10 +118,10 @@ func renderPDFTable(pdf *fpdf.Fpdf, ts *TableSection, ctx *RenderContext, usable
 	colWidths := computeColWidths(ts.Columns, usable)
 
 	// Header row
-	pdf.SetFont("Helvetica", "B", pdfFontSize-0.5)
+	pdf.SetFont(pdfFont, "B", pdfFontSize-0.5)
 	pdf.SetFillColor(240, 240, 240)
 	for i, col := range ts.Columns {
-		pdf.CellFormat(colWidths[i], 6, latinize(col.Label), "1", 0, "C", true, 0, "")
+		pdf.CellFormat(colWidths[i], 6, col.Label, "1", 0, "C", true, 0, "")
 	}
 	pdf.Ln(-1)
 
@@ -127,7 +140,7 @@ func renderPDFTable(pdf *fpdf.Fpdf, ts *TableSection, ctx *RenderContext, usable
 	}
 
 	// Data rows
-	pdf.SetFont("Helvetica", "", pdfFontSize-0.5)
+	pdf.SetFont(pdfFont, "", pdfFontSize-0.5)
 	pdf.SetFillColor(255, 255, 255)
 	for i, row := range rows {
 		for ci, col := range ts.Columns {
@@ -155,14 +168,14 @@ func renderPDFTable(pdf *fpdf.Fpdf, ts *TableSection, ctx *RenderContext, usable
 			case "center":
 				align = "C"
 			}
-			pdf.CellFormat(colWidths[ci], 5.5, latinize(cell), "1", 0, align, false, 0, "")
+			pdf.CellFormat(colWidths[ci], 5.5, cell, "1", 0, align, false, 0, "")
 		}
 		pdf.Ln(-1)
 	}
 
 	// Totals row
 	if len(ts.Totals) > 0 {
-		pdf.SetFont("Helvetica", "B", pdfFontSize-0.5)
+		pdf.SetFont(pdfFont, "B", pdfFontSize-0.5)
 		pdf.SetFillColor(248, 248, 248)
 		totColIdx := make(map[int]TotalSpec)
 		for _, tot := range ts.Totals {
@@ -181,7 +194,7 @@ func renderPDFTable(pdf *fpdf.Fpdf, ts *TableSection, ctx *RenderContext, usable
 					cell = ApplyFormat(totals[tot.Field], col.Format)
 				}
 			}
-			pdf.CellFormat(colWidths[ci], 6, latinize(cell), "1", 0, "R", true, 0, "")
+			pdf.CellFormat(colWidths[ci], 6, cell, "1", 0, "R", true, 0, "")
 		}
 		pdf.Ln(-1)
 	}
@@ -229,34 +242,6 @@ func stripMarkdown(s string) string {
 	s = reBold.ReplaceAllString(s, "$1")
 	s = reItalic.ReplaceAllString(s, "$1")
 	return s
-}
-
-// latinize does a best-effort cyrillic → latin transliteration for gofpdf's
-// built-in Helvetica font which does not include cyrillic glyphs.
-// This is a temporary approach until a proper Unicode font is embedded.
-func latinize(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if lat, ok := cyrMap[r]; ok {
-			b.WriteString(lat)
-		} else {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
-var cyrMap = map[rune]string{
-	'А': "A", 'Б': "B", 'В': "V", 'Г': "G", 'Д': "D", 'Е': "E", 'Ё': "Yo",
-	'Ж': "Zh", 'З': "Z", 'И': "I", 'Й': "J", 'К': "K", 'Л': "L", 'М': "M",
-	'Н': "N", 'О': "O", 'П': "P", 'Р': "R", 'С': "S", 'Т': "T", 'У': "U",
-	'Ф': "F", 'Х': "Kh", 'Ц': "Ts", 'Ч': "Ch", 'Ш': "Sh", 'Щ': "Shch",
-	'Ъ': "", 'Ы': "Y", 'Ь': "", 'Э': "E", 'Ю': "Yu", 'Я': "Ya",
-	'а': "a", 'б': "b", 'в': "v", 'г': "g", 'д': "d", 'е': "e", 'ё': "yo",
-	'ж': "zh", 'з': "z", 'и': "i", 'й': "j", 'к': "k", 'л': "l", 'м': "m",
-	'н': "n", 'о': "o", 'п': "p", 'р': "r", 'с': "s", 'т': "t", 'у': "u",
-	'ф': "f", 'х': "kh", 'ц': "ts", 'ч': "ch", 'ш': "sh", 'щ': "shch",
-	'ъ': "", 'ы': "y", 'ь': "", 'э': "e", 'ю': "yu", 'я': "ya",
 }
 
 type byteSliceWriter struct {

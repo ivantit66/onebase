@@ -7,9 +7,12 @@ import (
 
 // HTMLOptions — параметры HTML-рендера табличного документа.
 // BackURL: если задан, кнопка «Назад» ведёт по ссылке, иначе history.back().
+// PDFURL: если задан, кнопка «PDF» в тулбаре ведёт на серверный PDF-endpoint;
+// при пустом PDFURL вывод бит-в-бит совпадает с прежним (кнопка → window.print()).
 // Точная семантика повторяет прежний toHTML из interpreter.
 type HTMLOptions struct {
 	BackURL string
+	PDFURL  string
 }
 
 // HTMLString рендерит документ в HTML, используя BackURL из самого документа.
@@ -55,7 +58,15 @@ tr:nth-child(even) td{background:#f8fafc}
 	}
 	sb.WriteString(`
 <button class="btn-print" onclick="window.print()">&#128424; Печать</button>
-<button onclick="window.print()">&#128196; PDF</button>
+`)
+	// Кнопка «PDF»: при заданном PDFURL — ссылка на серверный PDF, иначе
+	// прежнее поведение (window.print()) — бит-в-бит как раньше.
+	if opts.PDFURL != "" {
+		sb.WriteString(`<a class="btn" href="` + escapeHTML(opts.PDFURL) + `">&#128196; PDF</a>`)
+	} else {
+		sb.WriteString(`<button onclick="window.print()">&#128196; PDF</button>`)
+	}
+	sb.WriteString(`
 </div>
 <div class="doc-content">
 <table>`)

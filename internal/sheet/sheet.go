@@ -127,6 +127,33 @@ func (a *Area) Merge() {
 	cell.RowSpan = rows
 }
 
+// Margins — поля страницы PDF в миллиметрах.
+type Margins struct {
+	Top    float64
+	Bottom float64
+	Left   float64
+	Right  float64
+}
+
+// PageSetup — параметры страницы для PDF-рендера (план 64, этап 2).
+// Orientation: "portrait"/"landscape" (плюс рус. синонимы нормализуются
+// в DSL-обвязке). Format: "A4"/"A5"/"Letter" и т.п. (передаётся в fpdf).
+// MarginsMM — поля в мм. Этап 3 наполнит это из page: YAML-макета.
+type PageSetup struct {
+	Orientation string
+	Format      string
+	MarginsMM   Margins
+}
+
+// DefaultPageSetup — A4, портрет, поля 10 мм со всех сторон.
+func DefaultPageSetup() PageSetup {
+	return PageSetup{
+		Orientation: "portrait",
+		Format:      "A4",
+		MarginsMM:   Margins{Top: 10, Bottom: 10, Left: 10, Right: 10},
+	}
+}
+
 // Document — табличный документ для печатных форм. Содержит данные: ячейки,
 // размеры, разрывы страниц, повтор шапки, текущую позицию вывода. Рендеры
 // (HTML/PDF) и операции вывода — методы этого пакета; DSL-протокол поверх —
@@ -137,7 +164,7 @@ type Document struct {
 	ColCount int
 	// ColWidths/RowHeights — размеры колонок/строк (1-based индекс → размер в px).
 	// ШиринаКолонки/ВысотаСтроки пишут сюда, НЕ материализуя ячейки; HTML-рендер
-	// накладывает их на колонку/строку целиком.
+	// накладывает их на колонку/строку целиком. PDF-рендер конвертирует px → мм.
 	ColWidths    map[int]float64
 	RowHeights   map[int]float64
 	CurrentRow   int
@@ -147,7 +174,8 @@ type Document struct {
 	FileName     string
 	RepeatHeader bool
 	HeaderArea   *Area
-	BackURL      string // URL для кнопки «Назад» в тулбаре HTML
+	BackURL      string    // URL для кнопки «Назад» в тулбаре HTML
+	Page         PageSetup // параметры страницы для PDF (этап 2)
 }
 
 // NewDocument создаёт пустой документ с дефолтным размером сетки (как в старом
@@ -161,6 +189,7 @@ func NewDocument() *Document {
 		ColCount:   50,
 		CurrentRow: 0,
 		CurrentCol: 0,
+		Page:       DefaultPageSetup(),
 	}
 }
 
@@ -270,23 +299,82 @@ func (d *Document) PageBreak() {
 	d.PageBreaks = append(d.PageBreaks, d.CurrentRow)
 }
 
-// rowsPerPage — условная высота страницы в строках для пагинации вывода.
-// Этап 2 (план 64) заменит на расчёт по реальной высоте страницы/строк.
-const rowsPerPage = 50
+// usablePageHeightMM возвращает доступную высоту страницы (мм) по PageSetup:
+// высота формата минус верхнее и нижнее поля.
+func (d *Document) usablePageHeightMM() float64 {
+	w, h := formatSizeMM(d.Page.Format)
+	_ = w
+	if orientLandscape(d.Page.Orientation) {
+		w2, h2 := h, w
+		w, h = w2, h2
+	}
+	usable := h - d.Page.MarginsMM.Top - d.Page.MarginsMM.Bottom
+	if usable <= 0 {
+		return h
+	}
+	return usable
+}
 
-// CheckOutput проверяет, поместится ли область на текущей странице.
+// RowsPerPage оценивает число строк на странице по реальной высоте страницы
+// (PageSetup) и средней высоте строки документа. Заменяет прежнюю константу
+// rowsPerPage=50. Минимум — 1 строка.
+func (d *Document) RowsPerPage() int {
+	usable := d.usablePageHeightMM()
+	rowMM := d.avgRowHeightMM()
+	if rowMM <= 0 {
+		rowMM = minRowMM
+	}
+	n := int(usable / rowMM)
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// avgRowHeightMM — средняя высота строки документа в мм (для пагинации вывода
+// DSL). Заданные строчные высоты учитываются как px→мм, иначе minRowMM.
+func (d *Document) avgRowHeightMM() float64 {
+	maxRow, _ := d.ContentBounds()
+	if maxRow < 0 {
+		return minRowMM
+	}
+	total := 0.0
+	count := 0
+	for r := 0; r <= maxRow; r++ {
+		if px := d.RowHeights[r+1]; px > 0 {
+			total += pxToMM(px)
+		} else {
+			total += minRowMM
+		}
+		count++
+	}
+	if count == 0 {
+		return minRowMM
+	}
+	return total / float64(count)
+}
+
+// RowsFitOnPage сообщает, помещается ли область высотой areaRows строк на
+// текущей странице при позиции currentRow, исходя из реальной высоты страницы.
+func (d *Document) RowsFitOnPage(currentRow, areaRows int) bool {
+	rpp := d.RowsPerPage()
+	rowsRemaining := rpp - (currentRow % rpp)
+	return areaRows <= rowsRemaining
+}
+
+// CheckOutput проверяет, поместится ли область на текущей странице (по реальной
+// высоте страницы из PageSetup).
 func (d *Document) CheckOutput(area *Area) bool {
 	if area == nil {
 		return true
 	}
-	areaHeight := area.Rows()
-	rowsRemaining := rowsPerPage - (d.CurrentRow % rowsPerPage)
-	return float64(areaHeight) <= float64(rowsRemaining)
+	return d.RowsFitOnPage(d.CurrentRow, area.Rows())
 }
 
 // EndPage завершает текущую страницу и переходит к началу следующей.
 func (d *Document) EndPage() {
-	nextPage := (d.CurrentRow/rowsPerPage + 1) * rowsPerPage
+	rpp := d.RowsPerPage()
+	nextPage := (d.CurrentRow/rpp + 1) * rpp
 	d.CurrentRow = nextPage
 	d.CurrentCol = 0
 }

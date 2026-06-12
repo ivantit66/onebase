@@ -19,6 +19,7 @@ import (
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/printform"
 	"github.com/ivantit66/onebase/internal/runtime"
+	"github.com/ivantit66/onebase/internal/sheet"
 )
 
 // printDocument renders a print form for a specific document/catalog record.
@@ -224,25 +225,11 @@ func (s *Server) printDocumentPDF(w http.ResponseWriter, r *http.Request) {
 	w.Write(pdfBytes)
 }
 
-// printDocumentDSLPF renders a DSL (.os) print form for a document/catalog record.
-func (s *Server) printDocumentDSLPF(w http.ResponseWriter, r *http.Request) {
-	entity := s.getEntity(w, r)
-	if entity == nil {
-		return
-	}
-	if !s.requirePerm(w, r, string(entity.Kind), entity.Name, "read") {
-		return
-	}
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		http.Error(w, "invalid id", 400)
-		return
-	}
-	pfName := chi.URLParam(r, "pfName")
-	if dec, err2 := url.PathUnescape(pfName); err2 == nil {
-		pfName = dec
-	}
-
+// buildDSLPF выполняет общую часть DSL-печати: находит форму/процедуру,
+// загружает запись, резолвит ссылки, исполняет DSL-функцию и возвращает
+// готовый ТабличныйДокумент. При ошибке сам пишет HTTP-ответ и возвращает
+// ok=false. Общий код для HTML- и PDF-маршрутов DSL-форм (план 64, этап 2).
+func (s *Server) buildDSLPF(w http.ResponseWriter, r *http.Request, entity *metadata.Entity, id uuid.UUID, pfName string) (*interpreter.SpreadsheetDocument, bool) {
 	// 1. Find DSL print form in registry
 	dslForm := s.reg.GetDSLPrintForm(entity.Name, pfName)
 
@@ -260,7 +247,7 @@ func (s *Server) printDocumentDSLPF(w http.ResponseWriter, r *http.Request) {
 		}
 		if procDecl == nil {
 			http.Error(w, "DSL print form not found: "+pfName, 404)
-			return
+			return nil, false
 		}
 	}
 
@@ -271,7 +258,7 @@ func (s *Server) printDocumentDSLPF(w http.ResponseWriter, r *http.Request) {
 		prog, parseErr := p.ParseProgram()
 		if parseErr != nil {
 			http.Error(w, "parse error: "+s.errText(r, parseErr), 500)
-			return
+			return nil, false
 		}
 		for _, proc := range prog.Procedures {
 			lower := strings.ToLower(proc.Name.Literal)
@@ -282,7 +269,7 @@ func (s *Server) printDocumentDSLPF(w http.ResponseWriter, r *http.Request) {
 		}
 		if procDecl == nil {
 			http.Error(w, fmt.Sprintf(s.tr(s.resolveLang(r), "Функция Сформировать() не найдена в %s.os"), pfName), 404)
-			return
+			return nil, false
 		}
 	}
 
@@ -290,7 +277,7 @@ func (s *Server) printDocumentDSLPF(w http.ResponseWriter, r *http.Request) {
 	row, err := s.store.GetByID(r.Context(), entity.Name, id, entity)
 	if err != nil {
 		http.Error(w, s.errText(r, err), 404)
-		return
+		return nil, false
 	}
 
 	tpRows := make(map[string][]map[string]any)
@@ -329,16 +316,50 @@ func (s *Server) printDocumentDSLPF(w http.ResponseWriter, r *http.Request) {
 
 	// 7. Execute the DSL function
 	var result any
-	err = s.interp.RunWithResult(procDecl, docData, &result, dslVars)
-	if err != nil {
+	if err := s.interp.RunWithResult(procDecl, docData, &result, dslVars); err != nil {
 		http.Error(w, "DSL error: "+s.errText(r, err), 500)
-		return
+		return nil, false
 	}
 
 	// 8. Render result
 	sd, ok := result.(*interpreter.SpreadsheetDocument)
 	if !ok {
 		http.Error(w, s.tr(s.resolveLang(r), "Процедура должна возвращать ТабличныйДокумент"), 500)
+		return nil, false
+	}
+	return sd, true
+}
+
+// dslPFParams извлекает entity/id/pfName и проверяет права. ok=false означает,
+// что ответ уже записан.
+func (s *Server) dslPFParams(w http.ResponseWriter, r *http.Request) (*metadata.Entity, uuid.UUID, string, bool) {
+	entity := s.getEntity(w, r)
+	if entity == nil {
+		return nil, uuid.Nil, "", false
+	}
+	if !s.requirePerm(w, r, string(entity.Kind), entity.Name, "read") {
+		return nil, uuid.Nil, "", false
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", 400)
+		return nil, uuid.Nil, "", false
+	}
+	pfName := chi.URLParam(r, "pfName")
+	if dec, err2 := url.PathUnescape(pfName); err2 == nil {
+		pfName = dec
+	}
+	return entity, id, pfName, true
+}
+
+// printDocumentDSLPF renders a DSL (.os) print form for a document/catalog record.
+func (s *Server) printDocumentDSLPF(w http.ResponseWriter, r *http.Request) {
+	entity, id, pfName, ok := s.dslPFParams(w, r)
+	if !ok {
+		return
+	}
+	sd, ok := s.buildDSLPF(w, r, entity, id, pfName)
+	if !ok {
 		return
 	}
 
@@ -346,7 +367,30 @@ func (s *Server) printDocumentDSLPF(w http.ResponseWriter, r *http.Request) {
 	backPath := fmt.Sprintf("/ui/%s/%s/%s", strings.ToLower(string(entity.Kind)), strings.ToLower(entity.Name), id.String())
 	sd.SetBackURL(backPath)
 
-	html := sd.HTMLString()
+	html := sd.Doc.HTML(sheet.HTMLOptions{BackURL: sd.Doc.BackURL, PDFURL: r.URL.Path + "/pdf"})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(html))
+}
+
+// printDocumentDSLPFPDF renders a DSL (.os) print form as PDF (server-side,
+// embedded PT fonts, no transliteration) and sends it as a download — план 64, этап 2.
+func (s *Server) printDocumentDSLPFPDF(w http.ResponseWriter, r *http.Request) {
+	entity, id, pfName, ok := s.dslPFParams(w, r)
+	if !ok {
+		return
+	}
+	sd, ok := s.buildDSLPF(w, r, entity, id, pfName)
+	if !ok {
+		return
+	}
+
+	pdfBytes, err := sd.Doc.PDF(sheet.PDFOptions{Title: pfName})
+	if err != nil {
+		http.Error(w, "PDF error: "+s.errText(r, err), 500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", contentDisposition(pfName+".pdf"))
+	w.Write(pdfBytes)
 }
