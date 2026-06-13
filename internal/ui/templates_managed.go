@@ -76,6 +76,9 @@ const tplManagedForm = `
           <option value="false" {{if eq (index $ctx.Values $fn) "false"}}selected{{end}}>Нет</option>
           <option value="true" {{if eq (index $ctx.Values $fn) "true"}}selected{{end}}>Да</option>
         </select>
+      {{else if isRichText (str $f.Type)}}
+        {{/* Этап 1: сырой HTML в textarea (Quill — этап 2). */}}
+        <textarea name="{{$fn}}" class="richtext-field" rows="8" style="width:100%"{{if $el.ReadOnly}} readonly{{end}}>{{index $ctx.Values $fn}}</textarea>
       {{else if eq (str $el.Type) "file"}}
         <div style="display:flex;gap:6px;align-items:center">
           <input type="text" name="{{$fn}}" id="file-path-{{$fn}}" placeholder="Путь к файлу или выберите …" style="flex:1"{{if $el.ReadOnly}} readonly{{end}}>

@@ -14,7 +14,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/auth"
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
+	"github.com/ivantit66/onebase/internal/i18n/i18nerr"
 	"github.com/ivantit66/onebase/internal/metadata"
+	"github.com/ivantit66/onebase/internal/richtext"
 	"github.com/ivantit66/onebase/internal/runtime"
 	"github.com/ivantit66/onebase/internal/storage"
 )
@@ -439,11 +441,30 @@ func formToFields(r *http.Request, entity *metadata.Entity) map[string]any {
 			} else {
 				fields[f.Name] = val
 			}
+		case metadata.FieldTypeRichText:
+			// Санитизация на ЗАПИСИ: вырезаем script/on*/внешние src ещё до
+			// сохранения (на выводе санитизируем повторно — defense-in-depth).
+			fields[f.Name] = richtext.Sanitize(val)
 		default:
 			fields[f.Name] = val
 		}
 	}
 	return fields
+}
+
+// checkRichTextLimits проверяет, что ни одно richtext-поле формы не превышает
+// richtext.MaxBytes. Проверка по сырому FormValue (до санитайза). Возвращает
+// локализуемую ошибку формы при превышении.
+func checkRichTextLimits(r *http.Request, entity *metadata.Entity) error {
+	for _, f := range entity.Fields {
+		if !metadata.IsRichText(f.Type) {
+			continue
+		}
+		if len(r.FormValue(f.Name)) > richtext.MaxBytes {
+			return i18nerr.Errorf("поле %s: превышен размер richtext (%d МБ)", f.Name, richtext.MaxBytes>>20)
+		}
+	}
+	return nil
 }
 
 func formValues(r *http.Request, entity *metadata.Entity) map[string]string {

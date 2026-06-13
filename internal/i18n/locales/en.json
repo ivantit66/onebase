@@ -782,6 +782,7 @@
   "нельзя удалить предопределённый элемент %s": "the predefined item %s cannot be deleted",
   "ошибка чтения файла": "error reading the file",
   "поле %q: число превышает разрядность (%d,%d)": "field %q: the number exceeds the precision (%d,%d)",
+  "поле %s: превышен размер richtext (%d МБ)": "field %s: rich text size limit exceeded (%d MB)",
   "субконто%d не существует (объявлено субконто: %d)": "subconto%d does not exist (declared subconto: %d)",
   "файл не выбран": "no file selected",
   "файл превышает максимальный размер %d МБ": "the file exceeds the maximum size of %d MB",

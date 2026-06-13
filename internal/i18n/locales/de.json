@@ -754,6 +754,7 @@
   "нельзя удалить предопределённый элемент %s": "das vordefinierte Element %s kann nicht gelöscht werden",
   "ошибка чтения файла": "Fehler beim Lesen der Datei",
   "поле %q: число превышает разрядность (%d,%d)": "Feld %q: Die Zahl überschreitet die Genauigkeit (%d,%d)",
+  "поле %s: превышен размер richtext (%d МБ)": "Feld %s: Richtext-Größenlimit überschritten (%d MB)",
   "субконто%d не существует (объявлено субконто: %d)": "Subkonto%d existiert nicht (deklarierte Subkonten: %d)",
   "файл не выбран": "keine Datei ausgewählt",
   "файл превышает максимальный размер %d МБ": "die Datei überschreitet die maximale Größe von %d MB",

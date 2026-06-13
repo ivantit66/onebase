@@ -302,6 +302,12 @@ func (s *Server) parseSubmitForm(w http.ResponseWriter, r *http.Request, entity 
 		http.Error(w, s.errText(r, err), 400)
 		return
 	}
+	// Лимит richtext проверяем по СЫРОМУ значению формы (до санитайза в
+	// formToFields) — чтобы не прогонять гигантский blob через санитайзер.
+	if err := checkRichTextLimits(r, entity); err != nil {
+		http.Error(w, s.errText(r, err), 400)
+		return
+	}
 	fields = formToFields(r, entity)
 	tpRows = parseTablePartRows(r, entity)
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ivantit66/onebase/internal/i18n"
 	"github.com/ivantit66/onebase/internal/metadata"
+	"github.com/ivantit66/onebase/internal/richtext"
 	"github.com/ivantit66/onebase/internal/storage"
 	"github.com/shopspring/decimal"
 )
@@ -45,8 +46,23 @@ var tmpl = template.Must(template.New("root").Funcs(template.FuncMap{
 		}
 		return fmt.Sprintf("%v", v)
 	},
-	"isRef":  func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "reference:") },
-	"isEnum": func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "enum:") },
+	"isRef":      func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "reference:") },
+	"isEnum":     func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "enum:") },
+	"isRichText": func(t any) bool { return fmt.Sprintf("%v", t) == string(metadata.FieldTypeRichText) },
+	// richPlain — текстовая проекция richtext-значения для ячейки списка
+	// (усечённая, чтобы HTML не разъезжал таблицу).
+	"richPlain": func(v any) string {
+		if v == nil {
+			return ""
+		}
+		s := richtext.Plaintext(fmt.Sprintf("%v", v))
+		const maxRunes = 100
+		r := []rune(s)
+		if len(r) > maxRunes {
+			return string(r[:maxRunes]) + "…"
+		}
+		return s
+	},
 	// dpField извлекает имя поля из data_path вида "Объект.Контрагент"
 	// (план 37, managed-формы). Если префикса нет — возвращает строку как есть.
 	"dpField": func(s string) string {
@@ -965,6 +981,7 @@ const tplList = `
         {{index $row .Name}}{{if index $row "_is_predefined"}} <span title="{{t $.Lang "Предопределённый"}}" style="color:#f59e0b;font-size:11px">★</span>{{end}}
       </td>
     {{else if eq (str .Type) "date"}}<td>{{fmtDate (index $row .Name)}}</td>
+    {{else if isRichText (str .Type)}}<td style="color:#64748b">{{richPlain (index $row .Name)}}</td>
     {{else}}<td>{{fmtCell (index $row .Name)}}</td>{{end}}
   {{end}}
   <td>
@@ -1017,6 +1034,7 @@ const tplList = `
   {{end}}
   {{range $.Entity.Fields}}
     {{if eq (str .Type) "date"}}<td style="white-space:nowrap">{{fmtDate (index $row .Name)}}</td>
+    {{else if isRichText (str .Type)}}<td style="white-space:nowrap;color:#64748b">{{richPlain (index $row .Name)}}</td>
     {{else}}<td style="white-space:nowrap">{{if and (eq .Name "Наименование") $.Entity.Hierarchical}}{{if $isFolder}}📁 {{else}}📄 {{end}}{{end}}{{fmtCell (index $row .Name)}}{{if and (eq .Name "Наименование") (index $row "_is_predefined")}} <span title="{{t $.Lang "Предопределённый элемент"}}" style="color:#f59e0b;font-size:11px">★</span>{{end}}</td>{{end}}
   {{end}}
   <td>
@@ -1311,6 +1329,10 @@ const tplForm = `
       <option value="false" {{if eq (index $.Values $fn) "false"}}selected{{end}}>{{t $.Lang "Нет"}}</option>
       <option value="true"  {{if eq (index $.Values $fn) "true"}}selected{{end}}>{{t $.Lang "Да"}}</option>
     </select>
+  {{else if isRichText (str .Type)}}
+    {{/* Этап 1: сырой HTML в textarea. html/template экранирует тело textarea —
+         браузер показывает HTML как текст для редактирования. Quill — этап 2. */}}
+    <textarea name="{{$fn}}" class="richtext-field" rows="8" style="width:100%">{{index $.Values $fn}}</textarea>
   {{else}}
     <input type="text" name="{{$fn}}" value="{{index $.Values $fn}}" placeholder="{{$flabel}}">
   {{end}}
