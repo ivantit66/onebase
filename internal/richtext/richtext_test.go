@@ -65,6 +65,16 @@ func TestSanitize_RejectsDataURIScript(t *testing.T) {
 	}
 }
 
+func TestSanitize_RejectsSVGDataURI(t *testing.T) {
+	// SVG data-URI исполняем (может нести <script>) — должен быть вырезан,
+	// несмотря на то что встроенный bluemonday AllowDataURIImages его пропустил бы.
+	in := `<img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxzY3JpcHQ+YWxlcnQoMSk8L3NjcmlwdD48L3N2Zz4=">`
+	got := Sanitize(in)
+	if strings.Contains(got, "svg") || strings.Contains(got, "src=") {
+		t.Fatalf("svg data-URI должен быть вырезан, получено: %q", got)
+	}
+}
+
 func TestSanitize_KeepsFormatting(t *testing.T) {
 	in := `<p>a</p><b>b</b><strong>c</strong><i>d</i><em>e</em><u>f</u><ul><li>g</li></ul><h1>h</h1><blockquote>q</blockquote>`
 	got := Sanitize(in)

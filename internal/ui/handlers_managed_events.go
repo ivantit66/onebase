@@ -126,6 +126,14 @@ func (s *Server) handleManagedFormEvent(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Лимит richtext проверяем по СЫРОМУ значению формы до санитайза, как в
+	// parseSubmitForm/handlers_entity — иначе мега-blob обходит лимит через
+	// событийный путь managed-формы (DoS/раздувание БД), XSS при этом нет.
+	if err := checkRichTextLimits(r, entity); err != nil {
+		enc.Encode(formEventResponse{Error: s.errText(r, err)})
+		return
+	}
+
 	// Построить объект из текущих form-values.
 	obj := buildObjectFromForm(r, entity)
 
