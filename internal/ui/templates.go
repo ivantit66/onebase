@@ -2312,7 +2312,7 @@ const tplInfoReg = `
   {{if $.CanDelete}}<td>
     <form method="POST" action="/ui/inforeg/{{lower $.InfoReg.Name}}/delete" style="display:inline"
           onsubmit="return confirm('{{t $.Lang "Удалить запись?"}}')">
-      {{if $.InfoReg.Periodic}}<input type="hidden" name="period" value="{{index $row "period"}}">{{end}}
+      {{if $.InfoReg.Periodic}}<input type="hidden" name="period" value="{{index $row "period_key"}}">{{end}}
       {{range $.InfoReg.Dimensions}}<input type="hidden" name="{{.Name}}" value="{{index $row .Name}}">{{end}}
       <button class="btn btn-danger btn-sm" type="submit">×</button>
     </form>

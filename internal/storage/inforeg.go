@@ -134,9 +134,23 @@ func (db *DB) InfoRegList(ctx context.Context, ir *metadata.InfoRegister, f RegF
 		row := make(map[string]any, len(selCols))
 		i := 0
 		if ir.Periodic {
-			if t, ok := dest[0].(time.Time); ok {
-				row["period"] = t.Format("02.01.2006")
-			} else {
+			// period — человекочитаемое представление для ячейки списка;
+			// period_key — машинный ключ для round-trip через HTML-форму
+			// удаления (см. ParseRegPeriod и ui.infoRegDelete). На PostgreSQL
+			// период приходит как time.Time → RFC3339 несёт инстант; на SQLite
+			// как TEXT-строка стенных часов → её и отдаём ключом.
+			switch v := dest[0].(type) {
+			case time.Time:
+				row["period"] = v.Format("02.01.2006")
+				row["period_key"] = v.Format(time.RFC3339)
+			case string:
+				row["period_key"] = v
+				if t, ok := ParseRegPeriod(v); ok {
+					row["period"] = t.Format("02.01.2006")
+				} else {
+					row["period"] = v
+				}
+			default:
 				row["period"] = dest[0]
 			}
 			i = 1
@@ -152,6 +166,37 @@ func (db *DB) InfoRegList(ctx context.Context, ir *metadata.InfoRegister, f RegF
 		result = append(result, row)
 	}
 	return result, rows.Err()
+}
+
+// regPeriodLayouts — форматы, которыми период записи регистра сведений
+// сериализуется в period_key (InfoRegList) и принимается обратно при удалении.
+// RFC3339 несёт инстант (PostgreSQL timestamptz); зононезависимые форматы —
+// стенные часы (SQLite TEXT, см. sqliteTimeLayout). time.Parse трактует
+// зононезависимый ввод как UTC, а normalizeSQLiteArgs форматирует стенные часы
+// как есть, поэтому сравнение period в SQLite совпадает независимо от зоны.
+var regPeriodLayouts = []string{
+	time.RFC3339,
+	"2006-01-02 15:04:05",
+	"2006-01-02T15:04:05",
+	"2006-01-02T15:04",
+	"2006-01-02",
+}
+
+// ParseRegPeriod разбирает машинный ключ периода (period_key) обратно в time.Time.
+// Возвращает (_, false), если значение не распознано — вызывающая сторона ОБЯЗАНА
+// отказать в удалении, а не продолжать с nil-периодом (иначе DELETE сносит все
+// периоды комбинации измерений).
+func ParseRegPeriod(s string) (time.Time, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range regPeriodLayouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // InfoRegDelete removes a record by its primary key.

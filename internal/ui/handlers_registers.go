@@ -332,14 +332,16 @@ func (s *Server) infoRegDelete(w http.ResponseWriter, r *http.Request) {
 
 	var periodPtr *time.Time
 	if ir.Periodic {
-		if pStr := r.FormValue("period"); pStr != "" {
-			for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02T15:04", "2006-01-02"} {
-				if t, err := time.Parse(layout, pStr); err == nil {
-					periodPtr = &t
-					break
-				}
-			}
+		// Период берём из машинного ключа period_key (его кладёт InfoRegList в
+		// hidden-поле списка). Если ключ не разобран — ОТКАЗЫВАЕМ в удалении:
+		// иначе InfoRegDelete с nil-периодом снесёт все периоды комбинации
+		// измерений (критическая потеря данных).
+		t, ok := storage.ParseRegPeriod(r.FormValue("period"))
+		if !ok {
+			http.Error(w, s.tr(s.resolveLang(r), "Не удалось определить период записи для удаления"), http.StatusBadRequest)
+			return
 		}
+		periodPtr = &t
 	}
 	dims := parseInfoRegFields(r, ir.Dimensions)
 	if err := s.store.InfoRegDelete(r.Context(), ir, dims, periodPtr); err != nil {

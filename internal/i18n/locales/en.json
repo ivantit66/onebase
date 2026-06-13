@@ -123,6 +123,7 @@
   "Удалить помеченные без ссылок": "Delete marked without references",
   "Удалить все помеченные записи без ссылок?": "Delete all marked records without references?",
   "Удалить запись?": "Delete record?",
+  "Не удалось определить период записи для удаления": "Could not determine the record period to delete",
   "Создать": "Create",
   "Действия": "Actions",
   "Сначала выберите строку списка": "Select a list row first",
