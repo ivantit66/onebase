@@ -60,7 +60,6 @@ func dimWhereClause(d Dialect, dims []metadata.Field, f RegFilter, startIdx int,
 	if includeTo && f.To != nil {
 		conds = append(conds, fmt.Sprintf("period <= %s", d.Placeholder(idx)))
 		args = append(args, *f.To)
-		idx++
 	}
 
 	if len(conds) == 0 {

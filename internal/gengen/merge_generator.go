@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -364,14 +365,10 @@ func buildTablePartNode(tp TablePartSpec) *yaml.Node {
 
 // sanitizeFilename converts an entity name to a safe filename.
 func sanitizeFilename(name string) string {
-	// For now, just lowercase. Cyrillic is fine in filenames on Linux.
-	result := ""
-	for _, r := range name {
-		if r >= 'A' && r <= 'Z' {
-			result += string(r + 32)
-		} else {
-			result += string(r)
-		}
-	}
-	return result
+	// Приводим к нижнему регистру через strings.ToLower — он умеет Unicode,
+	// поэтому кириллица («Контрагент» → «контрагент») тоже опускается. Прежний
+	// ASCII-only вариант (A-Z) оставлял кириллицу как есть, из-за чего на
+	// регистрозависимой ФС (Linux CI) файл «Контрагент.yaml» не совпадал с
+	// ожидаемым «контрагент.yaml».
+	return strings.ToLower(name)
 }

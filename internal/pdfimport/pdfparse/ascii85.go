@@ -1,4 +1,4 @@
-﻿// file with help function for ascii85 decoder
+// file with help function for ascii85 decoder
 // later if new decoders is going to add it reasonable to rename file and add them here
 // also create interfaces to switch between them (like in unidoc)
 

@@ -1,4 +1,4 @@
-﻿// Derived from http://www.jdawiseman.com/papers/trivia/character-entities.html
+// Derived from http://www.jdawiseman.com/papers/trivia/character-entities.html
 
 package pdfparse
 

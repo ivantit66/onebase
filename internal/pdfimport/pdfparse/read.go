@@ -1,4 +1,4 @@
-﻿// Copyright 2014 The Go Authors.  All rights reserved.
+// Copyright 2014 The Go Authors.  All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -70,7 +70,6 @@ import (
 	"encoding/ascii85"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"sort"
 	"strconv"
@@ -853,7 +852,7 @@ func (v Value) Reader() io.ReadCloser {
 		}
 	}
 
-	return ioutil.NopCloser(rd)
+	return io.NopCloser(rd)
 }
 
 func applyFilter(rd io.Reader, name string, param Value) io.Reader {
@@ -1051,7 +1050,7 @@ func okayV4(encrypt dict) bool {
 	if stmf != strf {
 		return false
 	}
-	cfparam, ok := cf[stmf].(dict)
+	cfparam, _ := cf[stmf].(dict)
 	if cfparam["AuthEvent"] != nil && cfparam["AuthEvent"] != name("DocOpen") {
 		return false
 	}

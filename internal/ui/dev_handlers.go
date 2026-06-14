@@ -640,6 +640,10 @@ func (s *Server) gengenGenerate(w http.ResponseWriter, r *http.Request) {
 // выходит за пределы base. relPath из недоверенного источника (тело запроса)
 // может содержать «..» или абсолютный путь — тогда возвращается ошибка.
 func safeJoinWithin(base, relPath string) (string, error) {
+	// Бэкслеш — разделитель только на Windows. Нормализуем его в «/», иначе на
+	// Linux строка вида «..\..\etc\passwd» воспринимается как одно имя файла и
+	// traversal в Windows-нотации не отклоняется.
+	relPath = strings.ReplaceAll(relPath, `\`, "/")
 	full := filepath.Join(base, relPath)
 	rel, err := filepath.Rel(base, full)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {

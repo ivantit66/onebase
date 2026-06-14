@@ -323,11 +323,10 @@ func (d *Document) PageBreak() {
 // высота формата минус верхнее и нижнее поля.
 func (d *Document) usablePageHeightMM() float64 {
 	w, h := formatSizeMM(d.Page.Format)
-	_ = w
 	if orientLandscape(d.Page.Orientation) {
-		w2, h2 := h, w
-		w, h = w2, h2
+		w, h = h, w
 	}
+	_ = w
 	usable := h - d.Page.MarginsMM.Top - d.Page.MarginsMM.Bottom
 	if usable <= 0 {
 		return h
