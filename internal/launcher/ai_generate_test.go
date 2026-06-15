@@ -3,6 +3,7 @@ package launcher
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -49,5 +50,55 @@ func TestGenCreateObject_BadName(t *testing.T) {
 		if err := g.createObject("справочник", bad, "name: X\n"); err == nil {
 			t.Errorf("ожидалась ошибка для имени %q", bad)
 		}
+	}
+}
+
+func TestGenCheck_ReportsBadYAML(t *testing.T) {
+	g := newTestGenSession(t)
+	if err := g.createObject("документ", "Заявка", "name: Заявка\nfields: [oops"); err != nil {
+		t.Fatalf("createObject: %v", err)
+	}
+	out := g.check()
+	if !strings.Contains(out, "Заявка") {
+		t.Errorf("check не сообщил об ошибке битого документа: %s", out)
+	}
+}
+
+func TestGenCheck_CleanIsOK(t *testing.T) {
+	g := newTestGenSession(t)
+	if err := g.createObject("справочник", "Клиент", validCatalogYAML); err != nil {
+		t.Fatalf("createObject: %v", err)
+	}
+	if out := g.check(); !strings.Contains(strings.ToLower(out), "нет ошибок") {
+		t.Errorf("ожидалось «нет ошибок», получено: %s", out)
+	}
+}
+
+func TestGenDiff_ListsNew(t *testing.T) {
+	g := newTestGenSession(t)
+	if err := g.createObject("справочник", "Клиент", validCatalogYAML); err != nil {
+		t.Fatalf("createObject: %v", err)
+	}
+	d := g.diff()
+	if len(d) != 1 || d[0].Path != "catalogs/клиент.yaml" || d[0].Kind != "новый" || d[0].NewContent != validCatalogYAML {
+		t.Fatalf("diff неверный: %+v", d)
+	}
+}
+
+func TestGenShowObject_ReadsExisting(t *testing.T) {
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "catalogs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "catalogs", "товар.yaml"), []byte("name: Товар\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	g, err := newGenSession(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(g.close)
+	if out := g.showObject("Товар"); !strings.Contains(out, "name: Товар") {
+		t.Errorf("showObject не вернул YAML: %q", out)
 	}
 }

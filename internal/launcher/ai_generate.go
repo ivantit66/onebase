@@ -5,7 +5,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/ivantit66/onebase/internal/configcheck"
+	"github.com/ivantit66/onebase/internal/project"
 )
 
 // GenChange — один предложенный объект в diff генерации.
@@ -102,6 +107,75 @@ func (g *genSession) createObject(kind, name, yamlText string) error {
 	}
 	g.changed[rel] = true
 	return nil
+}
+
+// check валидирует overlay без исполнения кода: CheckDir (парс YAML) + project.Load
+// (кросс-ссылки; модули парсятся, не исполняются). CheckQueries НЕ зовём — он
+// исполняет запросы. Возвращает человекочитаемый текст для модели.
+func (g *genSession) check() string {
+	issues, _ := configcheck.CheckDir(g.overlay)
+	if proj, err := project.Load(g.overlay); err == nil {
+		proj.Close()
+	} else if !configcheck.AlreadyReported(issues, err.Error()) {
+		issues = append(issues, configcheck.Issue{Message: "Project.Load: " + err.Error()})
+	}
+	if len(issues) == 0 {
+		return "Нет ошибок."
+	}
+	var b strings.Builder
+	b.WriteString("Найдены ошибки:\n")
+	for _, is := range issues {
+		// Capitalize object name for readability (e.g. "заявка" → "Заявка").
+		obj := is.Object
+		if r, size := utf8.DecodeRuneInString(obj); size > 0 {
+			obj = strings.ToUpper(string(r)) + obj[size:]
+		}
+		if is.File != "" {
+			fmt.Fprintf(&b, "- %s %s (%s): %s\n", is.Kind, obj, is.File, is.Message)
+		} else {
+			fmt.Fprintf(&b, "- %s\n", is.Message)
+		}
+	}
+	return b.String()
+}
+
+// showObject возвращает YAML существующего объекта (ищет по имени во всех
+// подкаталогах метаданных overlay). Для контекста модели.
+func (g *genSession) showObject(name string) string {
+	fname, err := safeFileName(name)
+	if err != nil {
+		return "ошибка: " + err.Error()
+	}
+	for _, sub := range []string{"catalogs", "documents", "registers", "inforegs", "enums", "accounts", "accountregs"} {
+		p := filepath.Join(g.overlay, sub, fname)
+		if data, err := os.ReadFile(p); err == nil {
+			return string(data)
+		}
+	}
+	return fmt.Sprintf("объект %q не найден", name)
+}
+
+// diff возвращает предложенные изменения (по changed): новый или изменён.
+func (g *genSession) diff() []GenChange {
+	rels := make([]string, 0, len(g.changed))
+	for rel := range g.changed {
+		rels = append(rels, rel)
+	}
+	sort.Strings(rels)
+	out := make([]GenChange, 0, len(rels))
+	for _, rel := range rels {
+		newData, err := os.ReadFile(filepath.Join(g.overlay, filepath.FromSlash(rel)))
+		if err != nil {
+			continue
+		}
+		ch := GenChange{Path: rel, Kind: "новый", NewContent: string(newData)}
+		if oldData, err := os.ReadFile(filepath.Join(g.srcDir, filepath.FromSlash(rel))); err == nil {
+			ch.Kind = "изменён"
+			ch.OldContent = string(oldData)
+		}
+		out = append(out, ch)
+	}
+	return out
 }
 
 // copyTree рекурсивно копирует содержимое src в dst.
