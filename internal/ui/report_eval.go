@@ -14,11 +14,17 @@ import (
 // interpEvaluator вычисляет DSL-условия `when` на интерпретаторе.
 // Каждое выражение компилируется в процедуру один раз (кэш) и исполняется
 // на строку через RunWithResult с полями строки как переменными.
+//
+// Не-bool результат when трактуется как false (правило не срабатывает);
+// синтаксис when проверяется на этапе onebase check (план 59, Task 11).
 type interpEvaluator struct {
 	interp *interpreter.Interpreter
 	mu     sync.Mutex
 	cache  map[string]*ast.ProcedureDecl
 }
+
+// Контракт: interpEvaluator реализует compose.Evaluator (используется в Task 10).
+var _ compose.Evaluator = (*interpEvaluator)(nil)
 
 func newInterpEvaluator(interp *interpreter.Interpreter) *interpEvaluator {
 	return &interpEvaluator{interp: interp, cache: map[string]*ast.ProcedureDecl{}}
