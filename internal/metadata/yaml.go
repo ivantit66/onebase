@@ -51,6 +51,7 @@ type rawEntity struct {
 	ListForm      []string          `yaml:"list_form"`
 	ItemForm      []string          `yaml:"item_form"`
 	BasedOn       []string          `yaml:"based_on"`
+	ListMode      string            `yaml:"list_mode"`
 }
 
 func LoadFile(path string, kind Kind) (*Entity, error) {
@@ -75,6 +76,7 @@ func LoadFile(path string, kind Kind) (*Entity, error) {
 	e.ListForm = raw.ListForm
 	e.ItemForm = raw.ItemForm
 	e.BasedOn = raw.BasedOn
+	e.ListMode = raw.ListMode
 	if raw.Numerator != nil {
 		n := &Numerator{
 			Prefix: raw.Numerator.Prefix,

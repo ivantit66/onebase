@@ -17,6 +17,10 @@ const (
 	FieldTypeNumber   FieldType = "number"
 	FieldTypeBool     FieldType = "bool"
 	FieldTypeRichText FieldType = "richtext"
+	// FieldTypeImage — поле-картинка. В колонке хранится ссылка (UUID бинарника
+	// в хранилище), сам файл лежит на диске или в БД (см. storage blob backend).
+	// Отдаётся отдельным HTTP-обработчиком; показывается превью на форме и плитке.
+	FieldTypeImage FieldType = "image"
 )
 
 type Field struct {
@@ -163,6 +167,10 @@ type Entity struct {
 	// catalog или document. Проверяются Validate. Пустой/nil — ввод на
 	// основании запрещён.
 	BasedOn []string
+	// ListMode — режим загрузки списка по умолчанию: "" / "pages" (постранично)
+	// или "feed" (лента с догрузкой по скроллу, как динамический список 1С).
+	// Пользователь может переопределить тумблером (запоминается per-сущность).
+	ListMode string
 }
 
 type Register struct {
@@ -254,6 +262,12 @@ func IsEnum(ft FieldType) bool {
 // частях (см. Validate).
 func IsRichText(ft FieldType) bool {
 	return ft == FieldTypeRichText
+}
+
+// IsImage сообщает, что поле хранит картинку (тип image). В колонке лежит ссылка
+// на бинарник; файл раздаётся отдельным обработчиком, на формах/плитке — превью.
+func IsImage(ft FieldType) bool {
+	return ft == FieldTypeImage
 }
 
 func EnumTypeName(ft FieldType) string {

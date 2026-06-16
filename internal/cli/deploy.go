@@ -67,6 +67,9 @@ func runDeploy(cmd *cobra.Command, _ []string) error {
 	if err := db.EnsureAttachmentTable(ctx); err != nil {
 		return fmt.Errorf("attachments: %w", err)
 	}
+	if err := db.EnsureBlobTable(ctx); err != nil {
+		return fmt.Errorf("blobs: %w", err)
+	}
 	if err := db.EnsureAccountsTable(ctx); err != nil {
 		return fmt.Errorf("accounts: %w", err)
 	}

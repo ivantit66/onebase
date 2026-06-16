@@ -35,7 +35,10 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	}
 	params := parseListParams(r, entity, s.store.GetListPageSize(r.Context()))
 
-	treeView := entity.Hierarchical && r.URL.Query().Get("view") == "tree"
+	view := r.URL.Query().Get("view")
+	treeView := entity.Hierarchical && view == "tree"
+	tilesView := view == "tiles"
+	feed := !treeView && s.resolveListMode(w, r, entity)
 
 	var breadcrumbs []map[string]string
 	var parentStr string
@@ -108,6 +111,8 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 		"ParentStr":        parentStr,
 		"UpURL":            upURL,
 		"TreeView":         treeView,
+		"TilesView":        tilesView,
+		"Feed":             feed,
 		"TreeRows":         treeRows,
 		"Total":            total,
 		"Page":             page,
@@ -1269,6 +1274,58 @@ func parseTablePartRows(r *http.Request, entity *metadata.Entity) map[string][]m
 }
 
 // parseListParams reads filter, search, sort and pagination URL params.
+// listModeCookie — кука с per-сущностными предпочтениями режима списка
+// (pages|feed). Значение — URL-escaped JSON map: "kind/name" → режим.
+const listModeCookie = "ob_listmodes"
+
+// resolveListMode возвращает true, если список показывать «лентой» (feed).
+// Приоритет: явный ?lm=feed|pages (и тогда запоминаем в куку) > кука
+// per-сущность > дефолт сущности (ListMode). По умолчанию — постранично.
+func (s *Server) resolveListMode(w http.ResponseWriter, r *http.Request, entity *metadata.Entity) bool {
+	key := strings.ToLower(string(entity.Kind)) + "/" + strings.ToLower(entity.Name)
+	if lm := r.URL.Query().Get("lm"); lm == "feed" || lm == "pages" {
+		setListModeCookie(w, r, key, lm)
+		return lm == "feed"
+	}
+	if v, ok := readListModeCookie(r)[key]; ok {
+		return v == "feed"
+	}
+	return entity.ListMode == "feed"
+}
+
+func readListModeCookie(r *http.Request) map[string]string {
+	m := map[string]string{}
+	c, err := r.Cookie(listModeCookie)
+	if err != nil {
+		return m
+	}
+	raw, err := url.QueryUnescape(c.Value)
+	if err != nil {
+		return m
+	}
+	_ = json.Unmarshal([]byte(raw), &m)
+	return m
+}
+
+func setListModeCookie(w http.ResponseWriter, r *http.Request, key, mode string) {
+	m := readListModeCookie(r)
+	if m[key] == mode {
+		return
+	}
+	m[key] = mode
+	b, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     listModeCookie,
+		Value:    url.QueryEscape(string(b)),
+		Path:     "/",
+		MaxAge:   365 * 24 * 3600,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
 // defaultLimit задаёт размер страницы по умолчанию (приходит из настроек базы
 // _settings.ui.list_page_size; см. storage.GetListPageSize).
 func parseListParams(r *http.Request, entity *metadata.Entity, defaultLimit int) storage.ListParams {

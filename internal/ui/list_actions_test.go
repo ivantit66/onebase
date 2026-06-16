@@ -59,3 +59,46 @@ func TestPageList_HasActionsButton(t *testing.T) {
 		t.Error("не найдена функция showListMenu — рендер меню не вынесен")
 	}
 }
+
+// TestPageList_TilesView — режим «Плитка» (Фаза 1a): при TilesView=true список
+// рендерится карточками (.tile-grid/.tile-card) с теми же data-*, что и строки
+// таблицы (переиспользование обработчиков), а в панели есть переключатель
+// режима отображения (.view-switch).
+func TestPageList_TilesView(t *testing.T) {
+	ent := &metadata.Entity{
+		Name: "Номенклатура",
+		Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{
+			{Name: "Наименование", Type: metadata.FieldTypeString},
+			{Name: "Цена", Type: metadata.FieldTypeNumber},
+		},
+	}
+	rows := []map[string]any{
+		{"id": "11111111-1111-1111-1111-111111111111", "Наименование": "Болт М6", "Цена": "12.5"},
+	}
+	data := map[string]any{
+		"Entity":           ent,
+		"Rows":             rows,
+		"Params":           storage.ListParams{},
+		"RefFilterOptions": map[string]any{},
+		"IsAdmin":          true,
+		"CanWrite":         true,
+		"Lang":             "ru",
+		"TilesView":        true,
+		"Total":            1,
+		"Page":             1,
+		"TotalPages":       1,
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buf, "page-list", data); err != nil {
+		t.Fatalf("ExecuteTemplate page-list (tiles): %v", err)
+	}
+	html := buf.String()
+
+	for _, want := range []string{"tile-grid", "tile-card", "Болт М6", "view-switch", "data-open-url="} {
+		if !strings.Contains(html, want) {
+			t.Errorf("плиточный режим: в выводе нет ожидаемого фрагмента %q", want)
+		}
+	}
+}

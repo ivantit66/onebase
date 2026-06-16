@@ -25,6 +25,9 @@ func Validate(entities []*Entity, enums []*Enum) error {
 				if IsRichText(f.Type) {
 					return fmt.Errorf("поле %s.%s: тип richtext не поддерживается в табличных частях", tp.Name, f.Name)
 				}
+				if IsImage(f.Type) {
+					return fmt.Errorf("поле %s.%s: тип image не поддерживается в табличных частях", tp.Name, f.Name)
+				}
 			}
 		}
 		for _, src := range e.BasedOn {

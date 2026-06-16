@@ -5,8 +5,11 @@ package ui
 // Выделено из handlers.go (план 55, этап 1) — перенос as-is.
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/auth"
@@ -73,6 +76,46 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 		return s.objectAttributeValue(txState.Ctx(), args)
 	})
 
+	// СохранитьКартинку(ДанныеBase64, ТипMIME="") → UUID бинарника в blob-хранилище.
+	// Поле типа image хранит именно этот UUID. Данные — base64 картинки (сырой или
+	// в виде data-URL «data:image/png;base64,...»); тип по умолчанию image/png.
+	// Возвращает UUID (пустую строку при пустом аргументе). Используется txState.Ctx(),
+	// поэтому blob создаётся в открытой DSL-транзакции вместе с записью справочника.
+	putImageFn := interpreter.BuiltinFunc(func(args []any, _ string, _ int) (any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("СохранитьКартинку: нужен аргумент — данные картинки в Base64")
+		}
+		dataB64 := strings.TrimSpace(fmt.Sprintf("%v", args[0]))
+		if dataB64 == "" {
+			return "", nil
+		}
+		mime := ""
+		// data-URL: data:<mime>;base64,<...>
+		if strings.HasPrefix(dataB64, "data:") {
+			if i := strings.Index(dataB64, ";base64,"); i >= 0 {
+				mime = strings.TrimPrefix(dataB64[:i], "data:")
+				dataB64 = dataB64[i+len(";base64,"):]
+			} else if i := strings.Index(dataB64, ","); i >= 0 {
+				dataB64 = dataB64[i+1:]
+			}
+		}
+		if mime == "" && len(args) > 1 {
+			mime = strings.TrimSpace(fmt.Sprintf("%v", args[1]))
+		}
+		if mime == "" {
+			mime = "image/png"
+		}
+		data, err := base64.StdEncoding.DecodeString(dataB64)
+		if err != nil {
+			return nil, fmt.Errorf("СохранитьКартинку: некорректный Base64: %w", err)
+		}
+		blob, err := s.store.PutBlob(txState.Ctx(), mime, bytes.NewReader(data), s.maxFileSizeBytes)
+		if err != nil {
+			return nil, fmt.Errorf("СохранитьКартинку: %w", err)
+		}
+		return blob.ID.String(), nil
+	})
+
 	vars["Справочники"] = catalogs
 	vars["Catalogs"] = catalogs
 	vars["Документы"] = documents
@@ -87,6 +130,8 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 	vars["UserName"] = userNameFn
 	vars["ЗначениеРеквизитаОбъекта"] = attrValueFn
 	vars["ObjectAttributeValue"] = attrValueFn
+	vars["СохранитьКартинку"] = putImageFn
+	vars["PutImage"] = putImageFn
 
 	// транзакции из DSL (обработки/проведение). Раньше NewTxFunctions
 	// использовался только в тестах — отсюда «unknown function
