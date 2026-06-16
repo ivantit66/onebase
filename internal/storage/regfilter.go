@@ -43,9 +43,17 @@ func dimWhereClause(d Dialect, dims []metadata.Field, f RegFilter, startIdx int,
 		// Для ссылочного измерения колонка хранит UUID — оборачиваем idArg,
 		// чтобы PG получил uuid.UUID, а SQLite — строку (как при записи).
 		if fld.RefEntity != "" {
-			if id, err := uuid.Parse(val); err == nil {
-				arg = idArg(d, id)
+			id, err := uuid.Parse(val)
+			if err != nil {
+				// Значение не UUID (например ручной ?Измерение=мусор в URL) —
+				// ссылочная колонка хранит UUID, совпадений быть не может.
+				// Подставляем заведомо ложное условие (пустой результат на обоих
+				// диалектах), а не сырую строку: на PostgreSQL `col(uuid) = 'мусор'`
+				// упал бы с 500 (invalid input syntax for uuid).
+				conds = append(conds, "1=0")
+				continue
 			}
+			arg = idArg(d, id)
 		}
 		conds = append(conds, fmt.Sprintf("%s = %s", col, d.Placeholder(idx)))
 		args = append(args, arg)

@@ -286,3 +286,32 @@ func TestInfoRegList_FilterByPeriod(t *testing.T) {
 		t.Fatalf("ожидалась 1 запись с from=01.03 (Хлеб 01.06), получено %d", len(rows))
 	}
 }
+
+// Ссылочное измерение с НЕвалидным UUID (например ручной ?Измерение=мусор в URL):
+// сырая строка не должна попадать в аргументы запроса. На PostgreSQL колонка
+// имеет тип uuid и `col = 'мусор'` падает с 500 (invalid input syntax for uuid).
+// Вместо подстановки строки генерируем заведомо ложное условие — пустой
+// результат на обоих диалектах (фильтр по несуществующей ссылке = ничего).
+func TestDimWhereClause_InvalidRefUUIDYieldsEmpty(t *testing.T) {
+	ctx := context.Background()
+	db, err := ConnectSQLite(ctx, filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	dims := []metadata.Field{
+		{Name: "Номенклатура", Type: metadata.FieldType("reference:Товары"), RefEntity: "Товары"},
+	}
+	f := RegFilter{Dims: map[string]string{"Номенклатура": "не-uuid"}}
+	where, args := dimWhereClause(db.Dialect(), dims, f, 1, true, true)
+
+	if where == "" {
+		t.Fatal("ожидалось сужающее условие для невалидного UUID, получено пусто (вернёт все строки)")
+	}
+	for _, a := range args {
+		if s, ok := a.(string); ok && s == "не-uuid" {
+			t.Fatalf("сырая не-UUID строка просочилась в аргументы (на PostgreSQL → 500): %v", args)
+		}
+	}
+}
