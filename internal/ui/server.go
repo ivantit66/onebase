@@ -295,6 +295,11 @@ func (s *Server) Mount(r chi.Router) {
 	r.Get("/ui/attachments/{aid}/download", s.attachmentDownload)
 	r.Post("/ui/attachments/{aid}/delete", s.attachmentDelete)
 
+	// Поле типа image: загрузка картинки (в контексте сущности, право write) и
+	// отдача бинарника по UUID. Ссылка (UUID) хранится в самой колонке поля.
+	r.Post("/ui/{kind}/{entity}/_image", s.imageUpload)
+	r.Get("/ui/_image/{id}", s.imageServe)
+
 	// Excel exports
 	r.Get("/ui/{kind}/{entity}/excel", s.listExcel)
 	r.Get("/ui/report/{name}/excel", s.reportExcel)

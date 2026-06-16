@@ -172,6 +172,54 @@ func (db *DB) SaveNavCollapsible(ctx context.Context, on bool) error {
 	return nil
 }
 
+// Режимы хранения бинарников (картинки поля image). Аналог двух способов
+// хранения файлов в 1С: «тома на диске» и «в информационной базе».
+const (
+	// FileStorageDisk — файл лежит на диске (filesDir/_blobs/<id>), в таблице
+	// _blobs только метаданные. Режим по умолчанию.
+	FileStorageDisk = "disk"
+	// FileStorageDB — содержимое лежит в BLOB-колонке таблицы _blobs (в БД).
+	FileStorageDB = "db"
+)
+
+// GetFileStorageMode читает режим хранения бинарников из _settings
+// (ui.file_storage). Отсутствие ключа/таблицы или нераспознанное значение →
+// FileStorageDisk.
+func (db *DB) GetFileStorageMode(ctx context.Context) string {
+	d := db.dialect
+	var v string
+	err := db.QueryRow(ctx,
+		`SELECT value FROM _settings WHERE key = `+d.Placeholder(1),
+		"ui.file_storage").Scan(&v)
+	if err != nil {
+		return FileStorageDisk
+	}
+	if strings.TrimSpace(v) == FileStorageDB {
+		return FileStorageDB
+	}
+	return FileStorageDisk
+}
+
+// SaveFileStorageMode сохраняет режим хранения бинарников в _settings.
+// Любое значение кроме FileStorageDB трактуется как FileStorageDisk.
+func (db *DB) SaveFileStorageMode(ctx context.Context, mode string) error {
+	if err := db.EnsureSettingsSchema(ctx); err != nil {
+		return err
+	}
+	if mode != FileStorageDB {
+		mode = FileStorageDisk
+	}
+	d := db.dialect
+	q := fmt.Sprintf(
+		`INSERT INTO _settings (key, value) VALUES (%s, %s)
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		d.Placeholder(1), d.Placeholder(2))
+	if _, err := db.Exec(ctx, q, "ui.file_storage", mode); err != nil {
+		return fmt.Errorf("settings: save ui.file_storage: %w", err)
+	}
+	return nil
+}
+
 // llmConfigKey — ключ _settings, под которым хранится весь LLM-конфиг (один JSON).
 const llmConfigKey = "llm.config"
 

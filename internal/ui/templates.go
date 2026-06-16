@@ -49,6 +49,7 @@ var tmpl = template.Must(template.New("root").Funcs(template.FuncMap{
 	"isRef":      func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "reference:") },
 	"isEnum":     func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "enum:") },
 	"isRichText": func(t any) bool { return fmt.Sprintf("%v", t) == string(metadata.FieldTypeRichText) },
+	"isImage":    func(t any) bool { return fmt.Sprintf("%v", t) == string(metadata.FieldTypeImage) },
 	// entityHasRichText — есть ли среди реквизитов шапки сущности richtext-поле.
 	// Quill (vendor-ассеты + init) грузятся на форме только при true, чтобы не
 	// тянуть редактор на формы без richtext-полей.
@@ -540,6 +541,30 @@ body{padding-bottom:32px}
      обработки) остаются обычными: текст переносится, ширина не схлопывается. */
   main table.tbl-plain{display:table;white-space:normal;overflow:visible}
 }
+/* ===== Плиточный режим списка (Фаза 1a) ===== */
+.view-switch{display:inline-flex;border:1px solid #e2e8f0;border-radius:7px;overflow:hidden;flex-shrink:0}
+.view-switch .view-btn{padding:6px 11px;color:#64748b;text-decoration:none;font-size:15px;line-height:1;background:#fff;border-right:1px solid #e2e8f0}
+.view-switch .view-btn:last-child{border-right:none}
+.view-switch .view-btn:hover{background:#f1f5f9}
+.view-switch .view-btn.active{background:#3b82f6;color:#fff}
+.tile-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px}
+.tile-card{position:relative;display:flex;flex-direction:column;border:1px solid #e2e8f0;border-radius:10px;padding:14px;background:#fff;cursor:pointer;transition:box-shadow .15s,border-color .15s}
+.tile-card:hover{box-shadow:0 4px 14px rgba(0,0,0,.1);border-color:#cbd5e1}
+.tile-card.tile-selected{border-color:#3b82f6;box-shadow:0 0 0 2px rgba(59,130,246,.25)}
+.tile-card.tile-deleted{opacity:.5}
+.tile-card.tile-deleted .tile-title{text-decoration:line-through}
+.tile-img{width:100%;aspect-ratio:4/3;border-radius:8px;background:#f1f5f9 center/cover no-repeat;margin-bottom:10px;display:flex;align-items:center;justify-content:center;color:#cbd5e1;font-size:34px;flex-shrink:0}
+.tile-title{font-size:15px;font-weight:600;color:#1e293b;margin-bottom:8px;word-break:break-word}
+.tile-posted{color:#16a34a;font-weight:700}
+.tile-field{font-size:12.5px;color:#475569;margin-bottom:3px;display:flex;gap:5px;flex-wrap:wrap}
+.tile-label{color:#94a3b8;flex-shrink:0}
+.tile-val{color:#334155;word-break:break-word}
+.tile-foot{margin-top:auto;padding-top:10px}
+/* Поле-картинка на форме */
+.img-field{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.img-preview img{max-width:240px;max-height:240px;border-radius:8px;border:1px solid #e2e8f0;display:block;background:#f8fafc}
+.img-actions{display:flex;gap:8px;align-items:center}
+.img-field label.btn{cursor:pointer;margin:0}
 </style>
 <script>
 (function(){
@@ -884,13 +909,17 @@ const tplList = `
 <main class="main-list">
 <div class="row-top">
   <h2>{{.Entity.DisplayName $.Lang}}</h2>
-  <div style="display:flex;gap:8px">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <div class="view-switch">
+      <a class="view-btn{{if and (not .TreeView) (not .TilesView)}} active{{end}}" href="?{{if .ParentStr}}parent={{.ParentStr}}&{{end}}{{if $.CurrentSubsystem}}subsystem={{$.CurrentSubsystem}}{{end}}" title="{{t $.Lang "Список"}}">☰</a>
+      <a class="view-btn{{if .TilesView}} active{{end}}" href="?view=tiles{{if .ParentStr}}&parent={{.ParentStr}}{{end}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}" title="{{t $.Lang "Плитка"}}">▦</a>
+      {{if .Entity.Hierarchical}}<a class="view-btn{{if .TreeView}} active{{end}}" href="?view=tree{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}" title="{{t $.Lang "Дерево"}}">📂</a>{{end}}
+    </div>
+    {{if not .TreeView}}
+      {{if .Feed}}<a class="btn btn-secondary btn-sm" href="?lm=pages{{if .TilesView}}&view=tiles{{end}}{{if .ParentStr}}&parent={{.ParentStr}}{{end}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}" title="{{t $.Lang "Показывать постранично"}}">▤ {{t $.Lang "Страницы"}}</a>
+      {{else}}<a class="btn btn-secondary btn-sm" href="?lm=feed{{if .TilesView}}&view=tiles{{end}}{{if .ParentStr}}&parent={{.ParentStr}}{{end}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}" title="{{t $.Lang "Лента с догрузкой по скроллу"}}">≣ {{t $.Lang "Лента"}}</a>{{end}}
+    {{end}}
     {{if .Entity.Hierarchical}}
-      {{if .TreeView}}
-        <a class="btn btn-secondary btn-sm" href="/ui/{{lower (str .Entity.Kind)}}/{{lower .Entity.Name}}{{if $.CurrentSubsystem}}?subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "☰ Список"}}</a>
-      {{else}}
-        <a class="btn btn-secondary btn-sm" href="?view=tree{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "📂 Дерево"}}</a>
-      {{end}}
       {{if .UpURL}}<a class="btn btn-secondary btn-sm" href="{{.UpURL}}">{{t $.Lang "↑ Наверх"}}</a>{{end}}
       {{if .CanWrite}}
       <a class="btn btn-primary" href="/ui/{{lower (str .Entity.Kind)}}/{{lower .Entity.Name}}/new?{{if .ParentStr}}parent={{.ParentStr}}&{{end}}subsystem={{$.CurrentSubsystem}}">{{t $.Lang "+ Элемент"}}</a>
@@ -1011,6 +1040,47 @@ const tplList = `
 {{else}}
 <p class="empty">{{t $.Lang "Записей нет"}} — <a href="/ui/{{lower (str .Entity.Kind)}}/{{lower .Entity.Name}}/new">{{t $.Lang "создать первую"}}</a></p>
 {{end}}
+{{else if .TilesView}}
+{{/* ===== TILES VIEW (плитка) ===== */}}
+{{if .Rows}}
+<div class="tile-grid">
+{{range .Rows}}{{$row := .}}{{$isFolder := index $row "is_folder"}}
+<div class="tile-card{{if index $row "deletion_mark"}} tile-deleted{{end}}"
+  onclick="listRowClick(event,this)"
+  ondblclick="listRowDblClick(event,this)"
+  oncontextmenu="listCtxMenu(event,this)"
+  data-predefined="{{if index $row "_is_predefined"}}1{{end}}"
+  data-is-folder="{{if $isFolder}}1{{end}}"
+  data-folder-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}?parent={{index $row "id"}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}"
+  data-mark-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/delete?mark=1"
+  data-del-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/delete"
+  data-posted="{{if index $row "posted"}}1{{end}}"
+  data-marked="{{if index $row "deletion_mark"}}1{{end}}"
+  data-unpost-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/unpost"
+  data-unmark-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/delete?mark=0"
+  data-open-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}{{if $.CurrentSubsystem}}?subsystem={{$.CurrentSubsystem}}{{end}}">
+  {{range $f := $.Entity.Fields}}{{if isImage (str $f.Type)}}{{$iv := index $row $f.Name}}
+  <div class="tile-img"{{if $iv}} style="background-image:url('/ui/_image/{{$iv}}')"{{end}}>{{if not $iv}}🖼{{end}}</div>
+  {{end}}{{end}}
+  {{range $i, $f := $.Entity.Fields}}{{if not (isImage (str $f.Type))}}
+    {{if eq $i 0}}
+    <div class="tile-title">{{if $.Entity.Hierarchical}}{{if $isFolder}}📁 {{else}}📄 {{end}}{{end}}{{fmtCell (index $row $f.Name)}}{{if index $row "_is_predefined"}} <span title="{{t $.Lang "Предопределённый элемент"}}" style="color:#f59e0b;font-size:11px">★</span>{{end}}{{if eq (str $.Entity.Kind) "document"}}{{if index $row "posted"}} <span class="tile-posted" title="{{t $.Lang "Проведён"}}">✓</span>{{end}}{{end}}</div>
+    {{else}}{{$v := index $row $f.Name}}{{if $v}}
+    <div class="tile-field"><span class="tile-label">{{$f.DisplayName $.Lang}}:</span> {{if eq (str $f.Type) "date"}}<span class="tile-val">{{fmtDate $v}}</span>{{else if isRichText (str $f.Type)}}<span class="tile-val">{{richPlain $v}}</span>{{else}}<span class="tile-val">{{fmtCell $v}}</span>{{end}}</div>
+    {{end}}{{end}}
+  {{end}}{{end}}
+  <div class="tile-foot">
+    {{if and $isFolder $.Entity.Hierarchical}}
+      <a class="btn btn-sm btn-secondary" href="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}?parent={{index $row "id"}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "▶ Войти"}}</a>
+    {{else}}
+      <a class="btn btn-sm btn-primary" href="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}{{if $.CurrentSubsystem}}?subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "Открыть"}}</a>
+    {{end}}
+  </div>
+</div>{{end}}
+</div>
+{{else}}
+<p class="empty">{{if .Params.Search}}{{t $.Lang "Ничего не найдено по запросу"}} «{{.Params.Search}}» — <a href="?">{{t $.Lang "сбросить поиск"}}</a>{{else}}{{t $.Lang "Записей нет"}} — <a href="/ui/{{lower (str .Entity.Kind)}}/{{lower .Entity.Name}}/new">{{t $.Lang "создать первую"}}</a>{{end}}</p>
+{{end}}
 {{else}}
 {{/* ===== LIST VIEW (default) ===== */}}
 {{if .Rows}}
@@ -1025,7 +1095,7 @@ const tplList = `
   </th>
   {{end}}
   <th style="width:90px"></th>
-</tr></thead><tbody>
+</tr></thead><tbody id="list-body">
 {{range .Rows}}{{$row := .}}{{$isFolder := index $row "is_folder"}}
 <tr {{if index $row "deletion_mark"}}style="opacity:0.45;text-decoration:line-through;cursor:pointer"{{else}}style="cursor:pointer"{{end}}
   onclick="listRowClick(event,this)"
@@ -1048,6 +1118,7 @@ const tplList = `
   {{end}}
   {{range $.Entity.Fields}}
     {{if eq (str .Type) "date"}}<td style="white-space:nowrap">{{fmtDate (index $row .Name)}}</td>
+    {{else if isImage (str .Type)}}<td>{{$iv := index $row .Name}}{{if $iv}}<img src="/ui/_image/{{$iv}}" style="height:34px;width:34px;object-fit:cover;border-radius:5px;vertical-align:middle" alt="">{{else}}<span style="color:#cbd5e1">—</span>{{end}}</td>
     {{else if isRichText (str .Type)}}<td style="white-space:nowrap;color:#64748b">{{richPlain (index $row .Name)}}</td>
     {{else}}<td style="white-space:nowrap">{{if and (eq .Name "Наименование") $.Entity.Hierarchical}}{{if $isFolder}}📁 {{else}}📄 {{end}}{{end}}{{fmtCell (index $row .Name)}}{{if and (eq .Name "Наименование") (index $row "_is_predefined")}} <span title="{{t $.Lang "Предопределённый элемент"}}" style="color:#f59e0b;font-size:11px">★</span>{{end}}</td>{{end}}
   {{end}}
@@ -1066,11 +1137,19 @@ const tplList = `
 {{end}}
 {{end}}
 </div>
-{{if gt .TotalPages 1}}
+{{if and .Feed (not .TreeView)}}
+{{/* Лента: догрузка по скроллу. Без JS «Показать ещё» = переход на след. страницу. */}}
+{{if .HasNext}}
+<div id="feed-more" data-next="{{.NextPage}}" data-pages="{{.TotalPages}}" data-container="{{if .TilesView}}.tile-grid{{else}}#list-body{{end}}" data-item="{{if .TilesView}}.tile-card{{else}}tr{{end}}" style="margin-top:14px;text-align:center">
+  <a class="btn btn-secondary btn-sm" href="?page={{.NextPage}}&lm=feed{{if .TilesView}}&view=tiles{{end}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "Показать ещё"}}</a>
+</div>
+{{end}}
+{{if gt .Total 0}}<div style="color:#94a3b8;font-size:12px;margin-top:8px;text-align:center">{{t $.Lang "Загружено:"}} <span id="feed-loaded">{{len .Rows}}</span> {{t $.Lang "из"}} {{.Total}}</div>{{end}}
+{{else if gt .TotalPages 1}}
 <div style="display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap">
-  {{if .HasPrev}}<a class="btn btn-secondary btn-sm" href="?page={{.PrevPage}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "← Назад"}}</a>{{end}}
+  {{if .HasPrev}}<a class="btn btn-secondary btn-sm" href="?page={{.PrevPage}}{{if .TilesView}}&view=tiles{{end}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "← Назад"}}</a>{{end}}
   <span style="color:#64748b;font-size:13px">{{t $.Lang "Стр."}} {{.Page}} {{t $.Lang "из"}} {{.TotalPages}} ({{.Total}} {{t $.Lang "записей"}})</span>
-  {{if .HasNext}}<a class="btn btn-secondary btn-sm" href="?page={{.NextPage}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "Вперёд →"}}</a>{{end}}
+  {{if .HasNext}}<a class="btn btn-secondary btn-sm" href="?page={{.NextPage}}{{if .TilesView}}&view=tiles{{end}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "Вперёд →"}}</a>{{end}}
 </div>
 {{else if gt .Total 0}}
 <div style="color:#94a3b8;font-size:12px;margin-top:8px">{{t $.Lang "Всего:"}} {{.Total}}</div>
@@ -1083,9 +1162,10 @@ var _canUnpost={{if .CanUnpost}}true{{else}}false{{end}};
 var _listSel=null;
 function listRowClick(e,tr){
   if(e.target.closest('a,button'))return;
-  if(_listSel)_listSel.querySelectorAll('td').forEach(function(td){td.style.background='';});
+  if(_listSel){_listSel.querySelectorAll('td').forEach(function(td){td.style.background='';});_listSel.classList.remove('tile-selected');}
   _listSel=tr;
   tr.querySelectorAll('td').forEach(function(td){td.style.background='#dbeafe';});
+  tr.classList.add('tile-selected');
 }
 function listRowDblClick(e,tr){
   if(e.target.closest('a,button'))return;
@@ -1178,6 +1258,46 @@ function listSubmit(url,msg){
 document.addEventListener('keydown',function(e){
   if(e.key==='Delete'&&_listSel&&_canDelete)listSubmit(_listSel.dataset.markUrl,'Пометить на удаление?');
 });
+// Лента (feed): догрузка следующих страниц по скроллу. Тянет обычную страницу
+// списка и переносит из неё строки/карточки в текущий контейнер. Деградация без
+// JS: «Показать ещё» — это обычная ссылка на следующую страницу.
+(function(){
+  var more=document.getElementById('feed-more');
+  if(!more)return;
+  var loading=false,done=false;
+  function stop(){done=true;if(more&&more.parentNode)more.parentNode.removeChild(more);}
+  function loadNext(){
+    if(loading||done)return;
+    var n=parseInt(more.getAttribute('data-next'),10);
+    var pages=parseInt(more.getAttribute('data-pages'),10);
+    if(!n||n>pages){stop();return;}
+    var sel=more.getAttribute('data-container');
+    var c=document.querySelector(sel);
+    if(!c){stop();return;}
+    loading=true;
+    var sp=new URLSearchParams(window.location.search);
+    sp.set('page',n);sp.set('lm','feed');
+    fetch(window.location.pathname+'?'+sp.toString(),{credentials:'same-origin'})
+      .then(function(r){return r.text();})
+      .then(function(html){
+        var doc=new DOMParser().parseFromString(html,'text/html');
+        var items=doc.querySelectorAll(sel+' > '+more.getAttribute('data-item'));
+        if(!items.length){stop();return;}
+        items.forEach(function(el){c.appendChild(document.importNode(el,true));});
+        var loaded=document.getElementById('feed-loaded');if(loaded)loaded.textContent=c.children.length;
+        n++;more.setAttribute('data-next',n);
+        loading=false;
+        if(n>pages){stop();return;}
+        var rect=more.getBoundingClientRect();
+        if(rect.top<(window.innerHeight||document.documentElement.clientHeight)+300)loadNext();
+      })
+      .catch(function(){loading=false;});
+  }
+  more.addEventListener('click',function(e){var a=e.target.closest('a');if(a){e.preventDefault();loadNext();}});
+  if('IntersectionObserver' in window){
+    new IntersectionObserver(function(ents){ents.forEach(function(en){if(en.isIntersecting)loadNext();});},{rootMargin:'300px'}).observe(more);
+  }
+})();
 </script>
 </div></body></html>
 {{end}}
@@ -1351,6 +1471,18 @@ const tplForm = `
          обрабатывает результат. */}}
     <textarea name="{{$fn}}" class="richtext-field" rows="8" style="width:100%">{{index $.Values $fn}}</textarea>
     <div class="richtext-editor"></div>
+  {{else if isImage (str .Type)}}
+    {{/* Поле-картинка: скрытый input хранит ссылку (UUID), превью + загрузка/очистка.
+         Без JS остаётся скрытый input — значение не теряется при записи. */}}
+    {{$iv := index $.Values $fn}}
+    <div class="img-field">
+      <input type="hidden" name="{{$fn}}" value="{{$iv}}">
+      <div class="img-preview"{{if not $iv}} style="display:none"{{end}}><img src="{{if $iv}}/ui/_image/{{$iv}}{{end}}" alt=""></div>
+      <div class="img-actions">
+        <label class="btn btn-sm btn-secondary">{{t $.Lang "Загрузить…"}}<input type="file" accept="image/*" style="display:none" onchange="obImageUpload(this,'/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/_image')"></label>
+        <button type="button" class="btn btn-sm img-clear-btn" onclick="obImageClear(this)"{{if not $iv}} style="display:none"{{end}}>{{t $.Lang "Очистить"}}</button>
+      </div>
+    </div>
   {{else}}
     <input type="text" name="{{$fn}}" value="{{index $.Values $fn}}" placeholder="{{$flabel}}">
   {{end}}
@@ -1580,6 +1712,33 @@ const tplForm = `
 </script>
 {{end}}
 <script>
+// Поле типа image: загрузка картинки и очистка. Работают по DOM от элемента
+// внутри .img-field; ссылка (UUID) кладётся в скрытый input поля и сохраняется
+// вместе с формой (как обычное строковое значение).
+function obImageUpload(input, url){
+  var file = input.files && input.files[0];
+  if(!file){ return; }
+  var wrap = input.closest('.img-field');
+  var fd = new FormData(); fd.append('file', file);
+  fetch(url, {method:'POST', body:fd, credentials:'same-origin'})
+    .then(function(resp){ if(!resp.ok){ return resp.text().then(function(t){ throw new Error(t||('HTTP '+resp.status)); }); } return resp.json(); })
+    .then(function(data){
+      if(!wrap || !data || !data.ref){ return; }
+      wrap.querySelector('input[type=hidden]').value = data.ref;
+      var prev = wrap.querySelector('.img-preview');
+      if(prev){ var img=prev.querySelector('img'); if(img){ img.src='/ui/_image/'+data.ref; } prev.style.display=''; }
+      var clr = wrap.querySelector('.img-clear-btn'); if(clr){ clr.style.display=''; }
+    })
+    .catch(function(e){ alert('{{t $.Lang "Ошибка загрузки картинки"}}: '+e.message); })
+    .finally(function(){ input.value=''; });
+}
+function obImageClear(btn){
+  var wrap = btn.closest('.img-field'); if(!wrap){ return; }
+  var hidden = wrap.querySelector('input[type=hidden]'); if(hidden){ hidden.value=''; }
+  var prev = wrap.querySelector('.img-preview');
+  if(prev){ prev.style.display='none'; var img=prev.querySelector('img'); if(img){ img.removeAttribute('src'); } }
+  btn.style.display='none';
+}
 window._tpRefOpts = {{jsJSON .TPRefOptions}};
 window._tpRefMeta = {{jsJSON .TPRefMeta}};
 function addTpRow(tpName, fields, numFields, idx) {

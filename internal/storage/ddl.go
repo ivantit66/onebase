@@ -23,6 +23,9 @@ func fieldType(d Dialect, f metadata.Field) string {
 		// richtext хранится как HTML в TEXT-колонке (поведение совпадает с
 		// default; ветка явная — для читаемости и явной привязки типа).
 		return d.TypeText()
+	case metadata.FieldTypeImage:
+		// image хранит ссылку (UUID бинарника в blob-хранилище) в TEXT-колонке.
+		return d.TypeText()
 	default:
 		return d.TypeText()
 	}

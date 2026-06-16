@@ -857,6 +857,9 @@ func migrateSchema(ctx context.Context, db *storage.DB, configDest, cfgFileDir s
 	if err := db.EnsureAttachmentTable(ctx); err != nil {
 		return fmt.Errorf("ensure attachments: %w", err)
 	}
+	if err := db.EnsureBlobTable(ctx); err != nil {
+		return fmt.Errorf("ensure blobs: %w", err)
+	}
 	authRepo := auth.NewRepo(db)
 	if err := authRepo.EnsureSchema(ctx); err != nil {
 		return fmt.Errorf("ensure auth schema: %w", err)

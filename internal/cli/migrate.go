@@ -86,6 +86,9 @@ func runMigrate(cmd *cobra.Command, _ []string) error {
 	if err := db.EnsureAttachmentTable(ctx); err != nil {
 		return err
 	}
+	if err := db.EnsureBlobTable(ctx); err != nil {
+		return err
+	}
 	fmt.Fprintln(os.Stdout, "migration complete")
 	return nil
 }
