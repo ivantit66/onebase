@@ -70,6 +70,47 @@ func TestGroupByDecimalKey(t *testing.T) {
 	decEq(t, res.Groups[0].Subtotals["Сумма"], "30")
 }
 
+func TestGroupByByteSliceKeyNoPanic(t *testing.T) {
+	// Драйвер БД может вернуть значение колонки как []byte; []byte неэшируем как
+	// ключ map → раньше группировка по такой колонке паниковала (issue #88).
+	rows := []Row{
+		{"Код": []byte("A"), "Сумма": "10"},
+		{"Код": []byte("A"), "Сумма": "20"},
+		{"Код": []byte("B"), "Сумма": "5"},
+	}
+	spec := report.Composition{
+		Groupings: []string{"Код"},
+		Measures:  []report.Measure{{Field: "Сумма", Agg: "sum"}},
+	}
+	res, err := Compose(rows, spec, noEval{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Groups) != 2 {
+		t.Fatalf("ожидали 2 группы по []byte-ключам, получили %d", len(res.Groups))
+	}
+	decEq(t, res.Groups[0].Subtotals["Сумма"], "30")
+}
+
+func TestGroupByMixedNumericKey(t *testing.T) {
+	// Одно числовое значение, пришедшее как int64 и как decimal, должно попасть
+	// в одну группу (issue #88): ключ канонизируется по значению, не по типу.
+	rows := []Row{
+		{"Год": int64(2026), "Сумма": "10"},
+		{"Год": decimal.NewFromInt(2026), "Сумма": "20"},
+		{"Год": int64(2025), "Сумма": "5"},
+	}
+	spec := report.Composition{
+		Groupings: []string{"Год"},
+		Measures:  []report.Measure{{Field: "Сумма", Agg: "sum"}},
+	}
+	res, _ := Compose(rows, spec, noEval{})
+	if len(res.Groups) != 2 {
+		t.Fatalf("int64 и decimal одного значения должны слиться, получили %d групп", len(res.Groups))
+	}
+	decEq(t, res.Groups[0].Subtotals["Сумма"], "30")
+}
+
 func TestNestedAndDetails(t *testing.T) {
 	rows := []Row{
 		{"М": "И", "К": "Р", "Сумма": "600"},
@@ -132,6 +173,27 @@ func TestSort(t *testing.T) {
 	got := []any{res.Groups[0].Key, res.Groups[1].Key, res.Groups[2].Key}
 	if got[0] != "Б" || got[1] != "В" || got[2] != "А" {
 		t.Fatalf("order by subtotal desc: %v", got)
+	}
+}
+
+func TestSortGroupsNilSubtotalLast(t *testing.T) {
+	// Группа без числовых строк (min пустого набора = nil) при сортировке по
+	// этому показателю не должна лексикографически прыгать впереди числовых
+	// подытогов (issue #90): nil уходит в конец при возрастании.
+	rows := []Row{
+		{"М": "А", "Сумма": "100"},
+		{"М": "Пусто", "Сумма": "нечисло"}, // min → nil
+		{"М": "Б", "Сумма": "300"},
+	}
+	spec := report.Composition{
+		Groupings: []string{"М"},
+		Measures:  []report.Measure{{Field: "Сумма", Agg: "min"}},
+		Sort:      []report.SortKey{{Field: "Сумма", Dir: "asc"}},
+	}
+	res, _ := Compose(rows, spec, noEval{})
+	got := []any{res.Groups[0].Key, res.Groups[1].Key, res.Groups[2].Key}
+	if got[0] != "А" || got[1] != "Б" || got[2] != "Пусто" {
+		t.Fatalf("nil-подытог должен быть последним при asc: %v", got)
 	}
 }
 

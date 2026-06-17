@@ -241,11 +241,20 @@ func sortDetails(rows []DetailRow, spec report.Composition) {
 }
 
 // compareVals: -1/0/1. Числа сравниваются как decimal, иначе как строки.
+// Если одно значение числовое, а другое нет (nil-подытог пустой группы,
+// нечисловой текст) — числовое считается «меньше», то есть непарсимое уходит
+// в конец при сортировке по возрастанию, а не сравнивается лексикографически
+// с числом (issue #90).
 func compareVals(a, b any) int {
 	da, oka := toDecimal(a)
 	db, okb := toDecimal(b)
-	if oka && okb {
+	switch {
+	case oka && okb:
 		return da.Cmp(db)
+	case oka:
+		return -1
+	case okb:
+		return 1
 	}
 	sa, sb := toStr(a), toStr(b)
 	switch {
@@ -269,11 +278,26 @@ func toStr(v any) string {
 }
 
 // normalizeGroupKey приводит значение группировки к надёжному ключу map.
-// decimal.Decimal внутри держит *big.Int — как ключ map он сравнивался бы по
-// указателю, а не по значению, поэтому числа группируем по каноничной строке.
+// Числа любого типа (int/int64/float64/decimal) канонизируются в одну строку —
+// иначе равные по значению ключи разных типов попали бы в разные группы, а
+// decimal.Decimal как ключ map сравнивался бы по указателю big.Int. []byte
+// (его может вернуть драйвер БД) неэшируем как ключ map — приводим к строке,
+// иначе buildGroups паникует. compareVals при сортировке всё равно распарсит
+// числовую строку обратно в decimal, так что числовой порядок сохраняется.
 func normalizeGroupKey(v any) any {
-	if d, ok := v.(decimal.Decimal); ok {
-		return d.String()
+	switch x := v.(type) {
+	case nil:
+		return nil
+	case []byte:
+		return string(x)
+	case decimal.Decimal:
+		return x.String()
+	case int:
+		return decimal.NewFromInt(int64(x)).String()
+	case int64:
+		return decimal.NewFromInt(x).String()
+	case float64:
+		return decimal.NewFromFloat(x).String()
 	}
 	return v
 }
