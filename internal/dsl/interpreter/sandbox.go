@@ -17,6 +17,7 @@ var (
 type SandboxProfile struct {
 	AllowNet     bool          // сеть: HTTP-клиент и email
 	AllowFile    bool          // файловые builtins
+	AllowExec    bool          // выполнение команд ОС (ВыполнитьКоманду, план 67)
 	MaxWallClock time.Duration // 0 = без лимита времени
 	MaxLoopIters int           // 0 = дефолт (maxWhileIter)
 }
@@ -55,6 +56,16 @@ func (p SandboxProfile) Vars() map[string]any {
 			return errors.New("файловые операции запрещены в этом режиме (песочница)")
 		})
 		for k, v := range NewFileFunctions(deny) {
+			m[k] = v
+		}
+	}
+	if !p.AllowExec {
+		// Команды ОС — строго опаснее сети/файлов (RCE), поэтому всегда
+		// запрещены недоверенному коду (RestrictedProfile: AllowExec=false).
+		deny := ExecGuard(func() error {
+			return errors.New("выполнение команд ОС запрещено в этом режиме (песочница)")
+		})
+		for k, v := range NewExecFunctions(deny, nil) {
 			m[k] = v
 		}
 	}

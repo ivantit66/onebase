@@ -14,6 +14,8 @@ package dslvars
 
 import (
 	"context"
+	"errors"
+	"strings"
 
 	"github.com/ivantit66/onebase/internal/aiassist"
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
@@ -32,6 +34,10 @@ type Common struct {
 	// email). Возвращает ошибку, если сеть заблокирована предохранителем
 	// (план 62). nil → сеть не ограничивается (для тестов/совместимости).
 	NetGuard func() error
+	// ExecGuard вызывается перед запуском команды ОС (ВыполнитьКоманду, план 67).
+	// nil → команды ЗАПРЕЩЕНЫ (secure by default, в отличие от NetGuard): exec —
+	// исполнение кода на сервере, разрешается только явной настройкой базы.
+	ExecGuard func() error
 }
 
 // Build возвращает map с пересечением DSL-переменных, общих для UI и scheduler.
@@ -78,6 +84,34 @@ func (c Common) Build() map[string]any {
 	// прежде всего обработчикам сервисов, но безвредны и в обработках/заданиях,
 	// поэтому держим их в общем наборе (как HTTP-клиент).
 	for k, v := range interpreter.NewServiceFunctions() {
+		vars[k] = v
+	}
+
+	// Команды ОС (план 67). Выключены по умолчанию: если caller не задал
+	// ExecGuard (фоновые задания/тесты), подставляем deny — secure by default
+	// (в отличие от сети, где nil-guard разрешает для совместимости). Каждый
+	// запуск пишется в журнал (defense-in-depth, поверх настроек аудита).
+	execGuard := c.ExecGuard
+	if execGuard == nil {
+		execGuard = func() error { return errors.New("выполнение команд ОС отключено") }
+	}
+	var execAudit interpreter.ExecAudit
+	if c.Store != nil {
+		execAudit = func(command string, cmdArgs []string, code int) {
+			detail := strings.Join(cmdArgs, " ")
+			if len(detail) > 1000 {
+				detail = detail[:1000]
+			}
+			_ = c.Store.Log(c.Ctx, &storage.AuditEntry{
+				UserLogin:  storage.AuditUserLogin(c.Ctx),
+				Action:     "exec",
+				EntityName: command,
+				Field:      detail,
+				NewValue:   code,
+			})
+		}
+	}
+	for k, v := range interpreter.NewExecFunctions(execGuard, execAudit) {
 		vars[k] = v
 	}
 	return vars

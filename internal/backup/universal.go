@@ -721,6 +721,13 @@ func ImportUniversal(
 		return report, fmt.Errorf("import: сброс предохранителя сети: %w", err)
 	}
 
+	// --- 8. Глушим выполнение команд ОС (план 67) -----------------------------
+	// По той же причине, что и сеть: exec.enabled мог приехать «вкл» из
+	// оригинала, а запуск команд на чужой машине ещё опаснее. Сбрасываем в выкл.
+	if err := db.SaveExecEnabled(ctx, false); err != nil {
+		return report, fmt.Errorf("import: сброс переключателя команд ОС: %w", err)
+	}
+
 	return report, nil
 }
 

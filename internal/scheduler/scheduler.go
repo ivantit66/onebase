@@ -244,6 +244,15 @@ func (s *Scheduler) buildDSLVars(ctx context.Context, mc *runtime.MovementsColle
 			}
 			return ErrNetworkLocked
 		},
+		// Команды ОС (план 67): тем же флагом базы exec.enabled. nil-guard в
+		// dslvars означал бы запрет, но регламентные задания — доверенный
+		// серверный код, поэтому гейтим по настройке, как сеть.
+		ExecGuard: func() error {
+			if s.db.GetExecEnabled(ctx) {
+				return nil
+			}
+			return errors.New("выполнение команд ОС отключено")
+		},
 	}.Build()
 }
 

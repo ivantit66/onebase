@@ -25,7 +25,8 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 	// Движения, HTTP, Email) — общий с scheduler, см. internal/dslvars.
 	vars := dslvars.Common{
 		Ctx: ctx, Reg: s.reg, Store: s.store, Mailer: s.mailer, Movements: mc,
-		NetGuard: s.netGuard(ctx),
+		NetGuard:  s.netGuard(ctx),
+		ExecGuard: s.execGuard(ctx),
 	}.Build()
 
 	// TxState несёт «живой» контекст. Транзакционные функции
