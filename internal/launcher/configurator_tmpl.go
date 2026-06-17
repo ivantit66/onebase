@@ -654,7 +654,7 @@ const cfgFoot = `{{define "cfg-foot"}}
 </div>
 <script>
 // ── New object form ────────────────────────────────────────────
-var _cfgNewTitles = {catalog:'Новый справочник', document:'Новый документ', register:'Новый регистр', inforeg:'Новый регистр сведений', accountreg:'Новый регистр бухгалтерии', enum:'Новое перечисление', subsystem:'Новая подсистема', widget:'Новый виджет', module:'Новый общий модуль', processor:'Новая обработка'};
+var _cfgNewTitles = {catalog:'Новый справочник', document:'Новый документ', register:'Новый регистр', inforeg:'Новый регистр сведений', accountreg:'Новый регистр бухгалтерии', enum:'Новое перечисление', subsystem:'Новая подсистема', widget:'Новый виджет', module:'Новый общий модуль', processor:'Новая обработка', page:'Новая страница'};
 function cfgNewObj(kind) {
   if (kind === 'printform') { cfgNewPrintFormShow(); return; }
   // Вставляем форму сразу после кликнутой группы (+ кнопка)
@@ -4890,6 +4890,14 @@ const cfgTabTree = `{{define "tab-tree"}}
   {{end}}
   </details>
 
+  <details class="cfg-tree" data-group="pages"><summary class="cfg-group cfg-group-hd"><span class="tree-toggle">▸</span><span>{{t $.Lang "Страницы"}}</span><span class="cfg-add-btn" onclick="event.stopPropagation();cfgNewObj('page')" title="{{t $.Lang "Добавить страницу"}}">+</span></summary>
+  {{range .Pages}}
+  <div class="cfg-item" data-id="page-{{.Name}}" onclick="selItem(this)">
+    <span class="ic">📄</span>{{if .Title}}{{.Title}}{{else}}{{.Name}}{{end}}
+  </div>
+  {{end}}
+  </details>
+
   <div id="cfg-new-form" class="cfg-new-form" style="display:none">
     <div id="cfg-new-title" style="font-size:11px;font-weight:700;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.3px"></div>
     <form method="POST" action="/bases/{{$.Base.ID}}/configurator/new">
@@ -5871,6 +5879,51 @@ const cfgTabTree = `{{define "tab-tree"}}
     <form method="POST" action="/bases/{{$.Base.ID}}/configurator/widget-delete" style="margin-top:8px" onsubmit="return confirm('Удалить виджет {{.Name}}?')">
       <input type="hidden" name="widget_name" value="{{.Name}}">
       <button type="submit" style="background:none;border:1px solid #d8dde8;color:#c00;padding:4px 10px;font-size:11px;border-radius:3px;cursor:pointer">{{t $.Lang "Удалить виджет"}}</button>
+    </form>
+  </div>
+  {{end}}
+
+  {{/* Pages (план 66): метаданные pages/*.yaml + обработчик src/*.page.os */}}
+  {{range .Pages}}
+  <div class="cfg-panel" id="page-{{.Name}}">
+    <div class="panel-title">📄 {{if .Title}}{{.Title}}{{else}}{{.Name}}{{end}}</div>
+    <div class="panel-kind">{{t $.Lang "Страница"}} · <code>/ui/page/{{.Name}}</code></div>
+    <form method="POST" action="/bases/{{$.Base.ID}}/configurator/page">
+      <input type="hidden" name="page_name" value="{{.Name}}">
+      <div class="fg" style="margin-top:8px">
+        <label>{{t $.Lang "Заголовок"}}</label>
+        <input type="text" name="title" value="{{.Title}}" placeholder="{{.Name}}">
+      </div>
+      <div class="fg">
+        <label>{{t $.Lang "Иконка"}}</label>
+        <input type="text" name="icon" value="{{.Icon}}" placeholder="layout-dashboard">
+      </div>
+      <div class="fg">
+        <label>{{t $.Lang "Роли"}} <span style="color:#94a3b8;font-weight:400">({{t $.Lang "через запятую; пусто — всем"}})</span></label>
+        <input type="text" name="roles" value="{{range $i, $r := .Roles}}{{if $i}}, {{end}}{{$r}}{{end}}" placeholder="Менеджер, Бухгалтер">
+      </div>
+      <div class="fg">
+        <label>{{t $.Lang "Параметры"}} <span style="color:#94a3b8;font-weight:400">({{t $.Lang "имена через запятую (?имя=…)"}})</span></label>
+        <input type="text" name="params" value="{{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p}}{{end}}" placeholder="период, склад">
+      </div>
+      <details open><summary class="section-hd" style="cursor:pointer;margin-top:12px">{{t $.Lang "Обработчик"}} (<code>{{.Name}}.page.os</code>, {{t $.Lang "Процедура ПриФормировании"}}) <span class="edit-hint">({{t $.Lang "кликните для редактирования"}})</span></summary>
+      <div class="code-wrap">
+        <pre class="os-code" id="pre-page-{{.Name}}" onclick="startEdit('page-{{.Name}}')">{{if .Source}}{{.Source}}{{else}}Процедура ПриФормировании(Страница, Параметры) Экспорт&#10;    Страница.Заголовок("{{.Name}}");&#10;КонецПроцедуры{{end}}</pre>
+        <textarea class="os-edit" id="ta-page-{{.Name}}" name="source"
+                  style="display:none"
+                  onblur="endEdit('page-{{.Name}}')">{{.Source}}</textarea>
+      </div>
+      </details>
+      <div class="module-save-row">
+        <button class="btn-save" type="submit">{{t $.Lang "Сохранить"}}</button>
+        <button type="button" class="btn-check" onclick="runCheck('dsl','page-{{.Name}}','{{.Name}}')">{{t $.Lang "Проверить"}}</button>
+        <span class="check-result" id="check-page-{{.Name}}"></span>
+        {{if and $.FieldsSaved (eq $.FieldsSavedEntity .Name)}}<span class="save-ok">{{t $.Lang "✓ Сохранено"}}</span>{{end}}
+      </div>
+    </form>
+    <form method="POST" action="/bases/{{$.Base.ID}}/configurator/page-delete" style="margin-top:8px" onsubmit="return confirm('Удалить страницу {{.Name}}?')">
+      <input type="hidden" name="page_name" value="{{.Name}}">
+      <button type="submit" style="background:none;border:1px solid #d8dde8;color:#c00;padding:4px 10px;font-size:11px;border-radius:3px;cursor:pointer">{{t $.Lang "Удалить страницу"}}</button>
     </form>
   </div>
   {{end}}

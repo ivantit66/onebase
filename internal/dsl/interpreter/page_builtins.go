@@ -23,14 +23,16 @@ import (
 type PageBlock struct {
 	Kind string // heading | paragraph | kpi | table | button | divider | raw
 
-	Text  string // heading/paragraph/button: текст; kpi: подпись не здесь (см. Label)
-	URL   string // button: адрес перехода
-	Label string // kpi: подпись
-	Value string // kpi: уже отформатированное значение
-	Title string // table: заголовок таблицы
+	Text   string // heading/paragraph/button: текст; kpi: подпись не здесь (см. Label)
+	URL    string // button: адрес перехода
+	Action string // button: имя серверной процедуры-действия (КнопкаДействие); взаимоисключимо с URL
+	Label  string // kpi: подпись
+	Value  string // kpi: уже отформатированное значение
+	Title  string // table: заголовок таблицы
 
-	Columns []string  // table: заголовки колонок
-	Rows    []PageRow // table: строки
+	Columns      []string  // table: КЛЮЧИ колонок — адресация ячеек в Rows (не переводятся)
+	ColumnLabels []string  // table: отображаемые заголовки колонок (переводятся i18n)
+	Rows         []PageRow // table: строки
 
 	Items []PageListItem // list: пункты списка
 	Chart *PageChart     // chart: данные графика
@@ -113,6 +115,11 @@ func (b *DSLPageBuilder) CallMethod(name string, args []any) any {
 		return b
 	case "кнопка", "ссылка", "button", "link":
 		b.blocks = append(b.blocks, PageBlock{Kind: "button", Text: argStr(args, 0), URL: argStr(args, 1)})
+		return b
+	case "кнопкадействие", "actionbutton":
+		// Кнопка вызывает серверную процедуру-действие из того же .page.os
+		// (POST /ui/page/{name}/action/{action}), а не переходит по URL.
+		b.blocks = append(b.blocks, PageBlock{Kind: "button", Text: argStr(args, 0), Action: argStr(args, 1)})
 		return b
 	case "разделитель", "divider":
 		b.blocks = append(b.blocks, PageBlock{Kind: "divider"})
@@ -233,6 +240,11 @@ func (t *DSLPageTable) CallMethod(name string, args []any) any {
 			cols = append(cols, argStr(args, i))
 		}
 		t.builder.blocks[t.idx].Columns = cols
+		// Отдельная копия для отображения: i18n переводит ColumnLabels, а Columns
+		// остаются ключами для `index $row.Cells` в шаблоне (иначе перевод
+		// заголовка рассогласует адресацию ячеек). Копия обязательна — общий
+		// backing-массив дал бы мутацию Columns при переводе.
+		t.builder.blocks[t.idx].ColumnLabels = append([]string(nil), cols...)
 		return t
 	case "добавитьстроку", "addrow":
 		row := PageRow{Cells: map[string]PageCell{}}

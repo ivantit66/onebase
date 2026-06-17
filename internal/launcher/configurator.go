@@ -216,6 +216,19 @@ type cfgProcessor struct {
 	Params []cfgParam
 }
 
+// cfgPage — проекция объекта «страница» (план 66) для конфигуратора: метаданные
+// pages/<имя>.yaml + исходник обработчика src/<имя>.page.os (ПриФормировании).
+// Структурный близнец cfgProcessor (yaml + .os в src/).
+type cfgPage struct {
+	Name   string
+	Title  string
+	Titles map[string]string
+	Icon   string
+	Roles  []string
+	Params []string
+	Source string // raw .page.os
+}
+
 type cfgPrintForm struct {
 	Name     string
 	Document string
@@ -310,6 +323,7 @@ type configuratorData struct {
 	Reports          []cfgReport
 	Modules          []cfgModule
 	Processors       []cfgProcessor
+	Pages            []cfgPage
 	PrintForms       []cfgPrintForm
 	DSLPrintForms    []cfgDSLPrintForm
 	// План 37, этап 4: управляемые формы.
@@ -790,6 +804,21 @@ func (h *handler) loadCfgData(ctx context.Context, b *Base, tab string, lang ...
 	}
 	sort.Slice(data.Processors, func(i, j int) bool { return data.Processors[i].Name < data.Processors[j].Name })
 
+	// Pages (план 66): метаданные pages/*.yaml + обработчик src/*.page.os.
+	// proj.Pages уже отсортирован по имени (page.LoadDir).
+	pageSources := readPageSources(proj.Dir)
+	for _, pg := range proj.Pages {
+		data.Pages = append(data.Pages, cfgPage{
+			Name:   pg.Name,
+			Title:  pg.Title,
+			Titles: pg.Titles,
+			Icon:   pg.Icon,
+			Roles:  append([]string(nil), pg.Roles...),
+			Params: append([]string(nil), pg.Params...),
+			Source: pageSources[strings.ToLower(pg.Name)],
+		})
+	}
+
 	// Subsystems
 	for _, sub := range proj.Subsystems {
 		var rows [][]string
@@ -1133,8 +1162,8 @@ func readOSSources(dir string) (sources, postingSources, managerSources map[stri
 		case strings.HasSuffix(name, ".manager.os"):
 			base := strings.ToLower(strings.TrimSuffix(name, ".manager.os"))
 			managerSources[base] = string(raw)
-		case strings.HasSuffix(name, ".module.os"), strings.HasSuffix(name, ".proc.os"), strings.HasSuffix(name, ".rep.os"):
-			// skip — handled by readModuleAndProcSources / report editor
+		case strings.HasSuffix(name, ".module.os"), strings.HasSuffix(name, ".proc.os"), strings.HasSuffix(name, ".rep.os"), strings.HasSuffix(name, ".page.os"):
+			// skip — handled by readModuleAndProcSources / report / page editor
 		default:
 			base := strings.ToLower(strings.TrimSuffix(name, ".os"))
 			sources[base] = string(raw)
@@ -1158,6 +1187,29 @@ func readReportSources(dir string) map[string]string {
 			continue
 		}
 		base := strings.ToLower(strings.TrimSuffix(e.Name(), ".rep.os"))
+		result[base] = string(raw)
+	}
+	return result
+}
+
+// readPageSources читает src/*.page.os (обработчики страниц, план 66) и
+// раскладывает их по имени страницы в нижнем регистре — так же, как лукапит
+// loadCfgData (pageSources[ToLower(pg.Name)]).
+func readPageSources(dir string) map[string]string {
+	result := make(map[string]string)
+	entries, err := os.ReadDir(filepath.Join(dir, "src"))
+	if err != nil {
+		return result
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".page.os") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, "src", e.Name()))
+		if err != nil {
+			continue
+		}
+		base := strings.ToLower(strings.TrimSuffix(e.Name(), ".page.os"))
 		result[base] = string(raw)
 	}
 	return result
@@ -2159,6 +2211,12 @@ func (h *handler) configuratorNewObject(w http.ResponseWriter, r *http.Request) 
 		content = "// " + name + "\n// Общий модуль\n\nПроцедура Главная()\nКонецПроцедуры\n"
 		subdir = "src"
 	}
+	if kind == "page" {
+		// Имя файла страницы — в исходном регистре (как демо pages/Панель.yaml),
+		// чтобы правка существующей страницы перезаписывала тот же файл, а не
+		// плодила дубль на регистрозависимых ФС.
+		filename = name + ".yaml"
+	}
 
 	var saveErr error
 	if b.ConfigSource == "database" {
@@ -2188,6 +2246,16 @@ func (h *handler) configuratorNewObject(w http.ResponseWriter, r *http.Request) 
 		renderCfg(w, r, data)
 		return
 	}
+	// Страница — это пара файлов: вслед за метаданными создаём обработчик
+	// src/<имя>.page.os со скелетом ПриФормировании (план 66).
+	if kind == "page" {
+		if serr := saveConfigFile(r, h, b, pageSrcRelPath(name), []byte(newPageOSSkeleton(name))); serr != nil {
+			data := h.loadCfgData(r.Context(), b, "tree")
+			data.Error = tr(lang, "Ошибка создания") + ": " + serr.Error()
+			renderCfg(w, r, data)
+			return
+		}
+	}
 	data := h.loadCfgData(r.Context(), b, "tree")
 	data.FieldsSavedEntity = name
 	data.FieldsSaved = true
@@ -2214,8 +2282,22 @@ func newObjectContent(kind, name string) (subdir, content string) {
 		return "accountregs", "name: " + name + "\ntitle: " + name + "\naccounts: ПланСчетов\nresources:\n  - name: Сумма\n    type: number\n"
 	case "processor":
 		return "processors", "name: " + name + "\ntitle: " + name + "\nparams: []\n"
+	case "page":
+		return "pages", "name: " + name + "\ntitle: " + name + "\n"
 	}
 	return "", ""
+}
+
+// newPageOSSkeleton — стартовый обработчик src/<имя>.page.os для новой страницы
+// (план 66): пустая процедура ПриФормировании с парой блоков-примеров, чтобы
+// onebase check сразу проходил, а автор видел, куда писать.
+func newPageOSSkeleton(name string) string {
+	return "// Страница " + name + " (план 66) — произвольное представление на встроенном языке.\n" +
+		"// Обработчик наполняет построитель «Страница» структурными блоками.\n\n" +
+		"Процедура ПриФормировании(Страница, Параметры) Экспорт\n" +
+		"    Страница.Заголовок(\"" + name + "\");\n" +
+		"    Страница.Абзац(\"Произвольное представление на встроенном языке.\");\n" +
+		"КонецПроцедуры\n"
 }
 
 func nameToFilename(name string) string {

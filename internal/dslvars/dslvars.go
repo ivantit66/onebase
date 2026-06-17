@@ -15,6 +15,7 @@ package dslvars
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/ivantit66/onebase/internal/aiassist"
@@ -115,23 +116,41 @@ func (c Common) Build() map[string]any {
 		vars[k] = v
 	}
 
-	// СсылкаНаОбъект(Объект) → канонический URL карточки /ui/<вид>/<сущность>/<id>
-	// (план 66). То же соглашение, что у виджетов; вид определяется по типу
-	// ссылки через реестр. Полезно прежде всего на страницах, но безвредно в
-	// обработках/заданиях, поэтому в общем наборе.
-	objectRef := interpreter.BuiltinFunc(func(args []any, _ string, _ int) (any, error) {
-		if len(args) == 0 || args[0] == nil {
-			return "", nil
-		}
-		ref, ok := args[0].(*interpreter.Ref)
-		if !ok || ref.UUID == "" || ref.Type == "" {
-			return "", nil
+	// СсылкаНаОбъект → URL карточки объекта /ui/<вид>/<сущность>/<id> (план 66).
+	// Две формы:
+	//   СсылкаНаОбъект(Ссылка)          — вид/сущность берутся из объекта ссылки;
+	//   СсылкаНаОбъект(ИмяСущности, Ид) — для результатов запроса, где колонка
+	//                                     Ссылка приходит UUID-строкой без типа.
+	// Вид (catalog/document) определяется по сущности через реестр.
+	objectURL := func(entity, id string) string {
+		if entity == "" || id == "" {
+			return ""
 		}
 		kind := "catalog"
-		if ent := c.Reg.GetEntity(ref.Type); ent != nil {
+		if ent := c.Reg.GetEntity(entity); ent != nil {
 			kind = strings.ToLower(string(ent.Kind))
 		}
-		return "/ui/" + kind + "/" + ref.Type + "/" + ref.UUID, nil
+		return "/ui/" + kind + "/" + entity + "/" + id
+	}
+	idStr := func(v any) string {
+		if ref, ok := v.(*interpreter.Ref); ok {
+			return ref.UUID
+		}
+		if v == nil {
+			return ""
+		}
+		return fmt.Sprintf("%v", v)
+	}
+	objectRef := interpreter.BuiltinFunc(func(args []any, _ string, _ int) (any, error) {
+		switch {
+		case len(args) >= 2 && args[0] != nil:
+			return objectURL(fmt.Sprintf("%v", args[0]), idStr(args[1])), nil
+		case len(args) == 1 && args[0] != nil:
+			if ref, ok := args[0].(*interpreter.Ref); ok {
+				return objectURL(ref.Type, ref.UUID), nil
+			}
+		}
+		return "", nil
 	})
 	vars["СсылкаНаОбъект"] = objectRef
 	vars["ObjectRef"] = objectRef

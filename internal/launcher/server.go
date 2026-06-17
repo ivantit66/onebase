@@ -154,6 +154,8 @@ func (s *Server) ListenAndServe() error {
 		r.Post("/bases/{id}/configurator/widget", s.h.configuratorSaveWidget)
 		r.Post("/bases/{id}/configurator/widget-delete", s.h.configuratorDeleteWidget)
 		r.Post("/bases/{id}/configurator/widget-preview", s.h.configuratorWidgetPreview)
+		r.Post("/bases/{id}/configurator/page", s.h.configuratorSavePage)
+		r.Post("/bases/{id}/configurator/page-delete", s.h.configuratorDeletePage)
 		r.Post("/bases/{id}/configurator/home-page", s.h.configuratorSaveHomePage)
 		r.Post("/bases/{id}/configurator/home-page-yaml", s.h.configuratorSaveHomePageYAML)
 		r.Post("/bases/{id}/configurator/check", s.h.configuratorCheck)

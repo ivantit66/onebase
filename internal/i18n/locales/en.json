@@ -902,5 +902,14 @@
   "Показывать постранично": "Show page by page",
   "Список": "List",
   "Страницы": "Pages",
-  "обработчик ПриФормировании не найден в": "OnCompose handler not found in"
+  "обработчик ПриФормировании не найден в": "OnCompose handler not found in",
+  "Страница": "Page",
+  "Добавить страницу": "Add page",
+  "Удалить страницу": "Delete page",
+  "Имя страницы не задано": "Page name is not set",
+  "Обработчик": "Handler",
+  "Процедура ПриФормировании": "OnCompose procedure",
+  "Роли": "Roles",
+  "имена через запятую (?имя=…)": "comma-separated names (?name=…)",
+  "через запятую; пусто — всем": "comma-separated; empty — everyone"
 }

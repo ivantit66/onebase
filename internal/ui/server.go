@@ -160,6 +160,10 @@ func (s *Server) Mount(r chi.Router) {
 	// «page» имеет приоритет над параметром, но регистрируем рядом с gengen,
 	// чтобы намерение было явным.
 	r.Get("/ui/page/{name}", s.page)
+	// Кнопка-действие (план 66): POST вызывает процедуру-действие из .page.os и
+	// PRG-редиректом возвращает на саму страницу. Статический «page» в приоритете
+	// над catch-all {kind}/{entity}.
+	r.Post("/ui/page/{name}/action/{action}", s.pageAction)
 
 	r.Get("/ui/{kind}/{entity}", s.list)
 	r.Get("/ui/{kind}/{entity}/new", s.form)

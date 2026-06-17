@@ -165,18 +165,30 @@ func titleCaseFn(args []any, _ string, _ int) (any, error) {
 	return out, nil
 }
 
-// НСтр(ИсходнаяСтрока[, КодЯзыка]) — выбор локализованной строки.
-// Формат источника: "ru = 'Привет'; en = 'Hello'". По умолчанию язык "ru".
-// Если код не найден — возвращается первый сегмент.
-func nstrFn(args []any, _ string, _ int) (any, error) {
-	src := strArg(args, 0)
-	lang := "ru"
-	if len(args) >= 2 {
-		if l := strings.TrimSpace(strArg(args, 1)); l != "" {
-			lang = strings.ToLower(l)
-		}
+// nstrFn — глобальный НСтр с языком по умолчанию "ru" (фоновые/headless-контексты,
+// где язык интерфейса неизвестен).
+var nstrFn = NewNStrFunc("ru")
+
+// NewNStrFunc возвращает НСтр(ИсходнаяСтрока[, КодЯзыка]) — выбор локализованной
+// строки формата "ru = 'Привет'; en = 'Hello'". Если явный КодЯзыка не передан,
+// используется defaultLang; если язык не найден среди сегментов — возвращается
+// первый сегмент. UI-слой (internal/ui) инжектирует НСтр с языком текущего
+// пользователя, чтобы НСтр без кода переводил на язык интерфейса (план 66, п.3);
+// глобальная версия остаётся на "ru".
+func NewNStrFunc(defaultLang string) BuiltinFunc {
+	if defaultLang == "" {
+		defaultLang = "ru"
 	}
-	return parseNStr(src, lang), nil
+	return func(args []any, _ string, _ int) (any, error) {
+		src := strArg(args, 0)
+		lang := defaultLang
+		if len(args) >= 2 {
+			if l := strings.TrimSpace(strArg(args, 1)); l != "" {
+				lang = strings.ToLower(l)
+			}
+		}
+		return parseNStr(src, lang), nil
+	}
 }
 
 func parseNStr(src, lang string) string {

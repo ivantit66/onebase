@@ -7,6 +7,7 @@ package ui
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -47,7 +48,11 @@ func (s *Server) canSeePage(r *http.Request, pg *page.Page) bool {
 }
 
 func (s *Server) page(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
+	// chi отдаёт сырой сегмент пути, когда Go выставил RawPath (percent-encoding
+	// в нижнем регистре hex — именно такие ссылки строит меню: /ui/page/%d0%9f…).
+	// Без декода GetPage не найдёт страницу → 404 из меню, хотя верхний регистр
+	// (%D0%9F…) проходит. См. decodePathParam.
+	name := decodePathParam(chi.URLParam(r, "name"))
 	pg := s.reg.GetPage(name)
 	if pg == nil {
 		http.NotFound(w, r)
@@ -76,23 +81,8 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Параметры строки запроса → Структура «Параметры».
-	params := map[string]string{}
-	for k, vs := range r.URL.Query() {
-		if len(vs) > 0 {
-			params[k] = vs[0]
-		}
-	}
-	paramsObj := interpreter.NewStringMap(params)
-	builder := interpreter.NewPageBuilder()
-
 	var msgs []string
-	mc := runtime.NewMovementsCollector("page", uuid.Nil)
-	dslVars := s.buildDSLVarsWithMessages(r.Context(), mc, &msgs)
-	dslVars["Страница"] = builder
-	dslVars["Page"] = builder
-	dslVars["Параметры"] = paramsObj
-	dslVars["Parameters"] = paramsObj
+	builder, paramsObj, dslVars := s.pageProcEnv(r, &msgs)
 
 	if _, err := s.interp.Call(proc, builder, []any{builder, paramsObj}, dslVars); err != nil {
 		s.render(w, r, "page-custom", map[string]any{
@@ -103,6 +93,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	}
 
 	blocks := builder.Blocks()
+	s.localizePageBlocks(lang, blocks)
 	hasChart := false
 	for _, b := range blocks {
 		if b.Kind == "chart" {
@@ -111,8 +102,132 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, r, "page-custom", map[string]any{
-		"PageTitle":    title,
-		"PageBlocks":   blocks,
-		"PageHasChart": hasChart,
+		"PageTitle":      title,
+		"PageBlocks":     blocks,
+		"PageHasChart":   hasChart,
+		"PageActionBase": "/ui/page/" + pg.Name + "/action/",
+		"PageQuery":      pageQuery(r),
 	})
+}
+
+// localizePageBlocks переводит статические авторские подписи блоков на язык
+// пользователя через s.tr (i18n.Bundle, русский-как-ключ): заголовки, тексты
+// абзацев, подписи показателей, заголовки таблиц/списков/графиков, заголовки
+// колонок, тексты пунктов списка и кнопок (план 66, доработка 3). Данные НЕ
+// трогаем — значения показателей (Value), ячейки таблиц (Rows) и данные
+// графиков приходят из запросов и переводу не подлежат. Bundle.T возвращает
+// непереведённый ключ как есть, поэтому для русской локали (и без словаря) это
+// no-op. Динамически собранные подписи («Отчёт за » + Период) ключа не имеют и
+// тоже проходят без изменений — для них автор может выделить статическую часть.
+func (s *Server) localizePageBlocks(lang string, blocks []interpreter.PageBlock) {
+	if s.cfg.Bundle == nil || lang == "" {
+		return
+	}
+	for i := range blocks {
+		b := &blocks[i]
+		switch b.Kind {
+		case "heading", "paragraph", "button":
+			b.Text = s.tr(lang, b.Text)
+		case "kpi":
+			b.Label = s.tr(lang, b.Label)
+		case "table":
+			b.Title = s.tr(lang, b.Title)
+			// Переводим ОТОБРАЖАЕМЫЕ заголовки (ColumnLabels); Columns — ключи
+			// адресации ячеек, их трогать нельзя (см. колонки в page_builtins.go).
+			for j := range b.ColumnLabels {
+				b.ColumnLabels[j] = s.tr(lang, b.ColumnLabels[j])
+			}
+		case "list":
+			b.Title = s.tr(lang, b.Title)
+			for j := range b.Items {
+				b.Items[j].Text = s.tr(lang, b.Items[j].Text)
+			}
+		case "chart":
+			b.Title = s.tr(lang, b.Title)
+		}
+	}
+}
+
+// pageAction обрабатывает кнопку-действие (план 66): POST
+// /ui/page/{name}/action/{action} вызывает серверную процедуру-действие из
+// src/<имя>.page.os (любую процедуру по имени, как ПриФормировании), затем
+// PRG-редиректом возвращает на GET страницы с теми же Параметрами. Сообщить()
+// уже в сторе сообщений — его покажет глобальный бар. PRG исключает повторный
+// запуск действия при F5 (важно для проведения/пересчёта).
+func (s *Server) pageAction(w http.ResponseWriter, r *http.Request) {
+	name := decodePathParam(chi.URLParam(r, "name"))
+	action := decodePathParam(chi.URLParam(r, "action"))
+	pg := s.reg.GetPage(name)
+	if pg == nil {
+		http.NotFound(w, r)
+		return
+	}
+	// Роли — как в s.page: действие доступно только тем, кому видна страница.
+	if len(pg.Roles) > 0 {
+		if u := auth.UserFromContext(r.Context()); u != nil && !u.HasAnyRole(pg.Roles) {
+			s.renderForbidden(w, r)
+			return
+		}
+	}
+
+	proc := s.reg.GetPageProcedure(pg.Name, action)
+	if proc == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	var msgs []string
+	builder, paramsObj, dslVars := s.pageProcEnv(r, &msgs)
+	if _, err := s.interp.Call(proc, builder, []any{builder, paramsObj}, dslVars); err != nil {
+		// Ошибку действия кладём в стор сообщений: после редиректа страница
+		// перерисуется штатно, а баннер не потеряется.
+		s.messages.Push(userKeyFromRequest(r), s.errText(r, err))
+	}
+
+	http.Redirect(w, r, "/ui/page/"+pg.Name+pageQuery(r), http.StatusSeeOther)
+}
+
+// pageProcEnv готовит окружение вызова обработчика страницы: построитель блоков,
+// Параметры из query string и dslVars со сбором Сообщить в msgs. Общий код для
+// GET (ПриФормировании) и POST (КнопкаДействие).
+func (s *Server) pageProcEnv(r *http.Request, msgs *[]string) (*interpreter.DSLPageBuilder, *interpreter.Map, map[string]any) {
+	params := map[string]string{}
+	for k, vs := range r.URL.Query() {
+		if len(vs) > 0 {
+			params[k] = vs[0]
+		}
+	}
+	paramsObj := interpreter.NewStringMap(params)
+	builder := interpreter.NewPageBuilder()
+	mc := runtime.NewMovementsCollector("page", uuid.Nil)
+	// Кладём язык запроса в контекст, чтобы НСтр(текст) в обработчике страницы
+	// (и в процедуре-действии) переводил на язык пользователя (план 66, п.3).
+	ctx := withLang(r.Context(), s.resolveLang(r))
+	dslVars := s.buildDSLVarsWithMessages(ctx, mc, msgs)
+	dslVars["Страница"] = builder
+	dslVars["Page"] = builder
+	dslVars["Параметры"] = paramsObj
+	dslVars["Parameters"] = paramsObj
+	return builder, paramsObj, dslVars
+}
+
+// pageQuery возвращает query string запроса с ведущим «?» (или пустую строку) —
+// чтобы сохранять Параметры в action-URL кнопок и при PRG-редиректе действия.
+func pageQuery(r *http.Request) string {
+	if r.URL.RawQuery == "" {
+		return ""
+	}
+	return "?" + r.URL.RawQuery
+}
+
+// decodePathParam декодирует значение chi.URLParam. Go выставляет RawPath, когда
+// percent-encoding не каноничен (например, нижний регистр hex в ссылках меню), и
+// тогда chi возвращает сегмент пути сырым — его нужно раскодировать перед поиском
+// по имени. Уже декодированное значение (без «%») возвращается без изменений; при
+// битом encoding отдаём как есть. Тот же приём инлайном — в admin_*.go.
+func decodePathParam(v string) string {
+	if dec, err := url.PathUnescape(v); err == nil {
+		return dec
+	}
+	return v
 }

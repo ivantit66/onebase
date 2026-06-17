@@ -3163,7 +3163,7 @@ const tplPageCustom = `
     {{if eq $b.Kind "heading"}}<h3>{{$b.Text}}</h3>
     {{else if eq $b.Kind "paragraph"}}<p style="margin-bottom:14px;color:#334155;font-size:14px;line-height:1.55;max-width:900px">{{$b.Text}}</p>
     {{else if eq $b.Kind "kpi"}}<div class="card" style="display:inline-block;min-width:200px;margin:0 12px 14px 0;padding:16px 20px;vertical-align:top">{{if $b.Label}}<div style="font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;font-weight:600;margin-bottom:6px">{{$b.Label}}</div>{{end}}<div style="font-size:28px;font-weight:700;color:#0f172a;line-height:1.1">{{$b.Value}}</div></div>
-    {{else if eq $b.Kind "button"}}<a href="{{$b.URL}}" class="btn btn-primary" style="margin:0 8px 14px 0">{{$b.Text}}</a>
+    {{else if eq $b.Kind "button"}}{{if $b.Action}}<form method="post" action="{{$.PageActionBase}}{{$b.Action}}{{$.PageQuery}}" style="display:inline-block;margin:0 8px 14px 0"><button type="submit" class="btn btn-primary">{{$b.Text}}</button></form>{{else}}<a href="{{$b.URL}}" class="btn btn-primary" style="margin:0 8px 14px 0">{{$b.Text}}</a>{{end}}
     {{else if eq $b.Kind "divider"}}<hr style="border:none;border-top:1px solid #e2e8f0;margin:18px 0;max-width:1400px">
     {{else if eq $b.Kind "raw"}}<div class="card" style="margin-bottom:14px">{{pageRaw $b.HTML}}</div>
     {{else if eq $b.Kind "list"}}
@@ -3183,7 +3183,7 @@ const tplPageCustom = `
       {{if $b.Title}}<h3 style="margin-top:0">{{$b.Title}}</h3>{{end}}
       {{$cols := $b.Columns}}
       <table>
-        <thead><tr>{{range $cols}}<th>{{.}}</th>{{end}}</tr></thead>
+        <thead><tr>{{range $b.ColumnLabels}}<th>{{.}}</th>{{end}}</tr></thead>
         <tbody>
         {{range $b.Rows}}{{$row := .}}<tr>{{range $cols}}{{$c := index $row.Cells .}}<td>{{if $c.URL}}<a href="{{$c.URL}}" style="color:#3b82f6;text-decoration:none">{{$c.Text}}</a>{{else}}{{$c.Text}}{{end}}</td>{{end}}</tr>
         {{end}}

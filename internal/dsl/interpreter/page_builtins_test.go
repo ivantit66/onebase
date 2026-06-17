@@ -114,6 +114,28 @@ func TestPageBuilder_ChartAndList(t *testing.T) {
 	}
 }
 
+func TestPageBuilder_ActionButton(t *testing.T) {
+	b := NewPageBuilder()
+	code := `Процедура Тест()
+  Страница.Кнопка("Открыть", "/ui/catalog/Товар");
+  Страница.КнопкаДействие("Пересчитать", "ПересчитатьИтоги");
+КонецПроцедуры`
+	runPage(t, code, b)
+
+	blocks := b.Blocks()
+	if len(blocks) != 2 {
+		t.Fatalf("ожидалось 2 блока, получено %d", len(blocks))
+	}
+	// Обычная кнопка — переход по URL, без Action.
+	if blocks[0].Kind != "button" || blocks[0].URL != "/ui/catalog/Товар" || blocks[0].Action != "" {
+		t.Errorf("кнопка-ссылка: %+v", blocks[0])
+	}
+	// Кнопка-действие — имя серверной процедуры в Action, без URL.
+	if blocks[1].Kind != "button" || blocks[1].Action != "ПересчитатьИтоги" || blocks[1].URL != "" {
+		t.Errorf("кнопка-действие: %+v", blocks[1])
+	}
+}
+
 func TestSanitizePageHTML(t *testing.T) {
 	got := sanitizePageHTML(`<b>ok</b><script>alert(1)</script><a href="javascript:bad()" onclick="x()">t</a>`)
 	for _, bad := range []string{"<script", "onclick", "javascript:"} {

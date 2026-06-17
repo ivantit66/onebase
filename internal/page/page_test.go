@@ -67,3 +67,49 @@ func TestLoadDir_MissingDir(t *testing.T) {
 		t.Errorf("ожидался nil, получено %v", pages)
 	}
 }
+
+// Marshal опускает пустые необязательные поля (omitempty), но всегда пишет name.
+func TestMarshal_OmitsEmptyFields(t *testing.T) {
+	out, err := Marshal(&Page{Name: "Сводка"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if want := "name: Сводка\n"; got != want {
+		t.Errorf("Marshal минимальной страницы = %q, ожидалось %q", got, want)
+	}
+}
+
+// SaveFile → LoadFile сохраняет все заполненные поля (round-trip) и создаёт
+// каталог. Это путь, которым конфигуратор пишет pages/<имя>.yaml в файловом
+// режиме (план 66, доработка 2).
+func TestSaveFile_RoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pages", "Панель.yaml")
+	in := &Page{
+		Name:   "Панель",
+		Title:  "Панель руководителя",
+		Titles: map[string]string{"en": "Manager dashboard"},
+		Icon:   "layout-dashboard",
+		Roles:  []string{"Руководитель", "Бухгалтер"},
+		Params: []string{"период"},
+	}
+	if err := SaveFile(path, in); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	got, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if got.Name != in.Name || got.Title != in.Title || got.Icon != in.Icon {
+		t.Errorf("round-trip потерял скаляры: %+v", got)
+	}
+	if got.Titles["en"] != "Manager dashboard" {
+		t.Errorf("Titles = %v", got.Titles)
+	}
+	if len(got.Roles) != 2 || got.Roles[0] != "Руководитель" {
+		t.Errorf("Roles = %v", got.Roles)
+	}
+	if len(got.Params) != 1 || got.Params[0] != "период" {
+		t.Errorf("Params = %v", got.Params)
+	}
+}

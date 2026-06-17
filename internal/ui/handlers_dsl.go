@@ -18,6 +18,28 @@ import (
 	"github.com/ivantit66/onebase/internal/runtime"
 )
 
+// langCtxKeyT — ключ контекста, несущий разрешённый язык интерфейса для
+// request-scoped builtin'ов (НСтр). Вне запроса (планировщик/headless/фоновые
+// задания) ключа нет, и язык берётся из настройки базы (s.cfg.Lang).
+type langCtxKeyT struct{}
+
+// withLang кладёт разрешённый язык запроса в контекст (см. langCtxKeyT). Пустой
+// язык не пишем — пусть сработает откат к языку базы.
+func withLang(ctx context.Context, lang string) context.Context {
+	if lang == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, langCtxKeyT{}, lang)
+}
+
+// langFromCtx достаёт язык, положенный withLang; "" — если контекст его не несёт.
+func langFromCtx(ctx context.Context) string {
+	if v, ok := ctx.Value(langCtxKeyT{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
 func (s *Server) runOnWrite(obj *runtime.Object, mc *runtime.MovementsCollector) string {
 	errMsg, _ := s.runOnWriteCtx(context.Background(), obj, mc)
 	return errMsg
@@ -146,6 +168,22 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 	for k, v := range interpreter.NewChartFunctions() {
 		vars[k] = v
 	}
+
+	// НСтр(ИсходнаяСтрока[, КодЯзыка]) — локализованная строка формата
+	// "ru = '…'; en = '…'". Глобально язык по умолчанию "ru"; здесь подставляем
+	// язык запроса (страницы кладут его через withLang, см. handlers_page), чтобы
+	// НСтр без явного кода переводил на язык текущего пользователя — для
+	// статической части динамически собираемых подписей («Отчёт за » + Период),
+	// которые авто-перевод подписей блоков целиком не покрывает (план 66, п.3).
+	// Вне запроса (планировщик/headless) — язык базы (s.cfg.Lang).
+	nstrLang := langFromCtx(ctx)
+	if nstrLang == "" {
+		nstrLang = s.cfg.Lang
+	}
+	nstrFn := interpreter.NewNStrFunc(nstrLang)
+	vars["НСтр"] = nstrFn
+	vars["NStr"] = nstrFn
+
 	return vars
 }
 
