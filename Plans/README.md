@@ -81,6 +81,7 @@
 | 39 | [39-subsystem-home-pages.md](39-subsystem-home-pages.md) | Виджеты главной страницы по подсистемам | ~0.5 дня | ⬜ Не начато |
 | 45 | [45-mobile-pwa.md](45-mobile-pwa.md) | Мобильный доступ: адаптивная вёрстка + PWA | 3–4 дня | 🟡 Реализовано + правки по ревью (PWA публичны, авто-версия кэша SW, a11y); визуальная проверка на устройстве — приёмка |
 | 46 | [46-pwa-store-wrapper.md](46-pwa-store-wrapper.md) | Публикация PWA в App Store / Google Play (TWA/Capacitor) | 1–4 дня | ⬜ Не начато (опционально, поверх 45) |
+| 66 | [66-pages.md](66-pages.md) | Страницы: произвольные представления на DSL (структурные блоки, открываются из меню, ссылки на объекты базы) | 2–3 дня | 🔲 Запланировано |
 
 ### Направление Е — Корректность учёта
 
@@ -114,6 +115,7 @@
 | 55 | [55-monolith-split-embed-frontend.md](55-monolith-split-embed-frontend.md) | Раскол монолитов (`handlers.go`, `configurator_tmpl.go`) + фронт в `go:embed` | 4–5 дней | 🟡 Этап 1 (handlers.go); фронт в go:embed — нет |
 | 56 | [56-techdebt-ci-observability.md](56-techdebt-ci-observability.md) | CI с `-race`/coverage, `golangci-lint`, RBAC вложений, slog + `/metrics`, `onebase lint`, чистка репозитория | 5.5–7.5 дней | 🟡 Этапы 1, 2, 4; RBAC вложений/slog//metrics/lint — нет |
 | 62 | [62-network-safety-switch.md](62-network-safety-switch.md) | Предохранитель сети: галочка `net.enabled` лочит хуки/HTTP/сервисы/email; сброс при restore | 0.5 дня | ✅ Реализовано |
+| 67 | [67-exec-command.md](67-exec-command.md) | Выполнение команд ОС из DSL (`ВыполнитьКоманду`) за флагом `AllowExec` (выкл. по умолчанию, без shell, таймаут, аудит) | 1–1.5 дня | 🔲 Запланировано |
 
 ### Направление Г — Интеграции и экосистема (продолжение)
 
