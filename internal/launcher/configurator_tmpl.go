@@ -260,7 +260,7 @@ pre.os-code{
 .cfg-new-form .btn-cancel{padding:5px 8px;background:#e8ecf2;border:1px solid #ccd0d8;border-radius:3px;font-size:12px;cursor:pointer}
 
 /* ── Converter / Files ───────────────────────────────── */
-.pad{padding:16px}
+.pad{padding:16px;flex:1;overflow-y:auto;min-height:0}
 .convert-form,.file-card{background:#fff;border:1px solid #d8dde8;border-radius:6px;padding:18px;margin-bottom:14px}
 .convert-form h3,.file-card h3{font-size:13px;font-weight:700;color:#1a3a6a;margin-bottom:12px}
 .fg{margin-bottom:12px}

@@ -2207,9 +2207,8 @@ func (h *handler) configuratorNewObject(w http.ResponseWriter, r *http.Request) 
 
 	filename := nameToFilename(name) + ".yaml"
 	if kind == "module" {
+		// subdir/content приходят из newObjectContent; здесь только расширение.
 		filename = nameToFilename(name) + ".module.os"
-		content = "// " + name + "\n// Общий модуль\n\nПроцедура Главная()\nКонецПроцедуры\n"
-		subdir = "src"
 	}
 	if kind == "page" {
 		// Имя файла страницы — в исходном регистре (как демо pages/Панель.yaml),
@@ -2284,6 +2283,10 @@ func newObjectContent(kind, name string) (subdir, content string) {
 		return "processors", "name: " + name + "\ntitle: " + name + "\nparams: []\n"
 	case "page":
 		return "pages", "name: " + name + "\ntitle: " + name + "\n"
+	case "module":
+		// Общий модуль — файл src/<имя>.module.os со стартовой экспортной
+		// процедурой (расширение файла проставляется в configuratorNewObject).
+		return "src", "// " + name + "\n// Общий модуль\n\nПроцедура Главная() Экспорт\nКонецПроцедуры\n"
 	}
 	return "", ""
 }
