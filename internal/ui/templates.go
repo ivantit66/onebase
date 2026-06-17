@@ -379,7 +379,12 @@ var tmpl = template.Must(template.New("root").Funcs(template.FuncMap{
 	"echartsJSON": echartsJSON,
 	"splitCamel":  splitCamel,
 	"fmtCell":     fmtReportCell,
-}).Parse(tplHead + tplNav + tplIndex + tplList + tplForm + tplManagedForm + tplRegister + tplReport + tplProcessor + tplAbout + tplDeleteMarked + tplInfoReg + tplConstants + tplHistory + tplJournal + tplScheduled + tplAccountReg + tplQueryBuilder + tplAllFunctions + tplQueryConsole + tplCodeConsole + tplGengen + tplForbidden))
+	// pageRaw помечает уже санитизированный HTML страницы (план 66) как
+	// безопасный. Источник — только ДобавитьСыройHTML, прошедший sanitizePageHTML.
+	"pageRaw": func(s string) template.HTML { return template.HTML(s) },
+	// pageChart конвертирует чарт-блок страницы в widget.ChartData для echartsJSON.
+	"pageChart": pageChartData,
+}).Parse(tplHead + tplNav + tplIndex + tplList + tplForm + tplManagedForm + tplRegister + tplReport + tplProcessor + tplAbout + tplDeleteMarked + tplInfoReg + tplConstants + tplHistory + tplJournal + tplScheduled + tplAccountReg + tplQueryBuilder + tplAllFunctions + tplQueryConsole + tplCodeConsole + tplGengen + tplForbidden + tplPageCustom))
 
 const tplHead = `
 {{define "head"}}<!DOCTYPE html>
@@ -3138,5 +3143,78 @@ const tplAccountReg = `
 {{end}}
 </div>
 </main></div></body></html>
+{{end}}
+`
+
+// tplPageCustom — оболочка произвольной страницы на DSL (план 66). Блоки
+// собирает обработчик через построитель «Страница»; здесь они рендерятся в
+// общий шейл (head+nav) с автоэкранированием. Сырой HTML (pageRaw) допускается
+// только из ДобавитьСыройHTML после санитизации.
+const tplPageCustom = `
+{{define "page-custom"}}
+{{template "head" .}}{{template "nav" .}}
+<main class="main-list">
+  <h2>{{.PageTitle}}</h2>
+  {{if .PageError}}<div class="error">{{.PageError}}</div>{{end}}
+  {{range $i, $b := .PageBlocks}}
+    {{if eq $b.Kind "heading"}}<h3>{{$b.Text}}</h3>
+    {{else if eq $b.Kind "paragraph"}}<p style="margin-bottom:14px;color:#334155;font-size:14px;line-height:1.55;max-width:900px">{{$b.Text}}</p>
+    {{else if eq $b.Kind "kpi"}}<div class="card" style="display:inline-block;min-width:200px;margin:0 12px 14px 0;padding:16px 20px;vertical-align:top">{{if $b.Label}}<div style="font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;font-weight:600;margin-bottom:6px">{{$b.Label}}</div>{{end}}<div style="font-size:28px;font-weight:700;color:#0f172a;line-height:1.1">{{$b.Value}}</div></div>
+    {{else if eq $b.Kind "button"}}<a href="{{$b.URL}}" class="btn btn-primary" style="margin:0 8px 14px 0">{{$b.Text}}</a>
+    {{else if eq $b.Kind "divider"}}<hr style="border:none;border-top:1px solid #e2e8f0;margin:18px 0;max-width:1400px">
+    {{else if eq $b.Kind "raw"}}<div class="card" style="margin-bottom:14px">{{pageRaw $b.HTML}}</div>
+    {{else if eq $b.Kind "list"}}
+    <div class="card" style="margin-bottom:14px;max-width:900px">
+      {{if $b.Title}}<h3 style="margin-top:0">{{$b.Title}}</h3>{{end}}
+      <ul style="margin:0;padding-left:20px;color:#334155;font-size:14px;line-height:1.7">
+        {{range $b.Items}}<li>{{if .URL}}<a href="{{.URL}}" style="color:#3b82f6;text-decoration:none">{{.Text}}</a>{{else}}{{.Text}}{{end}}</li>{{end}}
+      </ul>
+    </div>
+    {{else if eq $b.Kind "chart"}}
+    <div class="card" style="margin-bottom:14px;max-width:900px">
+      {{if $b.Title}}<h3 style="margin-top:0">{{$b.Title}}</h3>{{end}}
+      <div class="w-chart-canvas" data-pagechart="{{$i}}" style="width:100%;height:260px"></div>
+    </div>
+    {{else if eq $b.Kind "table"}}
+    <div class="card" style="margin-bottom:14px;overflow-x:auto">
+      {{if $b.Title}}<h3 style="margin-top:0">{{$b.Title}}</h3>{{end}}
+      {{$cols := $b.Columns}}
+      <table>
+        <thead><tr>{{range $cols}}<th>{{.}}</th>{{end}}</tr></thead>
+        <tbody>
+        {{range $b.Rows}}{{$row := .}}<tr>{{range $cols}}{{$c := index $row.Cells .}}<td>{{if $c.URL}}<a href="{{$c.URL}}" style="color:#3b82f6;text-decoration:none">{{$c.Text}}</a>{{else}}{{$c.Text}}{{end}}</td>{{end}}</tr>
+        {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{end}}
+  {{end}}
+</main></div>
+{{if .PageHasChart}}
+<script>
+window.__obPageCharts = window.__obPageCharts || {};
+{{range $i, $b := .PageBlocks}}{{if eq $b.Kind "chart"}}window.__obPageCharts["{{$i}}"] = {{echartsJSON (pageChart $b.Chart)}};
+{{end}}{{end}}
+</script>
+<script src="/vendor/echarts/echarts.min.js"></script>
+<script>
+(function(){
+  function init(){
+    if(!window.echarts)return;
+    var nodes=document.querySelectorAll('.w-chart-canvas[data-pagechart]');
+    for(var i=0;i<nodes.length;i++){
+      var node=nodes[i];
+      if(node.getAttribute('data-ob-init'))continue;
+      var opt=window.__obPageCharts[node.getAttribute('data-pagechart')];
+      if(!opt)continue;
+      node.setAttribute('data-ob-init','1');
+      try{var c=echarts.init(node);opt.animation=false;c.setOption(opt);(function(c){window.addEventListener('resize',function(){c.resize();});})(c);}catch(e){console.error('page chart init failed',e);}
+    }
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+})();
+</script>
+{{end}}
+</body></html>
 {{end}}
 `

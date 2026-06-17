@@ -9,6 +9,7 @@ import (
 	"github.com/ivantit66/onebase/internal/dsl/ast"
 	"github.com/ivantit66/onebase/internal/httpservice"
 	"github.com/ivantit66/onebase/internal/metadata"
+	"github.com/ivantit66/onebase/internal/page"
 	"github.com/ivantit66/onebase/internal/printform"
 	"github.com/ivantit66/onebase/internal/processor"
 	"github.com/ivantit66/onebase/internal/report"
@@ -32,11 +33,13 @@ type Registry struct {
 	procs           map[string]map[string]*ast.ProcedureDecl
 	extProcs        map[string]map[string]*ast.ProcedureDecl // код внешних обработок (из БД), ключ — имя обработки
 	serviceProcs    map[string]map[string]*ast.ProcedureDecl // план 61: имя сервиса → обработчики .service.os
+	pageProcs       map[string]map[string]*ast.ProcedureDecl // план 66: имя страницы → обработчики .page.os
 	managerProcs    map[string]map[string]*ast.ProcedureDecl // lowercase entity → procs модуля менеджера
 	moduleProcs     map[string]*ast.ProcedureDecl            // flat: proc name → decl
 	moduleByName    map[string]map[string]*ast.ProcedureDecl // lowercase module → procs in it
 	processors      map[string]*processor.Processor
 	httpServices    map[string]*httpservice.Service // lowercase name → HTTP-сервис
+	pages           map[string]*page.Page           // lowercase name → страница (план 66)
 	extProcessors   map[string]*processor.Processor // внешние обработки (из БД), ключ — Name
 	subsystems      []*metadata.Subsystem           // sorted by Order
 	journals        map[string]*metadata.Journal
@@ -73,6 +76,7 @@ func NewRegistry() *Registry {
 		moduleByName:    make(map[string]map[string]*ast.ProcedureDecl),
 		processors:      make(map[string]*processor.Processor),
 		httpServices:    make(map[string]*httpservice.Service),
+		pages:           make(map[string]*page.Page),
 		extProcessors:   make(map[string]*processor.Processor),
 		extProcs:        make(map[string]map[string]*ast.ProcedureDecl),
 		serviceProcs:    make(map[string]map[string]*ast.ProcedureDecl),
@@ -142,6 +146,7 @@ type LoadOptions struct {
 	Programs        map[string]*ast.Program
 	ManagerPrograms map[string]*ast.Program // entity name → процедуры модуля менеджера
 	ServicePrograms map[string]*ast.Program // план 61: service name → обработчики .service.os
+	PagePrograms    map[string]*ast.Program // план 66: page name → обработчики .page.os
 	Registers       []*metadata.Register
 	InfoRegs        []*metadata.InfoRegister
 	Enums           []*metadata.Enum
@@ -208,6 +213,14 @@ func (r *Registry) Load(opts LoadOptions) {
 		}
 		newServiceProcs[svcName] = pm
 	}
+	newPageProcs := make(map[string]map[string]*ast.ProcedureDecl)
+	for pageName, prog := range opts.PagePrograms {
+		pm := make(map[string]*ast.ProcedureDecl, len(prog.Procedures))
+		for _, p := range prog.Procedures {
+			pm[strings.ToLower(p.Name.Literal)] = p
+		}
+		newPageProcs[pageName] = pm
+	}
 	newPrintForms := make(map[string][]*printform.PrintForm)
 	for _, pf := range opts.PrintForms {
 		key := strings.ToLower(pf.Document)
@@ -226,6 +239,7 @@ func (r *Registry) Load(opts LoadOptions) {
 	r.procs = newProcs
 	r.managerProcs = newManagerProcs
 	r.serviceProcs = newServiceProcs
+	r.pageProcs = newPageProcs
 	r.basedOnIndex = newBasedOn
 	r.mu.Unlock()
 }
@@ -949,6 +963,46 @@ func (r *Registry) GetHTTPServiceByRoot(root string) *httpservice.Service {
 		}
 	}
 	return nil
+}
+
+// LoadPages регистрирует страницы по имени (регистронезависимо, план 66).
+// Метаданные хранятся отдельно от обработчиков (.page.os → pageProcs, грузятся
+// через Load), как у HTTP-сервисов.
+func (r *Registry) LoadPages(pages []*page.Page) {
+	m := make(map[string]*page.Page, len(pages))
+	for _, p := range pages {
+		m[strings.ToLower(p.Name)] = p
+	}
+	r.mu.Lock()
+	r.pages = m
+	r.mu.Unlock()
+}
+
+// Pages возвращает все зарегистрированные страницы.
+func (r *Registry) Pages() []*page.Page {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*page.Page, 0, len(r.pages))
+	for _, p := range r.pages {
+		out = append(out, p)
+	}
+	return out
+}
+
+// GetPage ищет страницу по имени (регистронезависимо). nil, если нет.
+func (r *Registry) GetPage(name string) *page.Page {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.pages[strings.ToLower(name)]
+}
+
+// GetPageProcedure резолвит обработчик страницы (X.page.os, план 66). Хранится
+// отдельно от procs/serviceProcs, поэтому страница и одноимённый документ/сервис
+// не конфликтуют. Регистронезависимо по обоим именам.
+func (r *Registry) GetPageProcedure(pageName, procName string) *ast.ProcedureDecl {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return lookupProc(r.pageProcs, pageName, procName)
 }
 
 func (r *Registry) LoadSubsystems(subs []*metadata.Subsystem) {

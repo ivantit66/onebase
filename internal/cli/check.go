@@ -60,6 +60,8 @@ func runCheck(cmd *cobra.Command, _ []string) error {
 		warnings = append(warnings, configcheck.CheckLayoutWarnings(proj)...)
 		// HTTP-сервисы (план 61): дубли root_url, наличие обработчиков, auth.
 		issues = append(issues, configcheck.CheckHTTPServices(proj)...)
+		// Страницы (план 66): наличие обработчика ПриФормировании.
+		issues = append(issues, configcheck.CheckPages(proj)...)
 		// Коллизии имён таблиц: справочник и документ с одинаковым именем
 		// делят одну физическую таблицу lower(имя) (issue #20).
 		issues = append(issues, configcheck.CheckNameCollisions(proj)...)

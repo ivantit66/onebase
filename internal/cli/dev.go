@@ -138,6 +138,7 @@ func runDev(cmd *cobra.Command, _ []string) error {
 			Programs:        proj.Programs,
 			ManagerPrograms: proj.ManagerPrograms,
 			ServicePrograms: proj.ServicePrograms,
+			PagePrograms:    proj.PagePrograms,
 			Registers:       proj.Registers,
 			InfoRegs:        proj.InfoRegisters,
 			Enums:           proj.Enums,
@@ -150,6 +151,7 @@ func runDev(cmd *cobra.Command, _ []string) error {
 		reg.LoadModules(proj.Modules)
 		reg.LoadProcessors(proj.Processors)
 		reg.LoadHTTPServices(proj.HTTPServices)
+		reg.LoadPages(proj.Pages)
 		reg.LoadSubsystems(proj.Subsystems)
 		reg.LoadJournals(proj.Journals)
 		reg.LoadAccountRegisters(proj.AccountRegisters, proj.ChartsOfAccounts)

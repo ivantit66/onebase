@@ -1109,6 +1109,16 @@ var functionDescriptors = []Descriptor{
 		Group:   "Глобальный контекст",
 	},
 	{
+		Name: "ссылканаобъект", Display: "СсылкаНаОбъект", Aliases: []string{"ObjectRef"}, Kind: KindFunc,
+		Signature: "СсылкаНаОбъект(Объект)",
+		Params: []Param{
+			{Name: "Объект", Type: "ссылка"},
+		},
+		Returns: "строка",
+		Doc:     "Возвращает URL карточки объекта (/ui/<вид>/<сущность>/<id>) по ссылке — для ссылок на странице (план 66). Пустая/нессылочная величина — пустая строка.",
+		Group:   "Глобальный контекст",
+	},
+	{
 		Name: "блокировкаданных", Display: "БлокировкаДанных", Aliases: []string{"DataLock"}, Kind: KindFunc,
 		Signature: "БлокировкаДанных()",
 		Returns:   "объект",

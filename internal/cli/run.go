@@ -168,6 +168,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		Programs:        proj.Programs,
 		ManagerPrograms: proj.ManagerPrograms,
 		ServicePrograms: proj.ServicePrograms,
+		PagePrograms:    proj.PagePrograms,
 		Registers:       proj.Registers,
 		InfoRegs:        proj.InfoRegisters,
 		Enums:           proj.Enums,
@@ -180,6 +181,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	reg.LoadModules(proj.Modules)
 	reg.LoadProcessors(proj.Processors)
 	reg.LoadHTTPServices(proj.HTTPServices)
+	reg.LoadPages(proj.Pages)
 	reg.LoadSubsystems(proj.Subsystems)
 	reg.LoadJournals(proj.Journals)
 	reg.LoadAccountRegisters(proj.AccountRegisters, proj.ChartsOfAccounts)
@@ -397,6 +399,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 				Programs:        newProj.Programs,
 				ManagerPrograms: newProj.ManagerPrograms,
 				ServicePrograms: newProj.ServicePrograms,
+				PagePrograms:    newProj.PagePrograms,
 				Registers:       newProj.Registers,
 				InfoRegs:        newProj.InfoRegisters,
 				Enums:           newProj.Enums,
@@ -409,6 +412,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 			reg.LoadModules(newProj.Modules)
 			reg.LoadProcessors(newProj.Processors)
 			reg.LoadHTTPServices(newProj.HTTPServices)
+			reg.LoadPages(newProj.Pages)
 			reg.LoadSubsystems(newProj.Subsystems)
 			reg.LoadJournals(newProj.Journals)
 			reg.LoadAccountRegisters(newProj.AccountRegisters, newProj.ChartsOfAccounts)

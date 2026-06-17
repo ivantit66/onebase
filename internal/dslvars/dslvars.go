@@ -14,6 +14,7 @@ package dslvars
 
 import (
 	"context"
+	"strings"
 
 	"github.com/ivantit66/onebase/internal/aiassist"
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
@@ -80,5 +81,26 @@ func (c Common) Build() map[string]any {
 	for k, v := range interpreter.NewServiceFunctions() {
 		vars[k] = v
 	}
+
+	// СсылкаНаОбъект(Объект) → канонический URL карточки /ui/<вид>/<сущность>/<id>
+	// (план 66). То же соглашение, что у виджетов; вид определяется по типу
+	// ссылки через реестр. Полезно прежде всего на страницах, но безвредно в
+	// обработках/заданиях, поэтому в общем наборе.
+	objectRef := interpreter.BuiltinFunc(func(args []any, _ string, _ int) (any, error) {
+		if len(args) == 0 || args[0] == nil {
+			return "", nil
+		}
+		ref, ok := args[0].(*interpreter.Ref)
+		if !ok || ref.UUID == "" || ref.Type == "" {
+			return "", nil
+		}
+		kind := "catalog"
+		if ent := c.Reg.GetEntity(ref.Type); ent != nil {
+			kind = strings.ToLower(string(ent.Kind))
+		}
+		return "/ui/" + kind + "/" + ref.Type + "/" + ref.UUID, nil
+	})
+	vars["СсылкаНаОбъект"] = objectRef
+	vars["ObjectRef"] = objectRef
 	return vars
 }

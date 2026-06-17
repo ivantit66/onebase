@@ -18,6 +18,7 @@ import (
 	"github.com/ivantit66/onebase/internal/httpservice"
 	"github.com/ivantit66/onebase/internal/llm"
 	"github.com/ivantit66/onebase/internal/metadata"
+	"github.com/ivantit66/onebase/internal/page"
 	"github.com/ivantit66/onebase/internal/printform"
 	"github.com/ivantit66/onebase/internal/processor"
 	"github.com/ivantit66/onebase/internal/report"
@@ -39,8 +40,10 @@ type Project struct {
 	Programs         map[string]*ast.Program // entity name → parsed DSL (модуль объекта)
 	ManagerPrograms  map[string]*ast.Program // entity name → parsed DSL (модуль менеджера)
 	ServicePrograms  map[string]*ast.Program // план 61: service name → обработчики .service.os (отдельный namespace, чтобы не затирать модуль одноимённого документа)
+	PagePrograms     map[string]*ast.Program // план 66: page name → обработчики .page.os (отдельный namespace, как у сервисов)
 	Processors       []*processor.Processor
 	HTTPServices     []*httpservice.Service  // план 61: опубликованные HTTP-сервисы
+	Pages            []*page.Page            // план 66: страницы (произвольные представления на DSL)
 	Modules          map[string]*ast.Program // module name → parsed procs
 	Subsystems       []*metadata.Subsystem
 	Journals         []*metadata.Journal
@@ -185,6 +188,7 @@ func Load(dir string) (*Project, error) {
 		Programs:        make(map[string]*ast.Program),
 		ManagerPrograms: make(map[string]*ast.Program),
 		ServicePrograms: make(map[string]*ast.Program),
+		PagePrograms:    make(map[string]*ast.Program),
 		Modules:         make(map[string]*ast.Program),
 	}
 	if err := p.loadMetadata(); err != nil {
@@ -209,6 +213,9 @@ func Load(dir string) (*Project, error) {
 		return nil, err
 	}
 	if err := p.loadHTTPServices(); err != nil {
+		return nil, err
+	}
+	if err := p.loadPages(); err != nil {
 		return nil, err
 	}
 	if err := p.loadSubsystems(); err != nil {
@@ -313,6 +320,17 @@ func (p *Project) loadHTTPServices() error {
 		s.Secret = expandEnvRefs(s.Secret)
 	}
 	p.HTTPServices = services
+	return nil
+}
+
+// loadPages читает pages/*.yaml (план 66). Обработчики (.page.os) грузятся в
+// loadDSL в отдельный namespace PagePrograms.
+func (p *Project) loadPages() error {
+	pages, err := page.LoadDir(filepath.Join(p.Dir, "pages"))
+	if err != nil {
+		return fmt.Errorf("project: load pages: %w", err)
+	}
+	p.Pages = pages
 	return nil
 }
 
@@ -510,6 +528,7 @@ func (p *Project) loadDSL() error {
 		isReport := strings.HasSuffix(name, ".rep.os")
 		isManager := strings.HasSuffix(name, ".manager.os")
 		isService := strings.HasSuffix(name, ".service.os")
+		isPage := strings.HasSuffix(name, ".page.os")
 
 		fullPath := filepath.Join(srcDir, name)
 		data, err := os.ReadFile(fullPath)
@@ -557,6 +576,17 @@ func (p *Project) loadDSL() error {
 			base := strings.TrimSuffix(name, ".service.os")
 			entityName := fileNameToEntityBase(base)
 			p.ServicePrograms[entityName] = prog
+			continue
+		}
+		if isPage {
+			// Обработчик страницы (план 66) — в ОТДЕЛЬНЫЙ namespace PagePrograms,
+			// как у сервисов: страница может называться как одноимённый документ,
+			// и затирать его модуль нельзя. Роутер достаёт процедуру через
+			// GetPageProcedure (регистронезависимо), поэтому имя файла должно
+			// совпадать с именем страницы (без учёта регистра).
+			base := strings.TrimSuffix(name, ".page.os")
+			entityName := fileNameToEntityBase(base)
+			p.PagePrograms[entityName] = prog
 			continue
 		}
 		if isReport {

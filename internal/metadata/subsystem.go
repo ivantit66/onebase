@@ -40,6 +40,7 @@ type SubsystemContents struct {
 	Registers  []string
 	Processors []string
 	Journals   []string
+	Pages      []string // план 66: произвольные страницы на DSL
 }
 
 // IsEmpty сообщает, что набор объектов пуст (ни одного объекта ни в одной
@@ -51,7 +52,7 @@ func (c *SubsystemContents) IsEmpty() bool {
 	}
 	return len(c.Documents) == 0 && len(c.Catalogs) == 0 && len(c.Reports) == 0 &&
 		len(c.InfoRegs) == 0 && len(c.Registers) == 0 && len(c.Processors) == 0 &&
-		len(c.Journals) == 0
+		len(c.Journals) == 0 && len(c.Pages) == 0
 }
 
 type rawSubsystem struct {
@@ -68,6 +69,7 @@ type rawSubsystem struct {
 		Registers  []string `yaml:"registers"`
 		Processors []string `yaml:"processors"`
 		Journals   []string `yaml:"journals"`
+		Pages      []string `yaml:"pages"`
 	} `yaml:"contents"`
 	HomePage *HomePage `yaml:"home_page"`
 }
@@ -101,6 +103,7 @@ func LoadSubsystemFile(path string) (*Subsystem, error) {
 			Registers:  raw.Contents.Registers,
 			Processors: raw.Contents.Processors,
 			Journals:   raw.Contents.Journals,
+			Pages:      raw.Contents.Pages,
 		},
 	}
 	if raw.HomePage != nil {
