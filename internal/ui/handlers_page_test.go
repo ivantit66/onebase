@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/ivantit66/onebase/internal/dsl/ast"
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
+	"github.com/ivantit66/onebase/internal/i18n"
 	"github.com/ivantit66/onebase/internal/page"
 	"github.com/ivantit66/onebase/internal/runtime"
 	"github.com/ivantit66/onebase/internal/storage"
@@ -163,6 +165,117 @@ func TestPageAction_RunsProcAndRedirects(t *testing.T) {
 	msgs := s.messages.List("_anonymous")
 	if len(msgs) != 1 || !strings.Contains(msgs[0].Text, "действие за период: 2026") {
 		t.Errorf("Сообщить действия не собрано: %+v", msgs)
+	}
+}
+
+// TestLocalizePageBlocks_TranslatesLabelsNotData проверяет авто-i18n подписей
+// блоков страницы (план 66, доработка 3): статические подписи переводятся через
+// Bundle, а данные из запросов (значение показателя, ячейки таблицы, URL) —
+// остаются нетронутыми.
+func TestLocalizePageBlocks_TranslatesLabelsNotData(t *testing.T) {
+	dir := t.TempDir()
+	en := `{
+		"Заголовок": "Heading",
+		"Позиций": "Items count",
+		"Номенклатура": "Items",
+		"Наименование": "Name",
+		"Продажи": "Sales",
+		"Быстрые ссылки": "Quick links",
+		"Контрагенты": "Counterparties",
+		"Открыть": "Open"
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "en.json"), []byte(en), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := i18n.Load(os.DirFS(dir), "")
+	if err != nil {
+		t.Fatalf("i18n.Load: %v", err)
+	}
+	s := &Server{cfg: Config{Bundle: bundle}}
+
+	b := interpreter.NewPageBuilder()
+	b.CallMethod("заголовок", []any{"Заголовок"})
+	b.CallMethod("показатель", []any{"Позиций", 42.0, "number"})
+	tbl := b.CallMethod("таблица", []any{"Номенклатура"}).(*interpreter.DSLPageTable)
+	tbl.CallMethod("колонки", []any{"Наименование"})
+	row := tbl.CallMethod("добавитьстроку", nil).(*interpreter.DSLPageRow)
+	row.CallMethod("установить", []any{"Наименование", "Болт М6"}) // данные — не переводить
+	ch := b.CallMethod("график", []any{"Продажи", "line"}).(*interpreter.DSLPageChart)
+	ch.CallMethod("серия", []any{"Выручка", interpreter.NewArray([]any{1.0})})
+	lst := b.CallMethod("список", []any{"Быстрые ссылки"}).(*interpreter.DSLPageList)
+	lst.CallMethod("пункт", []any{"Контрагенты", "/ui/catalog/Контрагент"})
+	b.CallMethod("кнопка", []any{"Открыть", "/ui/"})
+
+	blocks := b.Blocks()
+	s.localizePageBlocks("en", blocks)
+
+	checks := []struct {
+		got, want, what string
+	}{
+		{blocks[0].Text, "Heading", "heading.Text"},
+		{blocks[1].Label, "Items count", "kpi.Label"},
+		{blocks[1].Value, "42", "kpi.Value (данные не трогаем)"},
+		{blocks[2].Title, "Items", "table.Title"},
+		{blocks[2].ColumnLabels[0], "Name", "table.ColumnLabels[0] (отображение)"},
+		{blocks[2].Columns[0], "Наименование", "table.Columns[0] (ключ — не переводится)"},
+		{blocks[2].Rows[0].Cells["Наименование"].Text, "Болт М6", "ячейка таблицы (данные)"},
+		{blocks[3].Title, "Sales", "chart.Title"},
+		{blocks[4].Title, "Quick links", "list.Title"},
+		{blocks[4].Items[0].Text, "Counterparties", "item.Text"},
+		{blocks[4].Items[0].URL, "/ui/catalog/Контрагент", "item.URL (данные)"},
+		{blocks[5].Text, "Open", "button.Text"},
+	}
+	for _, c := range checks {
+		if c.got != c.want {
+			t.Errorf("%s = %q, ожидалось %q", c.what, c.got, c.want)
+		}
+	}
+
+	// Сквозная проверка: переведённые подписи доходят до HTML, а данные ячеек
+	// (адресуются ключом «Наименование») остаются на месте при переведённом
+	// заголовке колонки «Name».
+	var buf bytes.Buffer
+	data := map[string]any{
+		"PageTitle": "Тест", "PageBlocks": blocks, "PageHasChart": true,
+		"Cfg": Config{}, "Lang": "en",
+	}
+	if err := tmpl.ExecuteTemplate(&buf, "page-custom", data); err != nil {
+		t.Fatalf("execute page-custom: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"Heading", "Items count", "Name", "Болт М6", "Sales", "Quick links", "Counterparties", "Open"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("в HTML нет %q", want)
+		}
+	}
+}
+
+// Русская локаль (и отсутствие словаря/Bundle) — no-op: подписи проходят без
+// изменений (Bundle.T возвращает непереведённый ключ как есть).
+func TestLocalizePageBlocks_Noop(t *testing.T) {
+	build := func() []interpreter.PageBlock {
+		b := interpreter.NewPageBuilder()
+		b.CallMethod("заголовок", []any{"Сводка"})
+		return b.Blocks()
+	}
+
+	bundle, _ := i18n.Load(os.DirFS(t.TempDir()), "") // нет словарей
+	for _, tc := range []struct {
+		name string
+		s    *Server
+		lang string
+	}{
+		{"русский", &Server{cfg: Config{Bundle: bundle}}, "ru"},
+		{"nil-bundle", &Server{cfg: Config{}}, "en"},
+		{"пустой lang", &Server{cfg: Config{Bundle: bundle}}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			blocks := build()
+			tc.s.localizePageBlocks(tc.lang, blocks)
+			if blocks[0].Text != "Сводка" {
+				t.Errorf("подпись изменилась: %q", blocks[0].Text)
+			}
+		})
 	}
 }
 

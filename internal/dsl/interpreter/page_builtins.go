@@ -30,8 +30,9 @@ type PageBlock struct {
 	Value  string // kpi: уже отформатированное значение
 	Title  string // table: заголовок таблицы
 
-	Columns []string  // table: заголовки колонок
-	Rows    []PageRow // table: строки
+	Columns      []string  // table: КЛЮЧИ колонок — адресация ячеек в Rows (не переводятся)
+	ColumnLabels []string  // table: отображаемые заголовки колонок (переводятся i18n)
+	Rows         []PageRow // table: строки
 
 	Items []PageListItem // list: пункты списка
 	Chart *PageChart     // chart: данные графика
@@ -239,6 +240,11 @@ func (t *DSLPageTable) CallMethod(name string, args []any) any {
 			cols = append(cols, argStr(args, i))
 		}
 		t.builder.blocks[t.idx].Columns = cols
+		// Отдельная копия для отображения: i18n переводит ColumnLabels, а Columns
+		// остаются ключами для `index $row.Cells` в шаблоне (иначе перевод
+		// заголовка рассогласует адресацию ячеек). Копия обязательна — общий
+		// backing-массив дал бы мутацию Columns при переводе.
+		t.builder.blocks[t.idx].ColumnLabels = append([]string(nil), cols...)
 		return t
 	case "добавитьстроку", "addrow":
 		row := PageRow{Cells: map[string]PageCell{}}

@@ -93,6 +93,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	}
 
 	blocks := builder.Blocks()
+	s.localizePageBlocks(lang, blocks)
 	hasChart := false
 	for _, b := range blocks {
 		if b.Kind == "chart" {
@@ -107,6 +108,44 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 		"PageActionBase": "/ui/page/" + pg.Name + "/action/",
 		"PageQuery":      pageQuery(r),
 	})
+}
+
+// localizePageBlocks переводит статические авторские подписи блоков на язык
+// пользователя через s.tr (i18n.Bundle, русский-как-ключ): заголовки, тексты
+// абзацев, подписи показателей, заголовки таблиц/списков/графиков, заголовки
+// колонок, тексты пунктов списка и кнопок (план 66, доработка 3). Данные НЕ
+// трогаем — значения показателей (Value), ячейки таблиц (Rows) и данные
+// графиков приходят из запросов и переводу не подлежат. Bundle.T возвращает
+// непереведённый ключ как есть, поэтому для русской локали (и без словаря) это
+// no-op. Динамически собранные подписи («Отчёт за » + Период) ключа не имеют и
+// тоже проходят без изменений — для них автор может выделить статическую часть.
+func (s *Server) localizePageBlocks(lang string, blocks []interpreter.PageBlock) {
+	if s.cfg.Bundle == nil || lang == "" {
+		return
+	}
+	for i := range blocks {
+		b := &blocks[i]
+		switch b.Kind {
+		case "heading", "paragraph", "button":
+			b.Text = s.tr(lang, b.Text)
+		case "kpi":
+			b.Label = s.tr(lang, b.Label)
+		case "table":
+			b.Title = s.tr(lang, b.Title)
+			// Переводим ОТОБРАЖАЕМЫЕ заголовки (ColumnLabels); Columns — ключи
+			// адресации ячеек, их трогать нельзя (см. колонки в page_builtins.go).
+			for j := range b.ColumnLabels {
+				b.ColumnLabels[j] = s.tr(lang, b.ColumnLabels[j])
+			}
+		case "list":
+			b.Title = s.tr(lang, b.Title)
+			for j := range b.Items {
+				b.Items[j].Text = s.tr(lang, b.Items[j].Text)
+			}
+		case "chart":
+			b.Title = s.tr(lang, b.Title)
+		}
+	}
 }
 
 // pageAction обрабатывает кнопку-действие (план 66): POST

@@ -2939,7 +2939,7 @@ const tplPageCustom = `
       {{if $b.Title}}<h3 style="margin-top:0">{{$b.Title}}</h3>{{end}}
       {{$cols := $b.Columns}}
       <table>
-        <thead><tr>{{range $cols}}<th>{{.}}</th>{{end}}</tr></thead>
+        <thead><tr>{{range $b.ColumnLabels}}<th>{{.}}</th>{{end}}</tr></thead>
         <tbody>
         {{range $b.Rows}}{{$row := .}}<tr>{{range $cols}}{{$c := index $row.Cells .}}<td>{{if $c.URL}}<a href="{{$c.URL}}" style="color:#3b82f6;text-decoration:none">{{$c.Text}}</a>{{else}}{{$c.Text}}{{end}}</td>{{end}}</tr>
         {{end}}
