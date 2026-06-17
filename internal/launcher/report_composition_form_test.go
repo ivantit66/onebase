@@ -230,6 +230,38 @@ func TestParseCompositionFormDetailLinkEmpty(t *testing.T) {
 	}
 }
 
+func TestApplyReportCompositionPreservesOtherFields(t *testing.T) {
+	// Поля отчёта, не относящиеся к composition (мультиязычные titles, title,
+	// params), не должны теряться при сохранении настроек композиции через
+	// конфигуратор. Регресс: applyReportComposition round-trip'ил YAML через
+	// структуру без поля Titles → titles молча удалялись (issue #86).
+	raw := []byte("name: R\ntitle: Отчёт\ntitles:\n  en: Report\nquery: \"ВЫБРАТЬ 1\"\nparams:\n  - {name: Период, type: date}\n")
+
+	f := url.Values{}
+	f.Set("comp.present", "1")
+	f.Set("comp.grouping.0", "Менеджер")
+	f.Set("comp.measure.0.field", "Сумма")
+	f.Set("comp.measure.0.agg", "sum")
+
+	out, err := applyReportComposition(raw, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "titles:") || !strings.Contains(s, "Report") {
+		t.Fatalf("titles потеряны при сохранении composition:\n%s", s)
+	}
+	if !strings.Contains(s, "Отчёт") {
+		t.Fatalf("title потерян:\n%s", s)
+	}
+	if !strings.Contains(s, "Период") {
+		t.Fatalf("params потеряны:\n%s", s)
+	}
+	if !strings.Contains(s, "Менеджер") {
+		t.Fatalf("новая composition не записана:\n%s", s)
+	}
+}
+
 func TestApplyReportComposition(t *testing.T) {
 	raw := []byte("name: R\nquery: \"ВЫБРАТЬ 1\"\ncomposition:\n  groupings: [Старое]\n  measures:\n    - {field: X, agg: sum}\n")
 

@@ -126,7 +126,11 @@ func (s *Server) runReport(w http.ResponseWriter, r *http.Request, rep *reportpk
 		})
 		return
 	}
-	s.resolveUUIDsInReport(r.Context(), rows)
+	detailLinkCol := ""
+	if rep.Composition != nil {
+		detailLinkCol = rep.Composition.DetailLink
+	}
+	s.resolveUUIDsInReport(r.Context(), rows, detailLinkCol)
 
 	if rep.Composition != nil {
 		ev := newInterpEvaluator(s.interp)
@@ -201,8 +205,10 @@ func (s *Server) runChartProc(ctx context.Context, rep *reportpkg.Report, rows [
 	return chart.ToEChartsOption()
 }
 
-// resolveUUIDsInReport replaces UUID-looking strings in report rows with entity display names.
-func (s *Server) resolveUUIDsInReport(ctx context.Context, rows []map[string]any) {
+// resolveUUIDsInReport replaces UUID-looking strings in report rows with entity
+// display names. skipCol (если непустой) исключается из подстановки — нужен для
+// колонки detail_link, где UUID должен остаться для ссылки на документ (issue #87).
+func (s *Server) resolveUUIDsInReport(ctx context.Context, rows []map[string]any, skipCol string) {
 	uuidToLabel := make(map[string]string)
 	for _, row := range rows {
 		for _, v := range row {
@@ -227,8 +233,21 @@ func (s *Server) resolveUUIDsInReport(ctx context.Context, rows []map[string]any
 			}
 		}
 	}
+	applyResolvedLabels(rows, uuidToLabel, skipCol)
+}
+
+// applyResolvedLabels подставляет наименования вместо UUID в строках отчёта,
+// пропуская колонку skipCol. Колонка detail_link хранит UUID регистратора для
+// ссылки на документ — его нельзя превращать в имя, иначе drill-down строит
+// /ui/.../<имя> вместо /<uuid> и ломается (issue #87). Имя колонки сравнивается
+// регистронезависимо: колонки запроса приходят в нижнем регистре, а detail_link
+// в composition — в исходном.
+func applyResolvedLabels(rows []map[string]any, uuidToLabel map[string]string, skipCol string) {
 	for _, row := range rows {
 		for col, v := range row {
+			if skipCol != "" && strings.EqualFold(col, skipCol) {
+				continue
+			}
 			if str, ok := v.(string); ok {
 				if label, found := uuidToLabel[str]; found && label != "" {
 					row[col] = label
@@ -364,7 +383,11 @@ func (s *Server) reportExcel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "query error: "+s.errText(r, err), 500)
 		return
 	}
-	s.resolveUUIDsInReport(r.Context(), rows)
+	detailLinkCol := ""
+	if rep.Composition != nil {
+		detailLinkCol = rep.Composition.DetailLink
+	}
+	s.resolveUUIDsInReport(r.Context(), rows, detailLinkCol)
 
 	// Если отчёт использует компоновщик — строим дерево групп/итогов для Excel.
 	if rep.Composition != nil {
