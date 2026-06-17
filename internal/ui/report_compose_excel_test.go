@@ -105,6 +105,70 @@ func TestComposedRows(t *testing.T) {
 	}
 }
 
+// TestComposedRowsDetail проверяет режим Detail=true: детальные строки идут сразу
+// после строки группы и до подытога. Структура:
+//
+//	одна группировка «М» с двумя строками деталей, Subtotals:true, Grand:false.
+//
+// Ожидаемый порядок (3 строки данных):
+//
+//	[0] группа Иванов
+//	[1] деталь 1 (первая ячейка = отступ-строка, показатель = float64)
+//	[2] деталь 2
+//	[3] подытог Иванов
+func TestComposedRowsDetail(t *testing.T) {
+	rows := []compose.Row{
+		{"М": "Иванов", "Сумма": "100"},
+		{"М": "Иванов", "Сумма": "50"},
+	}
+	spec := report.Composition{
+		Groupings: []string{"М"},
+		Measures:  []report.Measure{{Field: "Сумма", Agg: "sum", Title: "Сумма, ₽"}},
+		Totals:    report.Totals{Subtotals: true},
+		Detail:    true,
+	}
+	res, err := compose.Compose(rows, spec, nil)
+	if err != nil {
+		t.Fatalf("compose error: %v", err)
+	}
+
+	_, xlsRows := composedRows(res, &spec)
+
+	// Ожидаем 4 строки: группа + 2 детали + подытог (Grand=false → без ВСЕГО).
+	wantRows := 4
+	if len(xlsRows) != wantRows {
+		t.Fatalf("ожидали %d строк, получили %d: %v", wantRows, len(xlsRows), xlsRows)
+	}
+
+	// Строка 0: группа Иванов (уровень 0).
+	grpLabel, _ := xlsRows[0][0].(string)
+	if grpLabel != "Иванов" {
+		t.Errorf("строка 0 [0] = %q, ожидали %q", grpLabel, "Иванов")
+	}
+	if _, ok := xlsRows[0][1].(float64); !ok {
+		t.Errorf("строка 0 [1] должна быть float64, получили %T", xlsRows[0][1])
+	}
+
+	// Строки 1 и 2: детальные строки — первая ячейка только отступ, показатель float64.
+	const detailIndent = "  " // level+1=1 → 2 пробела
+	for i := 1; i <= 2; i++ {
+		firstCell, _ := xlsRows[i][0].(string)
+		if firstCell != detailIndent {
+			t.Errorf("строка %d [0] = %q, ожидали отступ %q", i, firstCell, detailIndent)
+		}
+		if _, ok := xlsRows[i][1].(float64); !ok {
+			t.Errorf("строка %d [1] должна быть float64, получили %T: %v", i, xlsRows[i][1], xlsRows[i][1])
+		}
+	}
+
+	// Строка 3: подытог Иванов.
+	subLabel, _ := xlsRows[3][0].(string)
+	const subWant = "  ··· Итого: Иванов ···" // level+1=1 → 2 пробела
+	if subLabel != subWant {
+		t.Errorf("строка 3 (подытог) [0] = %q, ожидали %q", subLabel, subWant)
+	}
+}
+
 // TestComposedRowsFlat проверяет однуровневую группировку без деталей.
 func TestComposedRowsFlat(t *testing.T) {
 	rows := []compose.Row{

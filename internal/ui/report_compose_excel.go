@@ -63,12 +63,17 @@ func appendGroup(rows [][]any, g *compose.Group, spec *report.Composition, level
 		rows = appendGroup(rows, ch, spec, level+1)
 	}
 
-	// Детальные строки (если Detail=true и нет дочерних групп).
+	// Детальные строки (если Detail=true). По дизайну compose, g.Details заполняется
+	// только у листовых групп (level == последний уровень группировки); у внутренних
+	// групп g.Details всегда пуст, поэтому явная проверка Children не нужна.
 	if spec.Detail {
 		childIndent := strings.Repeat("  ", level+1)
 		for _, d := range g.Details {
 			detRow := make([]any, colCount)
-			detRow[0] = childIndent // пустая первая ячейка с отступом — как в HTML
+			// Первая ячейка детали намеренно содержит только отступ — зеркалит
+			// HTML-рендер (writeDetail). Осмысленный идентификатор строки (ссылка на
+			// документ) появится в задаче B3 (detail_link).
+			detRow[0] = childIndent
 			for i, m := range spec.Measures {
 				detRow[i+1] = numFor(d.Values[m.Field])
 			}
