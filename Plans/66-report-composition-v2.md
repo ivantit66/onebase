@@ -86,6 +86,11 @@ type ChartSpec struct { Type, Category string; Series []string } // type: bar|li
 
 # Этап A — Quick wins (UX, низкая сложность)
 
+> ✅ **ВЫПОЛНЕНО** (ветка `feature/59-report-composition`): A1 `6a307d7` · A2 `129df74` ·
+> A3 `ccab25b` · A4 `ee1aac1` · A5 `8b6aeb0` · A6 (конфигуратор align+format) `3cfce01`.
+> Пример PuT обновлён на `format` вместо `ROUND` (`caccb69` в репозитории конфигурации).
+> Все тесты зелёные, `onebase.exe` пересобран, `check --project PuT` без ошибок.
+
 ## Task A1: Сворачиваемые блоки отчёта (параметры / график / данные)
 
 **Files:**
