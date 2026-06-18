@@ -5,6 +5,7 @@ package ui
 // лежит на диске или в БД (см. storage blob backend, режим ui.file_storage).
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -38,23 +39,28 @@ func (s *Server) imageUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, s.tr(lang, "Ошибка разбора формы")+": "+s.errText(r, err), 400)
 		return
 	}
-	file, header, err := r.FormFile("file")
+	file, _, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, s.tr(lang, "Нет файла в форме"), 400)
 		return
 	}
 	defer file.Close()
 
-	mimeType := header.Header.Get("Content-Type")
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
-	if !strings.HasPrefix(mimeType, "image/") {
+	// Тип определяем по СОДЕРЖИМОМУ файла, а не по Content-Type формы (он
+	// подделывается): читаем первые 512 байт для http.DetectContentType и
+	// «возвращаем» их в поток через MultiReader. Так image/svg+xml со скриптом и
+	// прочий не-растровый контент отсекаются ещё на загрузке.
+	head := make([]byte, 512)
+	n, _ := io.ReadFull(file, head)
+	head = head[:n]
+	mimeType, ok := allowedImageMime(head)
+	if !ok {
 		http.Error(w, s.tr(lang, "Можно загрузить только изображение"), 400)
 		return
 	}
+	body := io.MultiReader(bytes.NewReader(head), file)
 
-	b, err := s.store.PutBlob(r.Context(), mimeType, file, maxSize)
+	b, err := s.store.PutBlob(r.Context(), mimeType, body, maxSize)
 	if err != nil {
 		http.Error(w, s.errText(r, err), 500)
 		return
@@ -86,5 +92,22 @@ func (s *Server) imageServe(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.FormatInt(b.Size, 10))
 	}
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	// Бинарник отдаётся inline и в режиме sandbox: даже если в хранилище есть
+	// SVG со скриптом (загруженный до ужесточения проверки типа), при прямом
+	// открытии /image/{id} он будет инертен. На отрисовку через <img> не влияет.
+	w.Header().Set("Content-Disposition", "inline")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
 	io.Copy(w, rc)
+}
+
+// allowedImageMime определяет тип картинки по её первым байтам (server-side, без
+// доверия заголовку формы) и сообщает, разрешена ли она к загрузке. Только
+// настоящие растровые изображения: http.DetectContentType классифицирует SVG
+// как text/xml, поэтому image/svg+xml со скриптом сюда не проходит.
+func allowedImageMime(head []byte) (string, bool) {
+	mime := http.DetectContentType(head)
+	if i := strings.IndexByte(mime, ';'); i >= 0 {
+		mime = mime[:i]
+	}
+	return mime, strings.HasPrefix(mime, "image/")
 }
