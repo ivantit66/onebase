@@ -27,6 +27,25 @@ func runProc(t *testing.T, src string, obj *runtime.Object) error {
 	return interp.Run(prog.Procedures[0], obj)
 }
 
+func TestInterpreter_VarDeclCommaList(t *testing.T) {
+	// Несколько переменных в одном Перем через запятую должны объявляться все.
+	src := `Процедура Выполнить()
+  Перем а, б, в;
+  а = 10;
+  б = 20;
+  в = а + б;
+  this.Результат = в;
+КонецПроцедуры`
+
+	obj := runtime.NewObject("Test", metadata.KindDocument)
+	if err := runProc(t, src, obj); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !numEq(obj.Get("Результат"), 30) {
+		t.Fatalf("expected 30, got %v", obj.Get("Результат"))
+	}
+}
+
 func TestInterpreter_ErrorOnEmptyNumber(t *testing.T) {
 	src := `Procedure OnWrite()
   If this.Number = "" Then

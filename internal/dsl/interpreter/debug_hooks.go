@@ -40,7 +40,9 @@ func getLocation(stmt ast.Stmt) *sourceLocation {
 	case *ast.TryStmt:
 		file, line, col = s.Tok.File, s.Tok.Line, s.Tok.Col
 	case *ast.VarDecl:
-		file, line, col = s.Name.File, s.Name.Line, s.Name.Col
+		if len(s.Names) > 0 {
+			file, line, col = s.Names[0].File, s.Names[0].Line, s.Names[0].Col
+		}
 	case *ast.BreakStmt:
 		file, line, col = s.Tok.File, s.Tok.Line, s.Tok.Col
 	case *ast.ContinueStmt:

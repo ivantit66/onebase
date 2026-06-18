@@ -342,7 +342,9 @@ func (i *Interpreter) execStmt(s ast.Stmt, e *env) {
 	case *ast.ExprStmt:
 		i.evalExpr(v.X, e)
 	case *ast.VarDecl:
-		e.set(v.Name.Literal, nil)
+		for _, n := range v.Names {
+			e.set(n.Literal, nil)
+		}
 	case *ast.NumericForStmt:
 		start := toFloatOr0(i.evalExpr(v.Start, e))
 		end := toFloatOr0(i.evalExpr(v.End, e))

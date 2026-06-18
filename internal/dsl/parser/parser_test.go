@@ -38,6 +38,35 @@ func TestParser_BOMOnlyModule(t *testing.T) {
 	}
 }
 
+func TestParser_VarDeclCommaList(t *testing.T) {
+	// Перем а, б, в; — объявление нескольких переменных через запятую (как в 1С).
+	src := `Процедура Тест()
+  Перем а, б, в;
+КонецПроцедуры`
+
+	prog := parse(t, src)
+	if len(prog.Procedures) != 1 {
+		t.Fatalf("want 1 procedure, got %d", len(prog.Procedures))
+	}
+	body := prog.Procedures[0].Body
+	if len(body) != 1 {
+		t.Fatalf("want 1 stmt in body, got %d", len(body))
+	}
+	vd, ok := body[0].(*ast.VarDecl)
+	if !ok {
+		t.Fatalf("want *ast.VarDecl, got %T", body[0])
+	}
+	want := []string{"а", "б", "в"}
+	if len(vd.Names) != len(want) {
+		t.Fatalf("want %d names, got %d", len(want), len(vd.Names))
+	}
+	for i, n := range want {
+		if vd.Names[i].Literal != n {
+			t.Fatalf("name[%d]: want %q, got %q", i, n, vd.Names[i].Literal)
+		}
+	}
+}
+
 func TestParser_OnWriteProcedure(t *testing.T) {
 	src := `Procedure OnWrite()
   If this.Number = "" Then

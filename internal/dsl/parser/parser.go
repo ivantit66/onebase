@@ -331,8 +331,18 @@ func (p *Parser) parseVarDecl() (*ast.VarDecl, error) {
 	if err != nil {
 		return nil, err
 	}
+	names := []token.Token{nameTok}
+	// Несколько переменных в одном объявлении через запятую: Перем а, б, в; (как в 1С).
+	for p.cur.Type == token.COMMA {
+		p.advance() // consume ,
+		nameTok, err := p.expect(token.IDENT)
+		if err != nil {
+			return nil, err
+		}
+		names = append(names, nameTok)
+	}
 	p.consumeSemi()
-	return &ast.VarDecl{Name: nameTok}, nil
+	return &ast.VarDecl{Names: names}, nil
 }
 
 func isCompoundAssign(t token.Type) bool {

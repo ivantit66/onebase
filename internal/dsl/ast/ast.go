@@ -46,7 +46,7 @@ type AssignStmt struct {
 	Value  Expr
 }
 
-type VarDecl struct{ Name token.Token }
+type VarDecl struct{ Names []token.Token }
 
 type ForEachStmt struct {
 	Var        token.Token
