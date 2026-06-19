@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"text/template"
 
@@ -27,8 +28,9 @@ var cfgTmpl = template.Must(template.New("cfg").Funcs(template.FuncMap{
 		}
 		return m
 	},
-	"lower": strings.ToLower,
-	"join":  strings.Join,
+	"lower":  strings.ToLower,
+	"join":   strings.Join,
+	"printf": fmt.Sprintf,
 	"js": func(v any) string {
 		// json.Marshal по умолчанию экранирует <, >, & в \uXXXX — безопасно
 		// для вставки в <script> (text/template не экранирует сам).
@@ -5064,7 +5066,7 @@ const cfgTabTree = `{{define "tab-tree"}}
   <div class="cfg-panel" id="e-{{.Name}}">
     <div class="panel-title">📄 {{.Name}}</div>
     <div class="panel-kind">{{t $.Lang "Справочник"}}</div>
-    {{template "entity-detail" (dict "Entity" . "BaseID" $.Base.ID "ConfigSource" $.Base.ConfigSource "ModuleSaved" $.ModuleSaved "ModuleSavedEntity" $.ModuleSavedEntity "AllEntityNames" $.AllEntityNames "AllEnumNames" $.AllEnumNames "FieldsSaved" $.FieldsSaved "FieldsSavedEntity" $.FieldsSavedEntity "ManagedForms" $.ManagedForms "Lang" $.Lang)}}
+    {{template "entity-detail" (dict "Entity" . "BaseID" $.Base.ID "ConfigSource" $.Base.ConfigSource "ModuleSaved" $.ModuleSaved "ModuleSavedEntity" $.ModuleSavedEntity "AllEntityNames" $.AllEntityNames "AllEnumNames" $.AllEnumNames "FieldsSaved" $.FieldsSaved "FieldsSavedEntity" $.FieldsSavedEntity "ManagedForms" $.ManagedForms "Lang" $.Lang "AvailableLangs" $.AvailableLangs)}}
   </div>
   {{end}}
 
@@ -5076,7 +5078,7 @@ const cfgTabTree = `{{define "tab-tree"}}
       {{if .Posting}}<span style="background:#dbeafe;color:#1d4ed8;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px">{{t $.Lang "проводится"}}</span>{{end}}
     </div>
     <div class="panel-kind">{{t $.Lang "Документ"}}</div>
-    {{template "entity-detail" (dict "Entity" . "BaseID" $.Base.ID "ConfigSource" $.Base.ConfigSource "ModuleSaved" $.ModuleSaved "ModuleSavedEntity" $.ModuleSavedEntity "AllEntityNames" $.AllEntityNames "AllEnumNames" $.AllEnumNames "FieldsSaved" $.FieldsSaved "FieldsSavedEntity" $.FieldsSavedEntity "ManagedForms" $.ManagedForms "Lang" $.Lang)}}
+    {{template "entity-detail" (dict "Entity" . "BaseID" $.Base.ID "ConfigSource" $.Base.ConfigSource "ModuleSaved" $.ModuleSaved "ModuleSavedEntity" $.ModuleSavedEntity "AllEntityNames" $.AllEntityNames "AllEnumNames" $.AllEnumNames "FieldsSaved" $.FieldsSaved "FieldsSavedEntity" $.FieldsSavedEntity "ManagedForms" $.ManagedForms "Lang" $.Lang "AvailableLangs" $.AvailableLangs)}}
   </div>
   {{end}}
 
@@ -6095,6 +6097,8 @@ const cfgTabTree = `{{define "tab-tree"}}
 {{$allEnums := .AllEnumNames}}
 {{$fSaved := .FieldsSaved}}
 {{$fSavedEnt := .FieldsSavedEntity}}
+{{$lang := .Lang}}
+{{$availLangs := .AvailableLangs}}
 
 <div class="obj-editor">
   <div class="obj-tabs">
@@ -6110,6 +6114,7 @@ const cfgTabTree = `{{define "tab-tree"}}
 <input type="hidden" name="entity" value="{{$e.Name}}">
 <input type="hidden" name="entity_kind" value="{{$e.Kind}}">
 {{range $e.TableParts}}<input type="hidden" name="tp_names" value="{{.Name}}">{{end}}
+{{template "titles-block" (dict "Lang" $lang "Langs" $availLangs "Prefix" "titles" "Values" $e.Titles)}}
 
 {{if eq $e.Kind "Документ"}}
 <div class="section-hd">{{t $.Lang "Свойства"}}</div>
@@ -6199,6 +6204,7 @@ const cfgTabTree = `{{define "tab-tree"}}
     {{end}}
   </td>
 </tr>
+{{if $availLangs}}<tr><td colspan="4" style="padding:0 0 4px">{{template "titles-block" (dict "Lang" $lang "Langs" $availLangs "Prefix" (printf "field.%d.titles" $i) "Values" $f.Titles)}}</td></tr>{{end}}
 {{end}}
 </table>
 <button type="button" onclick="cfgAddField('ft-{{$e.Name}}','new_field','{{$e.Name}}')" style="font-size:11px;color:#1a4a80;background:none;border:1px dashed #c0c8d8;padding:2px 8px;border-radius:3px;cursor:pointer;margin:4px 0">+ {{t $.Lang "Добавить поле"}}</button>

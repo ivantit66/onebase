@@ -160,11 +160,12 @@ type cfgField struct {
 	Type              string
 	RefEntity         string
 	EnumName          string
-	Length            int // разрядность number(L,P): всего знаков (Длина)
-	Scale             int // знаков после запятой (Точность)
+	Length            int               // разрядность number(L,P): всего знаков (Длина)
+	Scale             int               // знаков после запятой (Точность)
 	FormListHidden    bool
 	FormItemHidden    bool
-	AllowInlineCreate *bool // nil = дефолт контекста (true в шапке, false в ТЧ)
+	AllowInlineCreate *bool             // nil = дефолт контекста (true в шапке, false в ТЧ)
+	Titles            map[string]string // переводы синонима поля
 }
 
 // InlineAllowChecked — состояние чекбокса «Кнопка + в picker'е» с учётом
@@ -199,18 +200,19 @@ type cfgTablePart struct {
 
 type cfgEntity struct {
 	Name             string
-	Kind             string // "Справочник" / "Документ"
+	Kind             string            // "Справочник" / "Документ"
 	Posting          bool
 	Hierarchical     bool
-	BasedOn          []string // источники для ввода на основании (Plan 38)
-	Receivers        []string // обратный список: куда вводится на основании текущего объекта
+	BasedOn          []string          // источники для ввода на основании (Plan 38)
+	Receivers        []string          // обратный список: куда вводится на основании текущего объекта
 	Fields           []cfgField
 	TableParts       []cfgTablePart
-	Source           string // raw .os content (object module)
-	PostingSource    string // raw .posting.os content (ОбработкаПроведения)
-	ManagerSource    string // raw .manager.os content (модуль менеджера)
+	Source           string            // raw .os content (object module)
+	PostingSource    string            // raw .posting.os content (ОбработкаПроведения)
+	ManagerSource    string            // raw .manager.os content (модуль менеджера)
 	LinkedPrintForms []cfgPrintForm
 	Predefined       []cfgPredefined
+	Titles           map[string]string // переводы синонима объекта
 }
 
 type cfgRegister struct {
@@ -637,6 +639,7 @@ func (h *handler) loadCfgData(ctx context.Context, b *Base, tab string, lang ...
 			Source:        sources[strings.ToLower(e.Name)],
 			PostingSource: postingSources[strings.ToLower(e.Name)],
 			ManagerSource: managerSources[strings.ToLower(e.Name)],
+			Titles:        e.Titles,
 		}
 		if e.Kind == metadata.KindCatalog {
 			ev.Kind = "Справочник"
@@ -1185,7 +1188,7 @@ func toCfgField(f metadata.Field) cfgField {
 	} else if f.EnumName != "" {
 		typ = "enum"
 	}
-	return cfgField{Name: f.Name, Type: typ, RefEntity: f.RefEntity, EnumName: f.EnumName, Length: f.Length, Scale: f.Scale, AllowInlineCreate: f.AllowInlineCreate}
+	return cfgField{Name: f.Name, Type: typ, RefEntity: f.RefEntity, EnumName: f.EnumName, Length: f.Length, Scale: f.Scale, AllowInlineCreate: f.AllowInlineCreate, Titles: f.Titles}
 }
 
 func readOSSources(dir string) (sources, postingSources, managerSources map[string]string) {
@@ -1558,7 +1561,7 @@ func applyFieldEdits(ent *saveEntity, fields []saveField, tpFields map[string][]
 	}
 }
 
-func saveEntityFieldsToFile(dir, entityName string, fields []saveField, tpFields map[string][]saveField, posting *bool, hierarchical *bool, basedOn *[]string) error {
+func saveEntityFieldsToFile(dir, entityName string, fields []saveField, tpFields map[string][]saveField, posting *bool, hierarchical *bool, basedOn *[]string, objTitles map[string]string) error {
 	filePath, err := findEntityFilePath(dir, entityName)
 	if err != nil {
 		return err
@@ -1572,6 +1575,9 @@ func saveEntityFieldsToFile(dir, entityName string, fields []saveField, tpFields
 		return err
 	}
 	applyFieldEdits(&ent, fields, tpFields, posting, hierarchical, basedOn)
+	if objTitles != nil {
+		ent.Titles = objTitles
+	}
 	out, err := yaml.Marshal(&ent)
 	if err != nil {
 		return err
@@ -1579,7 +1585,7 @@ func saveEntityFieldsToFile(dir, entityName string, fields []saveField, tpFields
 	return os.WriteFile(filePath, out, 0o644)
 }
 
-func (h *handler) saveEntityFieldsToDB(ctx context.Context, b *Base, entityName string, fields []saveField, tpFields map[string][]saveField, posting *bool, hierarchical *bool, basedOn *[]string) error {
+func (h *handler) saveEntityFieldsToDB(ctx context.Context, b *Base, entityName string, fields []saveField, tpFields map[string][]saveField, posting *bool, hierarchical *bool, basedOn *[]string, objTitles map[string]string) error {
 	db, err := OpenDB(ctx, b)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -1617,6 +1623,9 @@ func (h *handler) saveEntityFieldsToDB(ctx context.Context, b *Base, entityName 
 	}
 
 	applyFieldEdits(&ent, fields, tpFields, posting, hierarchical, basedOn)
+	if objTitles != nil {
+		ent.Titles = objTitles
+	}
 	out, err := yaml.Marshal(&ent)
 	if err != nil {
 		return err
@@ -1957,6 +1966,7 @@ func (h *handler) configuratorSaveFields(w http.ResponseWriter, r *http.Request)
 		}
 		typ = numberTypeWithSpec(typ, r.FormValue(fmt.Sprintf("field.%d.length", i)), r.FormValue(fmt.Sprintf("field.%d.scale", i)))
 		sf := saveField{Name: name, Type: typ}
+		sf.Titles = parseMapForm(r, fmt.Sprintf("field.%d.titles", i))
 		// allow_inline_create — пишем только если значение отличается от дефолта
 		// контекста (true в шапке). Шаблон отрисовывает hidden inline_present=1
 		// только для ссылочных полей, поэтому маркер косвенно фильтрует тип.
@@ -1991,7 +2001,7 @@ func (h *handler) configuratorSaveFields(w http.ResponseWriter, r *http.Request)
 			typ = typ + ":" + ref
 		}
 		typ = numberTypeWithSpec(typ, r.FormValue(fmt.Sprintf("new_field.%d.length", i)), r.FormValue(fmt.Sprintf("new_field.%d.scale", i)))
-		fields = append(fields, saveField{Name: name, Type: typ})
+		fields = append(fields, saveField{Name: name, Type: typ, Titles: parseMapForm(r, fmt.Sprintf("new_field.%d.titles", i))})
 	}
 
 	tpFields := make(map[string][]saveField)
@@ -2075,11 +2085,13 @@ func (h *handler) configuratorSaveFields(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	objTitles := parseMapForm(r, "titles")
+
 	var saveErr error
 	if b.ConfigSource == "database" {
-		saveErr = h.saveEntityFieldsToDB(r.Context(), b, entityName, fields, tpFields, posting, hierarchical, basedOn)
+		saveErr = h.saveEntityFieldsToDB(r.Context(), b, entityName, fields, tpFields, posting, hierarchical, basedOn, objTitles)
 	} else {
-		saveErr = saveEntityFieldsToFile(b.Path, entityName, fields, tpFields, posting, hierarchical, basedOn)
+		saveErr = saveEntityFieldsToFile(b.Path, entityName, fields, tpFields, posting, hierarchical, basedOn, objTitles)
 	}
 
 	data := h.loadCfgData(r.Context(), b, "tree")
