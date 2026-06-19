@@ -334,6 +334,20 @@ var tmpl = template.Must(template.New("root").Funcs(template.FuncMap{
 		}
 		return "?" + strings.Join(parts, "&")
 	},
+	// variantQuery дописывает выбранный вариант компоновки (__variant) к уже
+	// собранной query-строке параметров отчёта — чтобы выгрузка в Excel
+	// соответствовала выбранному на форме варианту.
+	"variantQuery": func(existing string, variant any) string {
+		vs, _ := variant.(string)
+		if vs == "" {
+			return existing
+		}
+		sep := "?"
+		if existing != "" {
+			sep = "&"
+		}
+		return existing + sep + "__variant=" + url.QueryEscape(vs)
+	},
 	"mul": func(a, b int) int { return a * b },
 	"int": func(v any) int {
 		switch t := v.(type) {
@@ -1152,15 +1166,15 @@ const tplList = `
 {{/* Лента: догрузка по скроллу. Без JS «Показать ещё» = переход на след. страницу. */}}
 {{if .HasNext}}
 <div id="feed-more" data-next="{{.NextPage}}" data-pages="{{.TotalPages}}" data-container="{{if .TilesView}}.tile-grid{{else}}#list-body{{end}}" data-item="{{if .TilesView}}.tile-card{{else}}tr{{end}}" style="margin-top:14px;text-align:center">
-  <a class="btn btn-secondary btn-sm" href="?page={{.NextPage}}&lm=feed{{if .TilesView}}&view=tiles{{end}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "Показать ещё"}}</a>
+  <a class="btn btn-secondary btn-sm" href="?page={{.NextPage}}&lm=feed{{if .ParentStr}}&parent={{.ParentStr}}{{end}}{{if .TilesView}}&view=tiles{{end}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "Показать ещё"}}</a>
 </div>
 {{end}}
 {{if gt .Total 0}}<div style="color:#94a3b8;font-size:12px;margin-top:8px;text-align:center">{{t $.Lang "Загружено:"}} <span id="feed-loaded">{{len .Rows}}</span> {{t $.Lang "из"}} {{.Total}}</div>{{end}}
 {{else if gt .TotalPages 1}}
 <div style="display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap">
-  {{if .HasPrev}}<a class="btn btn-secondary btn-sm" href="?page={{.PrevPage}}{{if .TilesView}}&view=tiles{{end}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "← Назад"}}</a>{{end}}
+  {{if .HasPrev}}<a class="btn btn-secondary btn-sm" href="?page={{.PrevPage}}{{if .ParentStr}}&parent={{.ParentStr}}{{end}}{{if .TilesView}}&view=tiles{{end}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "← Назад"}}</a>{{end}}
   <span style="color:#64748b;font-size:13px">{{t $.Lang "Стр."}} {{.Page}} {{t $.Lang "из"}} {{.TotalPages}} ({{.Total}} {{t $.Lang "записей"}})</span>
-  {{if .HasNext}}<a class="btn btn-secondary btn-sm" href="?page={{.NextPage}}{{if .TilesView}}&view=tiles{{end}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "Вперёд →"}}</a>{{end}}
+  {{if .HasNext}}<a class="btn btn-secondary btn-sm" href="?page={{.NextPage}}{{if .ParentStr}}&parent={{.ParentStr}}{{end}}{{if .TilesView}}&view=tiles{{end}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "Вперёд →"}}</a>{{end}}
 </div>
 {{else if gt .Total 0}}
 <div style="color:#94a3b8;font-size:12px;margin-top:8px">{{t $.Lang "Всего:"}} {{.Total}}</div>
@@ -2248,10 +2262,20 @@ const tplReport = `
 {{template "head" .}}{{template "nav" .}}
 <main>
 <h2>{{.Report.DisplayName $.Lang}}</h2>
-{{if .ReportParams}}
+{{if or .ReportParams .Report.Variants}}
 <details class="card report-block" data-block="params" open style="margin-bottom:16px">
 <summary>{{t $.Lang "Параметры"}}</summary>
 <form method="POST">
+  {{if .Report.Variants}}
+  <div class="form-group" style="margin-bottom:16px;max-width:320px">
+    <label>{{t $.Lang "Вариант"}}</label>
+    <select name="__variant" onchange="this.form.submit()">
+      <option value="" {{if not $.ActiveVariant}}selected{{end}}>{{t $.Lang "Основной"}}</option>
+      {{range .Report.Variants}}<option value="{{.Name}}" {{if eq .Name $.ActiveVariant}}selected{{end}}>{{.Name}}</option>{{end}}
+    </select>
+  </div>
+  {{end}}
+  {{if .ReportParams}}
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:16px">
   {{range .ReportParams}}{{$p := .}}{{$pname := .Name}}{{$pval := str (index $.ParamValues .Name)}}
     {{if $p.IsBool}}
@@ -2290,8 +2314,110 @@ const tplReport = `
     {{end}}
   {{end}}
   </div>
+  {{end}}
   <button class="btn btn-primary" type="submit">{{t $.Lang "Сформировать"}}</button>
 </form>
+</details>
+{{end}}
+{{if .ReportCols}}
+<details class="card report-block" data-block="settings" style="margin-bottom:16px">
+<summary>{{t $.Lang "Настройка отчёта"}}{{if .UserSettings}} <span style="background:#fef3c7;color:#92400e;border-radius:6px;padding:1px 8px;font-size:12px;font-weight:600">{{t $.Lang "изменено"}}</span>{{end}}</summary>
+<form method="POST" onsubmit="rsCollect()">
+  {{range .ReportParams}}<input type="hidden" name="{{.Name}}" value="{{str (index $.ParamValues .Name)}}">{{end}}
+  <input type="hidden" name="__variant" value="{{.ActiveVariant}}">
+  <input type="hidden" name="__settings" id="rs-json"{{if .UserSettings}} value="{{.UserSettings.JSON}}"{{end}}>
+  <table style="width:auto;margin-bottom:12px">
+    <thead><tr>
+      <th style="text-align:left">{{t $.Lang "Поле"}}</th>
+      <th style="padding:0 10px">{{t $.Lang "Группировка"}}</th>
+      <th style="padding:0 10px">{{t $.Lang "Показатель"}}</th>
+    </tr></thead>
+    <tbody>
+    {{range .ReportCols}}<tr>
+      <td>{{.}}</td>
+      <td style="text-align:center"><input type="checkbox" class="rs-group" value="{{.}}"></td>
+      <td style="text-align:center"><input type="checkbox" class="rs-measure" value="{{.}}"></td>
+    </tr>{{end}}
+    </tbody>
+  </table>
+  <div class="rs-filters" style="margin:12px 0">
+    <div style="font-weight:600;margin-bottom:6px">{{t $.Lang "Отбор"}}</div>
+    <div id="rs-filter-rows">
+      {{if .UserSettings}}{{range .UserSettings.Filters}}{{$f := .}}
+      <div class="rs-filter-row" style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+        <select class="rs-f-field">{{range $.ReportCols}}<option value="{{.}}" {{if eq . $f.Field}}selected{{end}}>{{.}}</option>{{end}}</select>
+        <select class="rs-f-op">
+          <option value="eq" {{if eq $f.Op "eq"}}selected{{end}}>=</option>
+          <option value="ne" {{if eq $f.Op "ne"}}selected{{end}}>≠</option>
+          <option value="gt" {{if eq $f.Op "gt"}}selected{{end}}>&gt;</option>
+          <option value="ge" {{if eq $f.Op "ge"}}selected{{end}}>≥</option>
+          <option value="lt" {{if eq $f.Op "lt"}}selected{{end}}>&lt;</option>
+          <option value="le" {{if eq $f.Op "le"}}selected{{end}}>≤</option>
+          <option value="contains" {{if eq $f.Op "contains"}}selected{{end}}>{{t $.Lang "содержит"}}</option>
+        </select>
+        <input class="rs-f-value" type="text" value="{{$f.Value}}">
+        <button type="button" class="btn btn-sm" onclick="this.parentNode.remove()">×</button>
+      </div>
+      {{end}}{{end}}
+    </div>
+    <button type="button" class="btn btn-sm" onclick="rsAddFilter()">+ {{t $.Lang "Отбор"}}</button>
+  </div>
+  <template id="rs-filter-tpl">
+    <div class="rs-filter-row" style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+      <select class="rs-f-field">{{range .ReportCols}}<option value="{{.}}">{{.}}</option>{{end}}</select>
+      <select class="rs-f-op">
+        <option value="eq">=</option>
+        <option value="ne">≠</option>
+        <option value="gt">&gt;</option>
+        <option value="ge">≥</option>
+        <option value="lt">&lt;</option>
+        <option value="le">≤</option>
+        <option value="contains">{{t $.Lang "содержит"}}</option>
+      </select>
+      <input class="rs-f-value" type="text" value="">
+      <button type="button" class="btn btn-sm" onclick="this.parentNode.remove()">×</button>
+    </div>
+  </template>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <button class="btn btn-primary" type="submit">{{t $.Lang "Применить"}}</button>
+    <button class="btn" type="submit" formaction="/ui/report/{{lower .Report.Name}}/settings/save">{{t $.Lang "Сохранить"}}</button>
+    <button class="btn" type="submit" formaction="/ui/report/{{lower .Report.Name}}/settings/reset"{{if not .UserSettings}} disabled{{end}}>{{t $.Lang "Стандартные настройки"}}</button>
+  </div>
+</form>
+<script>
+(function(){
+  var hidden=document.getElementById('rs-json');
+  function preset(){
+    if(!hidden||!hidden.value) return;
+    try{
+      var s=JSON.parse(hidden.value);
+      var comp=(s&&s.composition)||{};
+      var groups=comp.Groupings||comp.groupings||[];
+      var meas=comp.Measures||comp.measures||[];
+      var mf=meas.map(function(m){return m.Field||m.field;});
+      document.querySelectorAll('.rs-group').forEach(function(el){ if(groups.indexOf(el.value)>=0) el.checked=true; });
+      document.querySelectorAll('.rs-measure').forEach(function(el){ if(mf.indexOf(el.value)>=0) el.checked=true; });
+    }catch(e){}
+  }
+  window.rsCollect=function(){
+    var groupings=[];document.querySelectorAll('.rs-group:checked').forEach(function(c){groupings.push(c.value);});
+    var measures=[];document.querySelectorAll('.rs-measure:checked').forEach(function(c){measures.push({Field:c.value,Agg:"sum"});});
+    var filters=[];document.querySelectorAll('.rs-filter-row').forEach(function(row){
+      var f=row.querySelector('.rs-f-field'),op=row.querySelector('.rs-f-op'),v=row.querySelector('.rs-f-value');
+      if(f&&op&&f.value){ filters.push({field:f.value,op:op.value,value:v?v.value:""}); }
+    });
+    var variantEl=document.querySelector('input[name="__variant"]');
+    var s={variant:variantEl?variantEl.value:"",composition:{Groupings:groupings,Measures:measures},filters:filters};
+    if(hidden)hidden.value=JSON.stringify(s);
+  };
+  window.rsAddFilter=function(){
+    var tpl=document.getElementById('rs-filter-tpl');
+    if(!tpl||!tpl.content) return;
+    document.getElementById('rs-filter-rows').appendChild(tpl.content.cloneNode(true));
+  };
+  preset();
+})();
+</script>
 </details>
 {{end}}
 {{if .QueryError}}<div class="error">{{t $.Lang "Ошибка запроса:"}} {{.QueryError}}</div>{{end}}
@@ -2312,8 +2438,9 @@ const tplReport = `
 {{end}}
 {{if .ComposedHTML}}
 {{if .Capped}}<div class="card" style="background:#fffbeb;border-color:#fde68a;margin-bottom:8px;padding:8px 12px">{{t $.Lang "Показаны первые строки — данных больше потолка."}}</div>{{end}}
+{{if .ComposeWarnings}}<div class="card" style="background:#fef2f2;border-color:#fecaca;margin-bottom:8px;padding:8px 12px"><strong>{{t $.Lang "Предупреждения компоновки:"}}</strong><ul style="margin:4px 0 0;padding-left:20px">{{range .ComposeWarnings}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
 <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-  <a class="btn btn-sm" href="/ui/report/{{lower .Report.Name}}/excel{{reportParamQuery .Report.Params .ParamValues}}" style="background:#16a34a;color:#fff" title="{{t $.Lang "Скачать Excel"}}">{{t $.Lang "Excel ↓"}}</a>
+  <a class="btn btn-sm" href="/ui/report/{{lower .Report.Name}}/excel{{variantQuery (reportParamQuery .Report.Params .ParamValues) .ActiveVariant}}" style="background:#16a34a;color:#fff" title="{{t $.Lang "Скачать Excel"}}">{{t $.Lang "Excel ↓"}}</a>
 </div>
 <details class="card report-block" data-block="data" open>
 <summary>{{t $.Lang "Данные"}}</summary>
@@ -2377,7 +2504,7 @@ const tplReport = `
 {{end}}
 {{if .Cols}}
 <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-  <a class="btn btn-sm" href="/ui/report/{{lower .Report.Name}}/excel{{reportParamQuery .Report.Params .ParamValues}}" style="background:#16a34a;color:#fff" title="{{t $.Lang "Скачать Excel"}}">{{t $.Lang "Excel ↓"}}</a>
+  <a class="btn btn-sm" href="/ui/report/{{lower .Report.Name}}/excel{{variantQuery (reportParamQuery .Report.Params .ParamValues) .ActiveVariant}}" style="background:#16a34a;color:#fff" title="{{t $.Lang "Скачать Excel"}}">{{t $.Lang "Excel ↓"}}</a>
 </div>
 <div class="card">
 {{if .Rows}}

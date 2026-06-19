@@ -159,3 +159,56 @@ func (db *DB) SaveAIDailyTokenCap(ctx context.Context, cap int) error {
 	}
 	return nil
 }
+
+// Режимы доступа ИИ-ассистента к данным (ключ _settings ai.data_scope, план 54).
+const (
+	aiDataScopeKey = "ai.data_scope"
+	// AIDataScopeAdminOnly — инструменты данных только админам (дефолт).
+	AIDataScopeAdminOnly = "admin_only"
+	// AIDataScopeRBAC — инструменты доступны пользователям с флагом AIDataAccess,
+	// но источники запроса фильтруются по правам чтения (s.can).
+	AIDataScopeRBAC = "rbac"
+	// AIDataScopeAll — доступ ко всем данным без объектной проверки прав.
+	AIDataScopeAll = "all"
+)
+
+// GetAIDataScope читает режим доступа ИИ к данным; по умолчанию admin_only.
+func (db *DB) GetAIDataScope(ctx context.Context) string {
+	d := db.dialect
+	var v string
+	err := db.QueryRow(ctx,
+		`SELECT value FROM _settings WHERE key = `+d.Placeholder(1), aiDataScopeKey).Scan(&v)
+	if err != nil {
+		return AIDataScopeAdminOnly
+	}
+	switch strings.TrimSpace(v) {
+	case AIDataScopeRBAC:
+		return AIDataScopeRBAC
+	case AIDataScopeAll:
+		return AIDataScopeAll
+	default:
+		return AIDataScopeAdminOnly
+	}
+}
+
+// SaveAIDataScope сохраняет режим доступа ИИ к данным (admin_only|rbac|all).
+func (db *DB) SaveAIDataScope(ctx context.Context, scope string) error {
+	if err := db.EnsureSettingsSchema(ctx); err != nil {
+		return err
+	}
+	switch scope {
+	case AIDataScopeRBAC, AIDataScopeAll:
+		// ok
+	default:
+		scope = AIDataScopeAdminOnly
+	}
+	d := db.dialect
+	q := fmt.Sprintf(
+		`INSERT INTO _settings (key, value) VALUES (%s, %s)
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		d.Placeholder(1), d.Placeholder(2))
+	if _, err := db.Exec(ctx, q, aiDataScopeKey, scope); err != nil {
+		return fmt.Errorf("settings: save %s: %w", aiDataScopeKey, err)
+	}
+	return nil
+}

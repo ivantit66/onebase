@@ -41,6 +41,12 @@ func (h *handler) configuratorSavePage(w http.ResponseWriter, r *http.Request) {
 		renderCfg(w, r, data)
 		return
 	}
+	if !validObjectName(name) {
+		data := h.loadCfgData(r.Context(), b, "tree")
+		data.Error = tr(lang, "Недопустимое имя страницы")
+		renderCfg(w, r, data)
+		return
+	}
 
 	pg := &page.Page{
 		Name:   name,
@@ -68,10 +74,13 @@ func (h *handler) configuratorSavePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	saveErr := saveConfigFile(r, h, b, pageYAMLRelPath(name), yamlBody)
-	if saveErr == nil {
-		saveErr = saveConfigFile(r, h, b, pageSrcRelPath(name), []byte(r.FormValue("source")))
-	}
+	// Атомарно: исходник ПЕРВЫМ, метаданные ПОСЛЕДНИМИ — чтобы hot-reload,
+	// сработавший по записи pages/<имя>.yaml, уже видел готовый src/<имя>.page.os
+	// (а не страницу с новыми метаданными и старым/отсутствующим обработчиком).
+	saveErr := saveConfigFiles(r, h, b, []configFileEntry{
+		{relPath: pageSrcRelPath(name), content: []byte(r.FormValue("source"))},
+		{relPath: pageYAMLRelPath(name), content: yamlBody},
+	})
 
 	data := h.loadCfgData(r.Context(), b, "tree")
 	if saveErr != nil {
@@ -102,11 +111,19 @@ func (h *handler) configuratorDeletePage(w http.ResponseWriter, r *http.Request)
 		renderCfg(w, r, data)
 		return
 	}
-
-	delErr := deleteConfigFile(r, h, b, pageYAMLRelPath(name))
-	if delErr == nil {
-		delErr = deleteConfigFile(r, h, b, pageSrcRelPath(name))
+	if !validObjectName(name) {
+		data := h.loadCfgData(r.Context(), b, "tree")
+		data.Error = tr(lang, "Недопустимое имя страницы")
+		renderCfg(w, r, data)
+		return
 	}
+
+	// Метаданные ПЕРВЫМИ — чтобы reload, сработавший по удалению pages/<имя>.yaml,
+	// перестал видеть страницу до исчезновения её обработчика (а не наоборот).
+	delErr := deleteConfigFiles(r, h, b, []string{
+		pageYAMLRelPath(name),
+		pageSrcRelPath(name),
+	})
 
 	data := h.loadCfgData(r.Context(), b, "tree")
 	if delErr != nil {
@@ -119,6 +136,26 @@ func (h *handler) configuratorDeletePage(w http.ResponseWriter, r *http.Request)
 // Регистр имени сохраняется намеренно (см. комментарий к файлу).
 func pageYAMLRelPath(name string) string { return "pages/" + name + ".yaml" }
 func pageSrcRelPath(name string) string  { return "src/" + name + ".page.os" }
+
+// validObjectName проверяет, что имя объекта пригодно для построения пути файла
+// без обхода каталога. Запрещает разделители путей, "..", NUL и управляющие
+// символы. Имена объектов конфигурации — идентификаторы (буквы/цифры/_),
+// поэтому проверка не сужает легальные имена, но закрывает path traversal в
+// обработчиках, строящих путь как «<подкаталог>/<имя>.<ext>».
+func validObjectName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
+		return false
+	}
+	for _, c := range name {
+		if c < 0x20 || c == 0x7f {
+			return false
+		}
+	}
+	return true
+}
 
 // splitConfigList разбирает список значений из текстового поля редактора:
 // разделители — запятая, точка с запятой или перевод строки; пустые элементы

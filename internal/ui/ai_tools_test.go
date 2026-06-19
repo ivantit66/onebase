@@ -168,8 +168,10 @@ func TestAISchemaText_TablePartsAndPosting(t *testing.T) {
 }
 
 // TestAITools_FlaggedUserGetsTools проверяет, что не-администратор с флагом
-// AIDataAccess получает инструменты ИИ-чата. Прогоняет весь путь флага: схема
-// (ALTER) → Update (сохранение) → GetByID (чтение) → ContextWithUser (гейт).
+// AIDataAccess получает инструменты ИИ-чата в режиме rbac. Прогоняет весь путь
+// флага: схема (ALTER) → Update (сохранение) → GetByID (чтение) →
+// ContextWithUser (гейт). В дефолтном admin_only флаг не действует — см.
+// TestAITools_FlaggedUser_DefaultScope_NoTools.
 func TestAITools_FlaggedUserGetsTools(t *testing.T) {
 	ctx := context.Background()
 
@@ -201,6 +203,10 @@ func TestAITools_FlaggedUserGetsTools(t *testing.T) {
 
 	s, _ := newSubmitTestServer(t, nil)
 	s.authRepo = repo
+	// Режим rbac: флаг AIDataAccess действует (с фильтрацией источников по правам).
+	if err := s.store.SaveAIDataScope(ctx, storage.AIDataScopeRBAC); err != nil {
+		t.Fatal(err)
+	}
 
 	// Запрос несёт пользователя с флагом → aiDataAllowed==true.
 	r := httptest.NewRequest(http.MethodPost, "/ui/ai/chat", nil)

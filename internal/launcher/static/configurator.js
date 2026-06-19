@@ -284,18 +284,19 @@ function cfgAddTP(btn, entityName) {
   if (!tpName) return;
   var wrapper = document.createElement('details');
   wrapper.open = true;
-  var prefix = 'new_tp.'+_cfgNewTpIdx;
   var tblId = 'ft-'+entityName+'-ntp'+_cfgNewTpIdx;
+  // Поля новой ТЧ шлём под ИМЕННЫМ префиксом new_tp.<Имя>.field — тем же, что и
+  // «+ Добавить поле» у существующих ТЧ, чтобы их читал единый серверный цикл.
+  var fldPrefix = 'new_tp.'+tpName+'.field';
   wrapper.innerHTML = '<summary class="section-hd" style="cursor:pointer">📋 '+tpName+' (0)</summary>'
     +'<input type="hidden" name="new_tp_name" value="'+tpName+'">'
-    +'<input type="hidden" name="'+prefix+'.idx" value="'+_cfgNewTpIdx+'">'
     +'<div class="tp-block"><table class="fields-tbl" id="'+tblId+'">'
     +'<tr><th>'+T("Поле")+'</th><th>'+T("Тип")+'</th><th style="min-width:150px">'+T("Объект")+'</th></tr>'
     +'</table>'
-    +'<button type="button" onclick="cfgAddField(\''+tblId+'\',\'new_tp.'+_cfgNewTpIdx+'.field\',\''+entityName+'\')" style="font-size:11px;color:#1a4a80;background:none;border:1px dashed #c0c8d8;padding:2px 8px;border-radius:3px;cursor:pointer;margin:4px 0">+ '+T("Добавить поле")+'</button>'
+    +'<button type="button" onclick="cfgAddField(\''+tblId+'\',\''+fldPrefix+'\',\''+entityName+'\')" style="font-size:11px;color:#1a4a80;background:none;border:1px dashed #c0c8d8;padding:2px 8px;border-radius:3px;cursor:pointer;margin:4px 0">+ '+T("Добавить поле")+'</button>'
     +'</div>';
   btn.parentNode.insertBefore(wrapper, btn);
-  cfgAddField(tblId, 'new_tp.'+_cfgNewTpIdx+'.field', entityName);
+  cfgAddField(tblId, fldPrefix, entityName);
 }
 // ── Predefined items row ──────────────────────────────────────────
 var _cfgPreRowIdx = 10000;
@@ -325,9 +326,14 @@ function cfgAddARField(tblId) {
   if (!tbl) return;
   tbl.style.display = '';
   var idx = tbl.querySelectorAll('tr').length - 1;
+  var numId = 'arn-new-'+idx;
   var tr = document.createElement('tr');
   tr.innerHTML = '<td><input type="text" name="res.'+idx+'.name" placeholder="ИмяРесурса" style="width:100%;font-size:12px;padding:2px 4px;border:1px solid #dde;border-radius:3px"></td>'
-    +'<td><select name="res.'+idx+'.type"><option value="number">'+T("число")+'</option><option value="string">'+T("строка")+'</option><option value="bool">'+T("булево")+'</option></select></td>';
+    +'<td><select name="res.'+idx+'.type" onchange="cfgToggleNum(this,\''+numId+'\')"><option value="number">'+T("число")+'</option><option value="string">'+T("строка")+'</option><option value="bool">'+T("булево")+'</option></select>'
+    +' <span id="'+numId+'" title="'+T("Длина, Точность")+'">'
+    +'<input type="number" min="1" name="res.'+idx+'.length" placeholder="дл" style="width:46px;padding:2px 3px;border:1px solid #ccd0d8;border-radius:3px;font-size:11px">'
+    +' , <input type="number" min="0" name="res.'+idx+'.scale" placeholder="точн" style="width:46px;padding:2px 3px;border:1px solid #ccd0d8;border-radius:3px;font-size:11px">'
+    +'</span></td>';
   tbl.appendChild(tr);
   tr.querySelector('input').focus();
 }

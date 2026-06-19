@@ -470,10 +470,11 @@ func CheckReportComposition(proj *project.Project) []Issue {
 	add := func(name, msg string) {
 		issues = append(issues, Issue{File: "reports/" + name + ".yaml", Object: name, Kind: "Отчёт (компоновка)", Message: msg})
 	}
-	for _, rep := range proj.Reports {
-		c := rep.Composition
+	// checkComp валидирует одну компоновку. prefix непустой для вариантов
+	// («вариант "Имя": ») — чтобы в сообщении было видно, где именно ошибка.
+	checkComp := func(repName, prefix string, c *report.Composition) {
 		if c == nil {
-			continue
+			return
 		}
 		groups := map[string]bool{}
 		for _, g := range c.Groupings {
@@ -486,41 +487,63 @@ func CheckReportComposition(proj *project.Project) []Issue {
 				// Вычисляемый показатель: агрегат необязателен, но выражение валидируем.
 				src := "Функция __cond()\nВозврат (" + m.Expr + ");\nКонецФункции\n"
 				if _, err := parser.New(lexer.New(src, "cond.os")).ParseProgram(); err != nil {
-					add(rep.Name, "ошибка выражения показателя \""+m.Field+"\": "+err.Error())
+					add(repName, prefix+"ошибка выражения показателя \""+m.Field+"\": "+err.Error())
 				}
 			} else if !aggs[m.Agg] {
-				add(rep.Name, "неизвестный агрегат: "+m.Agg)
+				add(repName, prefix+"неизвестный агрегат: "+m.Agg)
 			}
 			if !aligns[m.Align] {
-				add(rep.Name, "неизвестное выравнивание: "+m.Align)
+				add(repName, prefix+"неизвестное выравнивание: "+m.Align)
 			}
 		}
 		for _, s := range c.Sort {
 			if !dirs[s.Dir] {
-				add(rep.Name, "неизвестное направление сортировки: "+s.Dir)
+				add(repName, prefix+"неизвестное направление сортировки: "+s.Dir)
 			}
 			if !groups[s.Field] && !measures[s.Field] {
-				add(rep.Name, "поле сортировки не группировка и не показатель: "+s.Field)
+				add(repName, prefix+"поле сортировки не группировка и не показатель: "+s.Field)
 			}
 		}
 		if c.Chart != nil {
 			if !ctypes[c.Chart.Type] {
-				add(rep.Name, "неизвестный тип графика: "+c.Chart.Type)
+				add(repName, prefix+"неизвестный тип графика: "+c.Chart.Type)
 			}
 			if !groups[c.Chart.Category] {
-				add(rep.Name, "категория графика не входит в группировки: "+c.Chart.Category)
+				add(repName, prefix+"категория графика не входит в группировки: "+c.Chart.Category)
 			}
 			for _, sname := range c.Chart.Series {
 				if !measures[sname] {
-					add(rep.Name, "ряд графика не входит в показатели: "+sname)
+					add(repName, prefix+"ряд графика не входит в показатели: "+sname)
 				}
 			}
 		}
 		for _, cr := range c.Conditional {
 			src := "Функция __cond()\nВозврат (" + cr.When + ");\nКонецФункции\n"
 			if _, err := parser.New(lexer.New(src, "cond.os")).ParseProgram(); err != nil {
-				add(rep.Name, "ошибка выражения условия \""+cr.When+"\": "+err.Error())
+				add(repName, prefix+"ошибка выражения условия \""+cr.When+"\": "+err.Error())
 			}
+		}
+		// Кросс-таблица (columns): измерения уходят в колонки. Детализация в этом
+		// режиме не выводится; поле-колонка не должно дублировать строковое
+		// измерение или показатель.
+		if len(c.Columns) > 0 {
+			if c.Detail {
+				add(repName, prefix+"детализация (detail) несовместима с кросс-таблицей (columns) и будет проигнорирована")
+			}
+			for _, col := range c.Columns {
+				if groups[col] {
+					add(repName, prefix+"поле \""+col+"\" указано и в группировках, и в колонках кросс-таблицы")
+				}
+				if measures[col] {
+					add(repName, prefix+"поле \""+col+"\" указано и в показателях, и в колонках кросс-таблицы")
+				}
+			}
+		}
+	}
+	for _, rep := range proj.Reports {
+		checkComp(rep.Name, "", rep.Composition)
+		for _, v := range rep.Variants {
+			checkComp(rep.Name, "вариант \""+v.Name+"\": ", v.Composition)
 		}
 	}
 	return issues

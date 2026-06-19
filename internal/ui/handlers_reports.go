@@ -29,15 +29,17 @@ func (s *Server) reportForm(w http.ResponseWriter, r *http.Request) {
 	if !s.requirePerm(w, r, "report", rep.Name, "run") {
 		return
 	}
-	// If report has no params, run immediately.
-	if len(rep.Params) == 0 {
+	// Если у отчёта нет ни параметров, ни вариантов компоновки — строим сразу.
+	// Варианты требуют формы с выбором, поэтому при них форму показываем всегда.
+	if len(rep.Params) == 0 && len(rep.Variants) == 0 {
 		s.runReport(w, r, rep, map[string]any{})
 		return
 	}
 	s.render(w, r, "page-report", map[string]any{
-		"Report":       rep,
-		"ParamValues":  map[string]any{},
-		"ReportParams": s.buildReportParams(r.Context(), s.resolveLang(r), rep.Params),
+		"Report":        rep,
+		"ParamValues":   map[string]any{},
+		"ReportParams":  s.buildReportParams(r.Context(), s.resolveLang(r), rep.Params),
+		"ActiveVariant": r.FormValue("__variant"),
 	})
 }
 
@@ -79,6 +81,17 @@ func (s *Server) getReport(w http.ResponseWriter, r *http.Request) *reportpkg.Re
 }
 
 func (s *Server) runReport(w http.ResponseWriter, r *http.Request, rep *reportpkg.Report, paramValues map[string]any) {
+	// Выбранный вариант компоновки (параметр __variant); пусто → основной.
+	variant := r.FormValue("__variant")
+	// Рантайм-настройки пользователя (панель «Настройки»). Эффективная
+	// компоновка: override (settings.Composition) → вариант → основной.
+	settings := readReportSettings(r)
+	if settings == nil {
+		// Нет явных правок в запросе — подставляем сохранённые настройки
+		// пользователя, чтобы отчёт открылся в привычном виде (план 70, D1).
+		settings = loadUserSettings(r.Context(), s.store, rep.Name, currentUserLogin(r))
+	}
+	comp := effectiveComposition(rep, settings)
 	// Build query params: convert date strings to time.Time for proper PG type inference.
 	// Keep paramValues unchanged so the form repopulates with the original strings.
 	queryValues := make(map[string]any, len(paramValues))
@@ -109,50 +122,86 @@ func (s *Server) runReport(w http.ResponseWriter, r *http.Request, rep *reportpk
 	reportParams := s.buildReportParams(r.Context(), s.resolveLang(r), rep.Params)
 	if err != nil {
 		s.render(w, r, "page-report", map[string]any{
-			"Report":       rep,
-			"QueryError":   err.Error(),
-			"ParamValues":  paramValues,
-			"ReportParams": reportParams,
+			"Report":        rep,
+			"QueryError":    err.Error(),
+			"ParamValues":   paramValues,
+			"ReportParams":  reportParams,
+			"ActiveVariant": variant,
 		})
 		return
 	}
 	rows, cols, err := s.store.RunQuery(r.Context(), compiled.SQL, compiled.Args)
 	if err != nil {
 		s.render(w, r, "page-report", map[string]any{
-			"Report":       rep,
-			"QueryError":   err.Error(),
-			"ParamValues":  paramValues,
-			"ReportParams": reportParams,
+			"Report":        rep,
+			"QueryError":    err.Error(),
+			"ParamValues":   paramValues,
+			"ReportParams":  reportParams,
+			"ActiveVariant": variant,
 		})
 		return
 	}
 	detailLinkCol := ""
-	if rep.Composition != nil {
-		detailLinkCol = rep.Composition.DetailLink
+	if comp != nil {
+		detailLinkCol = comp.DetailLink
 	}
 	s.resolveUUIDsInReport(r.Context(), rows, detailLinkCol)
 
-	if rep.Composition != nil {
+	// Пользовательские отборы применяются к строкам до компоновки (план 70).
+	if settings != nil && len(settings.Filters) > 0 {
+		rows = compose.ApplyFilters(rows, settings.Filters)
+	}
+
+	if comp != nil {
 		ev := newInterpEvaluator(s.interp)
-		res, cerr := compose.Compose(rows, *rep.Composition, ev)
+		// Режим кросс-таблицы (pivot): измерения уходят в колонки. График в этом
+		// режиме не строится (категории — это столбцы таблицы).
+		if len(comp.Columns) > 0 {
+			cr, cerr := compose.ComposeCross(rows, *comp, ev)
+			if cerr != nil {
+				s.render(w, r, "page-report", map[string]any{
+					"Report": rep, "QueryError": cerr.Error(),
+					"ParamValues": paramValues, "ReportParams": reportParams,
+					"ActiveVariant": variant,
+				})
+				return
+			}
+			s.render(w, r, "page-report", map[string]any{
+				"Report":        rep,
+				"ComposedHTML":  renderCrossTable(cr, comp),
+				"Capped":        cr.Capped,
+				"ParamValues":   paramValues,
+				"ReportParams":  reportParams,
+				"ActiveVariant": variant,
+				"UserSettings":  settings,
+				"ReportCols":    cols,
+			})
+			return
+		}
+		res, cerr := compose.Compose(rows, *comp, ev)
 		if cerr != nil {
 			s.render(w, r, "page-report", map[string]any{
 				"Report": rep, "QueryError": cerr.Error(),
 				"ParamValues": paramValues, "ReportParams": reportParams,
+				"ActiveVariant": variant,
 			})
 			return
 		}
 		var chartOption map[string]any
-		if rep.Composition.Chart != nil {
-			chartOption = buildComposedChart(res, rep.Composition.Chart)
+		if comp.Chart != nil {
+			chartOption = buildComposedChart(res, comp.Chart, rows, *comp, ev)
 		}
 		s.render(w, r, "page-report", map[string]any{
-			"Report":       rep,
-			"ComposedHTML": renderComposedTable(res, rep.Composition),
-			"Capped":       res.Capped,
-			"ChartOption":  chartOption,
-			"ParamValues":  paramValues,
-			"ReportParams": reportParams,
+			"Report":          rep,
+			"ComposedHTML":    renderComposedTable(res, comp),
+			"Capped":          res.Capped,
+			"ComposeWarnings": res.Warnings,
+			"ChartOption":     chartOption,
+			"ParamValues":     paramValues,
+			"ReportParams":    reportParams,
+			"ActiveVariant":   variant,
+			"UserSettings":    settings,
+			"ReportCols":      cols,
 		})
 		return
 	}
@@ -163,12 +212,15 @@ func (s *Server) runReport(w http.ResponseWriter, r *http.Request, rep *reportpk
 	}
 
 	s.render(w, r, "page-report", map[string]any{
-		"Report":       rep,
-		"Cols":         cols,
-		"Rows":         rows,
-		"ParamValues":  paramValues,
-		"ChartOption":  chartOption,
-		"ReportParams": reportParams,
+		"Report":        rep,
+		"Cols":          cols,
+		"Rows":          rows,
+		"ParamValues":   paramValues,
+		"ChartOption":   chartOption,
+		"ReportParams":  reportParams,
+		"ActiveVariant": variant,
+		"UserSettings":  settings,
+		"ReportCols":    cols,
 	})
 }
 
@@ -345,6 +397,14 @@ func (s *Server) reportExcel(w http.ResponseWriter, r *http.Request) {
 	if !s.requirePerm(w, r, "report", rep.Name, "run") {
 		return
 	}
+	// Эффективная компоновка с учётом рантайм-настроек пользователя (план 70).
+	// readReportSettings читает __settings через FormValue (для GET — из query).
+	settings := readReportSettings(r)
+	if settings == nil {
+		// Без явного __settings — выгружаем в сохранённом пользователем виде.
+		settings = loadUserSettings(r.Context(), s.store, rep.Name, currentUserLogin(r))
+	}
+	comp := effectiveComposition(rep, settings)
 	paramValues := make(map[string]any, len(rep.Params))
 	for _, p := range rep.Params {
 		val := r.URL.Query().Get(p.Name)
@@ -384,20 +444,43 @@ func (s *Server) reportExcel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	detailLinkCol := ""
-	if rep.Composition != nil {
-		detailLinkCol = rep.Composition.DetailLink
+	if comp != nil {
+		detailLinkCol = comp.DetailLink
 	}
 	s.resolveUUIDsInReport(r.Context(), rows, detailLinkCol)
 
+	// Пользовательские отборы (план 70) — до компоновки, как в runReport.
+	if settings != nil && len(settings.Filters) > 0 {
+		rows = compose.ApplyFilters(rows, settings.Filters)
+	}
+
 	// Если отчёт использует компоновщик — строим дерево групп/итогов для Excel.
-	if rep.Composition != nil {
+	if comp != nil {
 		ev := newInterpEvaluator(s.interp)
-		res, cerr := compose.Compose(rows, *rep.Composition, ev)
+		// Кросс-таблица (pivot): выгружаем измерения-колонки в столбцы листа.
+		if len(comp.Columns) > 0 {
+			cr, cerr := compose.ComposeCross(rows, *comp, ev)
+			if cerr != nil {
+				http.Error(w, "compose error: "+s.errText(r, cerr), 500)
+				return
+			}
+			headers, xlsRows := crossSheetRows(cr, comp)
+			data, err := excel.ExportList(headers, xlsRows)
+			if err != nil {
+				http.Error(w, "Excel error: "+s.errText(r, err), 500)
+				return
+			}
+			w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+			w.Header().Set("Content-Disposition", contentDisposition(rep.Name+".xlsx"))
+			w.Write(data)
+			return
+		}
+		res, cerr := compose.Compose(rows, *comp, ev)
 		if cerr != nil {
 			http.Error(w, "compose error: "+s.errText(r, cerr), 500)
 			return
 		}
-		headers, xlsRows := composedRows(res, rep.Composition)
+		headers, xlsRows := composedRows(res, comp)
 		data, err := excel.ExportList(headers, xlsRows)
 		if err != nil {
 			http.Error(w, "Excel error: "+s.errText(r, err), 500)

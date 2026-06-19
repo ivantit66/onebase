@@ -67,6 +67,48 @@ func TestParser_VarDeclCommaList(t *testing.T) {
 	}
 }
 
+func TestParser_ModuleVarSection(t *testing.T) {
+	// issue #115: модуль объекта обработки из выгрузки 1С начинается с раздела
+	// объявления переменных модуля (Перем … [Экспорт];) до процедур. Парсер не
+	// должен падать с «expected Procedure or Function, got "Перем"».
+	src := `Перем НастройкиСервиса Экспорт;
+Перем КэшТокена, ВремяОбновления;
+
+Процедура ПолучитьТокен() Экспорт
+КонецПроцедуры`
+
+	prog := parse(t, src)
+	if len(prog.ModuleVars) != 2 {
+		t.Fatalf("want 2 module var decls, got %d", len(prog.ModuleVars))
+	}
+	if !prog.ModuleVars[0].Exported {
+		t.Fatalf("first module var must be Exported (Перем … Экспорт)")
+	}
+	if got := prog.ModuleVars[0].Names[0].Literal; got != "НастройкиСервиса" {
+		t.Fatalf("module var name: want НастройкиСервиса, got %q", got)
+	}
+	if n := len(prog.ModuleVars[1].Names); n != 2 {
+		t.Fatalf("second decl: want 2 names, got %d", n)
+	}
+	if prog.ModuleVars[1].Exported {
+		t.Fatalf("second module var must not be Exported")
+	}
+	if len(prog.Procedures) != 1 {
+		t.Fatalf("want 1 procedure, got %d", len(prog.Procedures))
+	}
+}
+
+func TestParser_ModuleVarsOnly(t *testing.T) {
+	// Модуль из одних объявлений переменных, без процедур — тоже валиден.
+	prog := parse(t, "Перем А;\nПерем Б;\n")
+	if len(prog.ModuleVars) != 2 {
+		t.Fatalf("want 2 module var decls, got %d", len(prog.ModuleVars))
+	}
+	if len(prog.Procedures) != 0 {
+		t.Fatalf("want 0 procedures, got %d", len(prog.Procedures))
+	}
+}
+
 func TestParser_OnWriteProcedure(t *testing.T) {
 	src := `Procedure OnWrite()
   If this.Number = "" Then
@@ -117,6 +159,66 @@ EndProcedure`
 	}
 	if ident.Tok.Literal != "Error" {
 		t.Fatalf("want Error, got %q", ident.Tok.Literal)
+	}
+}
+
+func TestParser_KeywordAsMemberName(t *testing.T) {
+	// issue #117: имя свойства/метода после точки может совпадать с
+	// зарезервированным словом (XDTO-объект с полями «To»/«По»). В позиции члена
+	// это обычные идентификаторы, и синтаксис-контроль не должен на них падать.
+	src := `Процедура Тест()
+  Запрос.To = КонецПериода;
+  Рез = Запрос.По;
+  Объект.Если("x");
+КонецПроцедуры`
+
+	prog := parse(t, src)
+	body := prog.Procedures[0].Body
+	if len(body) != 3 {
+		t.Fatalf("want 3 stmts, got %d", len(body))
+	}
+
+	// Запрос.To = … — присваивание в свойство-ключевое-слово (англ.)
+	assign, ok := body[0].(*ast.AssignStmt)
+	if !ok {
+		t.Fatalf("stmt 0: want *ast.AssignStmt, got %T", body[0])
+	}
+	tgt, ok := assign.Target.(*ast.MemberExpr)
+	if !ok {
+		t.Fatalf("stmt 0 target: want *ast.MemberExpr, got %T", assign.Target)
+	}
+	if tgt.Field.Literal != "To" {
+		t.Fatalf("stmt 0 field: want %q, got %q", "To", tgt.Field.Literal)
+	}
+
+	// Рез = Запрос.По — чтение свойства с русским ключевым словом
+	read, ok := body[1].(*ast.AssignStmt)
+	if !ok {
+		t.Fatalf("stmt 1: want *ast.AssignStmt, got %T", body[1])
+	}
+	m, ok := read.Value.(*ast.MemberExpr)
+	if !ok {
+		t.Fatalf("stmt 1 value: want *ast.MemberExpr, got %T", read.Value)
+	}
+	if m.Field.Literal != "По" {
+		t.Fatalf("stmt 1 field: want %q, got %q", "По", m.Field.Literal)
+	}
+
+	// Объект.Если("x") — вызов метода с именем-ключевым-словом
+	es, ok := body[2].(*ast.ExprStmt)
+	if !ok {
+		t.Fatalf("stmt 2: want *ast.ExprStmt, got %T", body[2])
+	}
+	call, ok := es.X.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("stmt 2: want *ast.CallExpr, got %T", es.X)
+	}
+	callee, ok := call.Callee.(*ast.MemberExpr)
+	if !ok {
+		t.Fatalf("stmt 2 callee: want *ast.MemberExpr, got %T", call.Callee)
+	}
+	if callee.Field.Literal != "Если" {
+		t.Fatalf("stmt 2 field: want %q, got %q", "Если", callee.Field.Literal)
 	}
 }
 

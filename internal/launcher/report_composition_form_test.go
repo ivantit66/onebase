@@ -185,6 +185,37 @@ func TestParseCompositionFormMeasureExpr(t *testing.T) {
 	}
 }
 
+func TestParseCompositionFormColumns(t *testing.T) {
+	// Измерения-колонки кросс-таблицы читаются из полей comp.column.<i>.
+	f := url.Values{}
+	f.Set("comp.present", "1")
+	f.Set("comp.grouping.0", "Номенклатура")
+	f.Set("comp.column.0", "Месяц")
+	f.Set("comp.column.1", "Склад")
+	f.Set("comp.measure.0.field", "Сумма")
+	f.Set("comp.measure.0.agg", "sum")
+	c, present := parseCompositionForm(f)
+	if !present || c == nil {
+		t.Fatalf("present=%v c=%v", present, c)
+	}
+	if len(c.Columns) != 2 || c.Columns[0] != "Месяц" || c.Columns[1] != "Склад" {
+		t.Fatalf("columns: %v", c.Columns)
+	}
+}
+
+func TestParseCompositionFormColumnsOnlyPreserved(t *testing.T) {
+	// Композиция с колонками и показателем, но без группировок, не должна стираться.
+	f := url.Values{}
+	f.Set("comp.present", "1")
+	f.Set("comp.column.0", "Месяц")
+	f.Set("comp.measure.0.field", "Сумма")
+	f.Set("comp.measure.0.agg", "sum")
+	c, present := parseCompositionForm(f)
+	if !present || c == nil || len(c.Columns) != 1 {
+		t.Fatalf("композиция с колонками должна сохраниться: present=%v c=%+v", present, c)
+	}
+}
+
 func TestParseCompositionFormDetailLink(t *testing.T) {
 	// DetailLink и DetailEntity читаются из формы и сохраняются в Composition.
 	f := url.Values{}
@@ -258,6 +289,31 @@ func TestApplyReportCompositionPreservesOtherFields(t *testing.T) {
 		t.Fatalf("params потеряны:\n%s", s)
 	}
 	if !strings.Contains(s, "Менеджер") {
+		t.Fatalf("новая composition не записана:\n%s", s)
+	}
+}
+
+func TestApplyReportCompositionPreservesVariants(t *testing.T) {
+	// Блок variants (варианты компоновки, C2) не должен теряться при сохранении
+	// основного composition через конструктор конфигуратора — иначе сохранение
+	// затирало бы пользовательские варианты.
+	raw := []byte("name: R\nquery: \"ВЫБРАТЬ 1\"\ncomposition:\n  groupings: [Старое]\n  measures:\n    - {field: X, agg: sum}\nvariants:\n  - name: По складам\n    composition:\n      groupings: [Склад]\n      measures:\n        - {field: X, agg: sum}\n")
+
+	f := url.Values{}
+	f.Set("comp.present", "1")
+	f.Set("comp.grouping.0", "Новое")
+	f.Set("comp.measure.0.field", "Сумма")
+	f.Set("comp.measure.0.agg", "sum")
+
+	out, err := applyReportComposition(raw, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "variants:") || !strings.Contains(s, "По складам") || !strings.Contains(s, "Склад") {
+		t.Fatalf("variants потеряны при сохранении composition:\n%s", s)
+	}
+	if !strings.Contains(s, "Новое") {
 		t.Fatalf("новая composition не записана:\n%s", s)
 	}
 }

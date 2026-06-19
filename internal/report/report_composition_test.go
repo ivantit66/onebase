@@ -78,3 +78,80 @@ func TestParseNoComposition(t *testing.T) {
 		t.Fatal("Composition must be nil when absent")
 	}
 }
+
+func TestParseVariants(t *testing.T) {
+	src := []byte(`
+name: Продажи
+query: "ВЫБРАТЬ 1"
+composition:
+  groupings: [Менеджер]
+  measures:
+    - { field: Сумма, agg: sum }
+variants:
+  - name: "По складам"
+    composition:
+      groupings: [Склад, Номенклатура]
+      measures:
+        - { field: Сумма, agg: sum }
+  - name: "Кросс по месяцам"
+    composition:
+      groupings: [Номенклатура]
+      columns: [Месяц]
+      measures:
+        - { field: Сумма, agg: sum }
+`)
+	r, err := ParseBytes(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Variants) != 2 {
+		t.Fatalf("ожидали 2 варианта, получили %d", len(r.Variants))
+	}
+	if r.Variants[0].Name != "По складам" {
+		t.Fatalf("имя варианта 0 = %q", r.Variants[0].Name)
+	}
+	if r.Variants[0].Composition == nil || len(r.Variants[0].Composition.Groupings) != 2 ||
+		r.Variants[0].Composition.Groupings[0] != "Склад" {
+		t.Fatalf("composition варианта 0: %+v", r.Variants[0].Composition)
+	}
+	if r.Variants[1].Name != "Кросс по месяцам" {
+		t.Fatalf("имя варианта 1 = %q", r.Variants[1].Name)
+	}
+	if r.Variants[1].Composition == nil || len(r.Variants[1].Composition.Columns) != 1 ||
+		r.Variants[1].Composition.Columns[0] != "Месяц" {
+		t.Fatalf("columns варианта 1: %+v", r.Variants[1].Composition)
+	}
+}
+
+func TestParseNoVariants(t *testing.T) {
+	r, err := ParseBytes([]byte("name: X\nquery: \"ВЫБРАТЬ 1\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Variants != nil {
+		t.Fatalf("Variants must be nil when absent, got %+v", r.Variants)
+	}
+}
+
+func TestActiveComposition(t *testing.T) {
+	main := &Composition{Groupings: []string{"Менеджер"}}
+	byWh := &Composition{Groupings: []string{"Склад"}}
+	r := &Report{
+		Composition: main,
+		Variants: []ReportVariant{
+			{Name: "По складам", Composition: byWh},
+		},
+	}
+	// Пустое имя → основной вариант.
+	if got := r.ActiveComposition(""); got != main {
+		t.Fatalf("пустое имя: ожидали основной composition, получили %+v", got)
+	}
+	// Имя варианта → его composition.
+	if got := r.ActiveComposition("По складам"); got != byWh {
+		t.Fatalf("\"По складам\": ожидали вариант, получили %+v", got)
+	}
+	// Неизвестное имя → основной (graceful fallback).
+	if got := r.ActiveComposition("Нет такого"); got != main {
+		t.Fatalf("неизвестное имя: ожидали основной composition, получили %+v", got)
+	}
+}

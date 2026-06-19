@@ -37,7 +37,7 @@ func TestBuildComposedChart(t *testing.T) {
 		Chart:     &report.ChartSpec{Type: "bar", Category: "М", Series: []string{"Сумма"}},
 	}
 	res, _ := compose.Compose(rows, spec, nil)
-	opt := buildComposedChart(res, spec.Chart)
+	opt := buildComposedChart(res, spec.Chart, rows, spec, nil)
 	if opt == nil {
 		t.Fatal("nil chart option")
 	}
@@ -45,6 +45,61 @@ func TestBuildComposedChart(t *testing.T) {
 	cats, _ := xAxis["data"].([]string)
 	if len(cats) != 2 || cats[0] != "Иванов" {
 		t.Fatalf("categories: %v", cats)
+	}
+}
+
+// TestBuildComposedChart_HonorsCategory: когда Chart.Category отличается от
+// верхней группировки, ось X строится по полю Category (отдельный свод), а не
+// по группировке.
+func TestBuildComposedChart_HonorsCategory(t *testing.T) {
+	rows := []compose.Row{
+		{"Менеджер": "Иванов", "Регион": "Юг", "Сумма": "100"},
+		{"Менеджер": "Петров", "Регион": "Юг", "Сумма": "50"},
+		{"Менеджер": "Иванов", "Регион": "Север", "Сумма": "30"},
+	}
+	spec := report.Composition{
+		Groupings: []string{"Менеджер"},
+		Measures:  []report.Measure{{Field: "Сумма", Agg: "sum"}},
+		Chart:     &report.ChartSpec{Type: "bar", Category: "Регион", Series: []string{"Сумма"}},
+	}
+	res, _ := compose.Compose(rows, spec, nil)
+	opt := buildComposedChart(res, spec.Chart, rows, spec, nil)
+	if opt == nil {
+		t.Fatal("nil chart option")
+	}
+	xAxis, _ := opt["xAxis"].(map[string]any)
+	cats, _ := xAxis["data"].([]string)
+	if len(cats) != 2 || cats[0] != "Юг" || cats[1] != "Север" {
+		t.Fatalf("ось X должна строиться по Регион (Юг, Север), got %v", cats)
+	}
+	series, _ := opt["series"].([]map[string]any)
+	if len(series) != 1 {
+		t.Fatalf("ожидалась одна серия, got %d", len(series))
+	}
+	data, _ := series[0]["data"].([]float64)
+	if len(data) != 2 || data[0] != 150 || data[1] != 30 {
+		t.Fatalf("данные серии по Регион: ожидалось [150 30], got %v", data)
+	}
+}
+
+// TestBuildComposedChart_Category_RespectsCap: при пивоте по Category диаграмма
+// агрегирует только строки в пределах потолка (как таблица), а не все исходные.
+func TestBuildComposedChart_Category_RespectsCap(t *testing.T) {
+	rows := []compose.Row{
+		{"Менеджер": "Иванов", "Регион": "Юг", "Сумма": "100"},
+		{"Менеджер": "Петров", "Регион": "Север", "Сумма": "50"},
+	}
+	spec := report.Composition{
+		Groupings: []string{"Менеджер"},
+		Measures:  []report.Measure{{Field: "Сумма", Agg: "sum"}},
+		Chart:     &report.ChartSpec{Type: "bar", Category: "Регион", Series: []string{"Сумма"}},
+	}
+	res, _ := compose.ComposeN(rows, spec, nil, 1) // потолок 1 строка
+	opt := buildComposedChart(res, spec.Chart, rows, spec, nil)
+	xAxis, _ := opt["xAxis"].(map[string]any)
+	cats, _ := xAxis["data"].([]string)
+	if len(cats) != 1 || cats[0] != "Юг" {
+		t.Fatalf("диаграмма по Category должна соблюдать потолок (только Юг), got %v", cats)
 	}
 }
 

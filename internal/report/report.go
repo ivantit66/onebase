@@ -22,6 +22,7 @@ type Report struct {
 	Query       string            `yaml:"query"`
 	ChartProc   string            `yaml:"chart_proc"`
 	Composition *Composition      `yaml:"composition"` // nil = плоская таблица (старое поведение)
+	Variants    []ReportVariant   `yaml:"variants"`    // доп. именованные компоновки по тому же запросу
 
 	// External помечает отчёт из внешнего контура (таблица _ext_reports),
 	// а не из конфигурации проекта. Заполняется программно при загрузке;
@@ -29,9 +30,18 @@ type Report struct {
 	External bool `yaml:"-"`
 }
 
+// ReportVariant — именованная компоновка по тому же запросу отчёта («вариант
+// отчёта», как в 1С). На форме отчёта пользователь выбирает вариант; пустой
+// выбор соответствует основному блоку composition.
+type ReportVariant struct {
+	Name        string       `yaml:"name"`
+	Composition *Composition `yaml:"composition"`
+}
+
 // Composition описывает настройки компоновки данных отчёта.
 type Composition struct {
 	Groupings    []string   `yaml:"groupings"`
+	Columns      []string   `yaml:"columns"` // непусто = режим кросс-таблицы: измерения в колонки
 	Measures     []Measure  `yaml:"measures"`
 	Totals       Totals     `yaml:"totals"`
 	Detail       bool       `yaml:"detail"`
@@ -45,7 +55,7 @@ type Composition struct {
 // Measure описывает измеримый показатель (поле + агрегат) в компоновке.
 type Measure struct {
 	Field  string `yaml:"field"`
-	Agg    string `yaml:"agg"`    // sum|count|avg|min|max ("" = sum)
+	Agg    string `yaml:"agg"` // sum|count|avg|min|max ("" = sum)
 	Title  string `yaml:"title"`
 	Align  string `yaml:"align"`  // left|right|center ("" = right)
 	Format string `yaml:"format"` // "" | "#,##0.00" | "#,##0" | "0.0%" и т.п.
@@ -110,6 +120,19 @@ func (r *Report) DisplayName(lang string) string {
 		return r.Title
 	}
 	return r.Name
+}
+
+// ActiveComposition возвращает компоновку выбранного варианта по его имени.
+// Пустое имя или несовпадение → основной composition (вариант по умолчанию).
+func (r *Report) ActiveComposition(name string) *Composition {
+	if name != "" {
+		for i := range r.Variants {
+			if r.Variants[i].Name == name {
+				return r.Variants[i].Composition
+			}
+		}
+	}
+	return r.Composition
 }
 
 func LoadFile(path string) (*Report, error) {

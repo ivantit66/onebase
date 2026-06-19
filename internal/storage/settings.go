@@ -279,3 +279,54 @@ func (db *DB) SaveAuditSettings(ctx context.Context, s AuditSettings) error {
 	}
 	return nil
 }
+
+// reportSettingsKey формирует ключ _settings для рантайм-настроек отчёта
+// конкретного пользователя (план 70). Для анонимной/однопользовательской
+// сессии user = "" — отдельный ключ, не пересекающийся с именованными.
+func reportSettingsKey(report, user string) string {
+	return "report.settings." + report + "." + user
+}
+
+// GetReportUserSettings возвращает сырой JSON рантайм-настроек отчёта для
+// пользователя. Отсутствие ключа/таблицы — не ошибка (как GetLLMConfig):
+// возвращается ("", nil), что означает «использовать стандартный вид».
+func (db *DB) GetReportUserSettings(ctx context.Context, report, user string) (string, error) {
+	d := db.dialect
+	var v string
+	err := db.QueryRow(ctx,
+		`SELECT value FROM _settings WHERE key = `+d.Placeholder(1),
+		reportSettingsKey(report, user)).Scan(&v)
+	if err != nil {
+		return "", nil
+	}
+	return v, nil
+}
+
+// SaveReportUserSettings сохраняет рантайм-настройки отчёта пользователя одним
+// JSON-значением (upsert). Конфигурацию (YAML) не трогает.
+func (db *DB) SaveReportUserSettings(ctx context.Context, report, user, raw string) error {
+	if err := db.EnsureSettingsSchema(ctx); err != nil {
+		return err
+	}
+	d := db.dialect
+	q := fmt.Sprintf(
+		`INSERT INTO _settings (key, value) VALUES (%s, %s)
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		d.Placeholder(1), d.Placeholder(2))
+	if _, err := db.Exec(ctx, q, reportSettingsKey(report, user), raw); err != nil {
+		return fmt.Errorf("settings: save report settings: %w", err)
+	}
+	return nil
+}
+
+// DeleteReportUserSettings удаляет рантайм-настройки отчёта пользователя —
+// сброс к стандартному виду из конфигурации.
+func (db *DB) DeleteReportUserSettings(ctx context.Context, report, user string) error {
+	d := db.dialect
+	if _, err := db.Exec(ctx,
+		`DELETE FROM _settings WHERE key = `+d.Placeholder(1),
+		reportSettingsKey(report, user)); err != nil {
+		return fmt.Errorf("settings: delete report settings: %w", err)
+	}
+	return nil
+}

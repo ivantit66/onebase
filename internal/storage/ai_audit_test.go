@@ -104,3 +104,24 @@ func TestAISettings_DailyTokenCap(t *testing.T) {
 		t.Fatalf("ожидалось 50000, получено %d", cap)
 	}
 }
+
+func TestAISettings_DataScope(t *testing.T) {
+	db, ctx := newAIAuditDB(t)
+
+	if sc := db.GetAIDataScope(ctx); sc != AIDataScopeAdminOnly {
+		t.Fatalf("без настройки ожидался admin_only, получено %q", sc)
+	}
+	if err := db.SaveAIDataScope(ctx, AIDataScopeRBAC); err != nil {
+		t.Fatalf("SaveAIDataScope: %v", err)
+	}
+	if sc := db.GetAIDataScope(ctx); sc != AIDataScopeRBAC {
+		t.Fatalf("ожидалось rbac, получено %q", sc)
+	}
+	// Неизвестное значение нормализуется в безопасный дефолт admin_only.
+	if err := db.SaveAIDataScope(ctx, "чтотопопало"); err != nil {
+		t.Fatalf("SaveAIDataScope(invalid): %v", err)
+	}
+	if sc := db.GetAIDataScope(ctx); sc != AIDataScopeAdminOnly {
+		t.Fatalf("некорректный режим должен стать admin_only, получено %q", sc)
+	}
+}

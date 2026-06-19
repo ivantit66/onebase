@@ -95,7 +95,7 @@ const tplAdminUserCard = `{{define "admin-user-card"}}` + adminHead + `
     <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:400">
       <input type="checkbox" name="ai_data_access" value="1" {{if .User.AIDataAccess}}checked{{end}}> Доступ ИИ-чата к данным (без прав администратора)
     </label>
-    <div style="font-size:12px;color:#dc2626;margin-top:4px;margin-left:24px">⚠ ИИ-чат сможет выполнять произвольные запросы на чтение и не ограничен правами на отдельные объекты — пользователь получит доступ к любым данным базы через ассистента, а результаты запросов передаются внешнему LLM-провайдеру. Обращения записываются в журнал ИИ (_ai_audit).</div>
+    <div style="font-size:12px;color:#dc2626;margin-top:4px;margin-left:24px">⚠ Действует только если в настройках базы (конфигуратор → ИИ-помощник → «Доступ ИИ-чата к данным») выбран режим <b>rbac</b> или <b>all</b>. В <b>rbac</b> запросы ассистента фильтруются по правам чтения пользователя; в <b>all</b> — доступ ко всем данным без проверки прав. По умолчанию (<b>admin_only</b>) флаг не действует. Результаты запросов передаются внешнему LLM-провайдеру; обращения пишутся в журнал ИИ (_ai_audit).</div>
   </div>
   <button class="btn btn-primary" type="submit">Сохранить</button>
 </form>
@@ -156,7 +156,7 @@ const tplAdminUserForm = `{{define "admin-user-form"}}` + adminHead + `
     <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
       <input type="checkbox" name="ai_data_access" value="1"> Доступ ИИ-чата к данным (без прав администратора)
     </label>
-    <div style="font-size:12px;color:#dc2626;margin-top:4px;margin-left:24px">⚠ ИИ-чат выполняет произвольные запросы на чтение, не ограничен правами на объекты; результаты уходят внешнему LLM-провайдеру.</div>
+    <div style="font-size:12px;color:#dc2626;margin-top:4px;margin-left:24px">⚠ Действует только в режиме rbac/all (конфигуратор → ИИ-помощник). В rbac запросы фильтруются по правам чтения пользователя; результаты уходят внешнему LLM-провайдеру.</div>
   </div>
   <div style="display:flex;gap:12px;margin-top:8px">
     <button class="btn btn-primary" type="submit">Создать</button>

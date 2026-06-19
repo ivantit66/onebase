@@ -136,34 +136,70 @@ func joinStyles(a, b string) string {
 	return a + ";" + b
 }
 
-// buildComposedChart строит ECharts-option из верхнего уровня группировки через
-// общий widget.EChartsOption — единый вид с виджетами дашборда и предпросмотром
-// (grid, сглаживание линий, radius круговой). Раньше option-map собирался здесь
-// вручную и расходился с остальными графиками платформы.
-func buildComposedChart(res *compose.Result, c *report.ChartSpec) map[string]any {
-	if c == nil || len(res.Groups) == 0 {
+// buildComposedChart строит ECharts-option через общий widget.EChartsOption —
+// единый вид с виджетами дашборда и предпросмотром (grid, сглаживание линий,
+// radius круговой). Ось категорий задаёт Chart.Category: если оно пустое или
+// совпадает с верхней группировкой — берём ключи верхнего уровня (как раньше);
+// иначе сворачиваем плоские строки rows отдельным проходом по полю Category
+// (раньше Category игнорировался и ось всегда шла по группировке).
+func buildComposedChart(res *compose.Result, c *report.ChartSpec, rows []compose.Row, spec report.Composition, ev compose.Evaluator) map[string]any {
+	if c == nil {
 		return nil
 	}
 	cd := &widget.ChartData{Kind: c.Type}
-	for _, g := range res.Groups {
-		cd.XAxis = append(cd.XAxis, fmtVal(g.Key))
-	}
-	// Круговая берёт один ряд по первому показателю; столбцы/линия — все ряды.
-	fields := c.Series
-	if c.Type == "pie" {
-		fields = nil
-		if sf := firstSeries(c); sf != "" {
-			fields = []string{sf}
+	fields := seriesFields(c)
+
+	byGrouping := c.Category == "" || (len(spec.Groupings) > 0 && c.Category == spec.Groupings[0])
+	if byGrouping {
+		if len(res.Groups) == 0 {
+			return nil
 		}
+		for _, g := range res.Groups {
+			cd.XAxis = append(cd.XAxis, fmtVal(g.Key))
+		}
+		for _, sf := range fields {
+			s := widget.ChartSeries{Name: sf}
+			for _, g := range res.Groups {
+				s.Data = append(s.Data, composeFloat(g.Subtotals[sf]))
+			}
+			cd.Series = append(cd.Series, s)
+		}
+		return widget.EChartsOption(cd)
+	}
+
+	// Category != верхней группировки: свод по произвольному полю. Соблюдаем тот
+	// же потолок строк, что и таблица (res.RowCount = число строк после cap),
+	// иначе диаграмма агрегировала бы больше данных, чем показано в отчёте.
+	if len(rows) > res.RowCount {
+		rows = rows[:res.RowCount]
+	}
+	keys, subtotals := compose.GroupByField(rows, spec, c.Category, ev)
+	if len(keys) == 0 {
+		return nil
+	}
+	for _, k := range keys {
+		cd.XAxis = append(cd.XAxis, fmtVal(k))
 	}
 	for _, sf := range fields {
 		s := widget.ChartSeries{Name: sf}
-		for _, g := range res.Groups {
-			s.Data = append(s.Data, composeFloat(g.Subtotals[sf]))
+		for _, k := range keys {
+			s.Data = append(s.Data, composeFloat(subtotals[k][sf]))
 		}
 		cd.Series = append(cd.Series, s)
 	}
 	return widget.EChartsOption(cd)
+}
+
+// seriesFields выбирает поля рядов: круговая — один ряд по первому показателю,
+// столбцы/линия — все ряды.
+func seriesFields(c *report.ChartSpec) []string {
+	if c.Type == "pie" {
+		if sf := firstSeries(c); sf != "" {
+			return []string{sf}
+		}
+		return nil
+	}
+	return c.Series
 }
 
 func firstSeries(c *report.ChartSpec) string {

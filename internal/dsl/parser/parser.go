@@ -49,6 +49,16 @@ func (p *Parser) expectSemicolon() {
 
 func (p *Parser) ParseProgram() (*ast.Program, error) {
 	prog := &ast.Program{}
+	// Раздел объявления переменных модуля (как в 1С): ноль или более «Перем …»
+	// до процедур и функций. Модули объекта из выгрузок 1С начинаются с него,
+	// иначе парсер падал на «expected Procedure or Function, got "Перем"» (issue #115).
+	for p.cur.Type == token.VAR {
+		vd, err := p.parseVarDecl()
+		if err != nil {
+			return nil, err
+		}
+		prog.ModuleVars = append(prog.ModuleVars, vd)
+	}
 	for p.cur.Type != token.EOF {
 		if p.cur.Type != token.PROCEDURE && p.cur.Type != token.FUNCTION {
 			return nil, fmt.Errorf("%s:%d:%d: expected Procedure or Function, got %q",
@@ -341,8 +351,17 @@ func (p *Parser) parseVarDecl() (*ast.VarDecl, error) {
 		}
 		names = append(names, nameTok)
 	}
+	// Опциональный модификатор «Экспорт» (переменные модуля 1С: Перем X Экспорт;).
+	// Лексер токенизирует его как IDENT — распознаём по литералу, как parseProcedure.
+	exported := false
+	if p.cur.Type == token.IDENT {
+		if low := strings.ToLower(p.cur.Literal); low == "экспорт" || low == "export" {
+			exported = true
+			p.advance()
+		}
+	}
 	p.consumeSemi()
-	return &ast.VarDecl{Names: names}, nil
+	return &ast.VarDecl{Names: names, Exported: exported}, nil
 }
 
 func isCompoundAssign(t token.Type) bool {
@@ -662,10 +681,14 @@ func (p *Parser) parsePostfix(expr ast.Expr) ast.Expr {
 			expr = &ast.CallExpr{Callee: expr, Args: args}
 		case token.DOT:
 			p.advance()
-			field, err := p.expect(token.IDENT)
-			if err != nil {
+			// Имя свойства/метода после точки может совпадать с ключевым словом
+			// (например, XDTO-объект с полем «To»/«По»): в позиции члена они —
+			// обычные идентификаторы, а не синтаксис языка (issue #117).
+			if p.cur.Type != token.IDENT && !token.IsKeyword(p.cur.Type) {
 				return expr
 			}
+			field := p.cur
+			p.advance()
 			expr = &ast.MemberExpr{Object: expr, Field: field}
 		case token.LBRACKET:
 			p.advance()

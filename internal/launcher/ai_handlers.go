@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ivantit66/onebase/internal/llm"
+	"github.com/ivantit66/onebase/internal/storage"
 )
 
 // starterLLMConfig — заготовка конфига для пустой базы: vision-распознавание на
@@ -99,8 +101,72 @@ function aiTest(){
     .catch(function(){m.textContent='Ошибка сети';m.style.color='#c00';});
 }
 </script>`, html.EscapeString(string(pretty)), b.ID, b.ID)
+
+	// Режим доступа ИИ-чата к данным (план 54). Управляет тем, кто и как
+	// обращается к данным базы через инструмент «выполнить_запрос».
+	scopeSection := fmt.Sprintf(`<div style="padding:0 16px 16px;border-top:1px solid #e2e8f0;margin-top:4px;padding-top:14px">
+  <h4 style="margin:0 0 6px;font-size:13px">Доступ ИИ-чата к данным</h4>
+  <div style="font-size:11px;color:#666;margin-bottom:8px">Кто и как обращается к данным базы через инструмент «выполнить_запрос». <b>admin_only</b> — только администраторы (по умолчанию); <b>rbac</b> — пользователи с флагом «Доступ ИИ-чата к данным», но источники запроса фильтруются по их правам чтения; <b>all</b> — флаг даёт доступ ко всем данным без проверки прав (осознанно).</div>
+  <select id="ai-scope" style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:3px;font-size:12px">%s</select>
+  <button onclick="aiScopeSave()" style="background:#16a34a;color:#fff;border:none;padding:5px 14px;border-radius:3px;cursor:pointer;font-size:12px;margin-left:6px">Сохранить режим</button>
+  <span id="ai-scope-msg" style="font-size:11px;margin-left:6px"></span>
+</div>
+<script>
+function aiScopeSave(){
+  var m=document.getElementById('ai-scope-msg');m.textContent='';
+  fetch('/bases/%s/configurator/admin/ai/datascope',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scope:document.getElementById('ai-scope').value})})
+    .then(function(r){return r.json()})
+    .then(function(d){if(d.ok){m.textContent='Сохранено';m.style.color='#16a34a';}else{m.textContent=(d.error||'Ошибка');m.style.color='#c00';}})
+    .catch(function(){m.textContent='Ошибка сети';m.style.color='#c00';});
+}
+</script>`, aiScopeOptions(db.GetAIDataScope(r.Context())), b.ID)
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(page))
+	w.Write([]byte(page + scopeSection))
+}
+
+// aiScopeOptions строит <option> режима доступа ИИ к данным с выбранным текущим.
+func aiScopeOptions(cur string) string {
+	opts := []struct{ val, label string }{
+		{storage.AIDataScopeAdminOnly, "admin_only — только администраторы"},
+		{storage.AIDataScopeRBAC, "rbac — по флагу, с проверкой прав на объекты"},
+		{storage.AIDataScopeAll, "all — по флагу, доступ ко всем данным"},
+	}
+	var sb strings.Builder
+	for _, o := range opts {
+		sel := ""
+		if o.val == cur {
+			sel = " selected"
+		}
+		sb.WriteString(fmt.Sprintf(`<option value="%s"%s>%s</option>`, o.val, sel, html.EscapeString(o.label)))
+	}
+	return sb.String()
+}
+
+// cfgAdminAIDataScope сохраняет режим доступа ИИ-чата к данным (admin_only|rbac|all).
+func (h *handler) cfgAdminAIDataScope(w http.ResponseWriter, r *http.Request) {
+	b, err := h.store.Get(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, 404, map[string]any{"error": "not found"})
+		return
+	}
+	var req struct {
+		Scope string `json:"scope"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]any{"error": "Некорректный JSON: " + err.Error()})
+		return
+	}
+	db, err := getAuthDB(r.Context(), b)
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := db.SaveAIDataScope(r.Context(), req.Scope); err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 // cfgAdminAISave валидирует и сохраняет конфиг ИИ-помощника.

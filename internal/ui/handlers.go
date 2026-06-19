@@ -244,7 +244,14 @@ func (s *Server) renderForbidden(w http.ResponseWriter, r *http.Request) {
 // (mirrors the IsAdmin defaulting used elsewhere). Admins pass via User.Has,
 // which returns true for IsAdmin.
 func (s *Server) can(r *http.Request, kind, entity, op string) bool {
-	u := auth.UserFromContext(r.Context())
+	return s.canCtx(r.Context(), kind, entity, op)
+}
+
+// canCtx — версия can для путей без *http.Request (ИИ-инструменты), берущая
+// пользователя из контекста. nil-пользователь (нет пользователей / открытый
+// деплой) проходит; админ проходит через User.Has.
+func (s *Server) canCtx(ctx context.Context, kind, entity, op string) bool {
+	u := auth.UserFromContext(ctx)
 	if u == nil {
 		return true
 	}

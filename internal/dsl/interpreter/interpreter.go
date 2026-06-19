@@ -1,6 +1,7 @@
 package interpreter
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -12,6 +13,13 @@ import (
 	"github.com/ivantit66/onebase/internal/dsl/token"
 	"github.com/shopspring/decimal"
 )
+
+// ErrDivisionByZero помечает ошибку деления на ноль. Доступна через
+// errors.Is(err, ErrDivisionByZero) по цепочке DSLError.Unwrap. Нужна, чтобы
+// контексты, где деление на ноль — это «неопределённое значение» (компоновка
+// отчётов: пустая ячейка, как в 1С), отличали его от настоящих runtime-ошибок;
+// при этом обычное исполнение DSL по-прежнему возбуждает явную ошибку.
+var ErrDivisionByZero = errors.New("деление на ноль")
 
 // dslStop — системная остановка (Error без Попытки, внутренние ошибки интерпретатора)
 type dslStop struct{ err error }
@@ -602,9 +610,11 @@ func (i *Interpreter) evalBinary(b *ast.BinaryExpr, e *env) any {
 	case token.SLASH:
 		ld, lok := toDecimal(l)
 		rd, rok := toDecimal(r)
-		// Деление на ноль — исключение (как в 1С), а не молчаливый nil.
+		// Деление на ноль — исключение (как в 1С), а не молчаливый nil. Err несёт
+		// сентинел ErrDivisionByZero, чтобы компоновка отчётов отличила его от
+		// настоящей runtime-ошибки (там это «неопределённое значение» → пустая ячейка).
 		if rok && rd.IsZero() && (lok || l == nil) {
-			panic(userError{Msg: "Деление на ноль", Line: b.Op.Line})
+			panic(userError{Msg: "Деление на ноль", Line: b.Op.Line, Err: ErrDivisionByZero})
 		}
 		if lok && rok {
 			return ld.Div(rd)

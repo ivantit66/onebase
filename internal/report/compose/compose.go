@@ -9,6 +9,8 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"github.com/ivantit66/onebase/internal/dsl/lexer"
+	"github.com/ivantit66/onebase/internal/dsl/token"
 	"github.com/ivantit66/onebase/internal/report"
 )
 
@@ -30,6 +32,32 @@ type Result struct {
 	Grand    map[string]any
 	RowCount int
 	Capped   bool
+	// Warnings — runtime-проблемы компоновки (ошибки исполнения вычисляемых
+	// показателей и условий оформления, циклы зависимостей). Дедуплицированы:
+	// одна и та же ошибка повторяется для каждой группы/итога. Пусто — всё ок.
+	Warnings []string
+}
+
+// warnCollector копит дедуплицированные предупреждения компоновки. Одно и то же
+// выражение вычисляется для каждой группы/подытога/итога — без дедупликации
+// предупреждение повторялось бы десятки раз. nil-приёмник безопасен (no-op).
+type warnCollector struct {
+	seen map[string]bool
+	msgs []string
+}
+
+func (w *warnCollector) add(msg string) {
+	if w == nil {
+		return
+	}
+	if w.seen == nil {
+		w.seen = map[string]bool{}
+	}
+	if w.seen[msg] {
+		return
+	}
+	w.seen[msg] = true
+	w.msgs = append(w.msgs, msg)
 }
 
 type Group struct {
@@ -59,8 +87,10 @@ func ComposeN(rows []Row, spec report.Composition, ev Evaluator, maxRows int) (*
 		res.Capped = true
 		res.RowCount = maxRows
 	}
-	res.Groups = buildGroups(rows, spec, 0, ev)
-	res.Grand = aggregate(rows, spec.Measures, ev)
+	wc := &warnCollector{}
+	res.Groups = buildGroups(rows, spec, 0, ev, wc)
+	res.Grand = aggregate(rows, spec.Measures, ev, wc)
+	res.Warnings = wc.msgs
 	return res, nil
 }
 
@@ -80,6 +110,9 @@ func alignRowKeys(rows []Row, spec report.Composition) []Row {
 	}
 	for _, g := range spec.Groupings {
 		add(g)
+	}
+	for _, c := range spec.Columns {
+		add(c)
 	}
 	for _, m := range spec.Measures {
 		add(m.Field)
@@ -120,7 +153,7 @@ func alignRowKeys(rows []Row, spec report.Composition) []Row {
 	return out
 }
 
-func buildGroups(rows []Row, spec report.Composition, level int, ev Evaluator) []*Group {
+func buildGroups(rows []Row, spec report.Composition, level int, ev Evaluator, wc *warnCollector) []*Group {
 	if level >= len(spec.Groupings) {
 		return nil
 	}
@@ -140,15 +173,22 @@ func buildGroups(rows []Row, spec report.Composition, level int, ev Evaluator) [
 			Field:     field,
 			Key:       k,
 			Count:     len(buckets[k]),
-			Subtotals: aggregate(buckets[k], spec.Measures, ev),
+			Subtotals: aggregate(buckets[k], spec.Measures, ev, wc),
 		}
-		// Условное оформление группы/подытога вычисляется по её подытогам —
-		// так убыточная группа подсвечивается целиком, без detail-строк.
-		gr.Styles = evalStyles(gr.Subtotals, spec, ev)
+		// Условное оформление группы/подытога вычисляется по её подытогам плюс
+		// собственному полю группировки (field→Key) — чтобы правило вида
+		// «Регион = "Юг"» подсвечивало и итоговую строку группы, а не только
+		// detail-строки (раньше итогу было доступно только множество мер).
+		styleRow := make(Row, len(gr.Subtotals)+1)
+		for k, v := range gr.Subtotals {
+			styleRow[k] = v
+		}
+		styleRow[field] = gr.Key
+		gr.Styles = evalStyles(styleRow, spec, ev, wc)
 		if level+1 < len(spec.Groupings) {
-			gr.Children = buildGroups(buckets[k], spec, level+1, ev)
+			gr.Children = buildGroups(buckets[k], spec, level+1, ev, wc)
 		} else if spec.Detail {
-			gr.Details = buildDetails(buckets[k], spec, ev)
+			gr.Details = buildDetails(buckets[k], spec, ev, wc)
 		}
 		groups = append(groups, gr)
 	}
@@ -158,7 +198,7 @@ func buildGroups(rows []Row, spec report.Composition, level int, ev Evaluator) [
 
 // evalStyles вычисляет условное оформление для строки значений (детальной или
 // подытога группы): первое сработавшее правило на целевое поле задаёт стиль.
-func evalStyles(row Row, spec report.Composition, ev Evaluator) map[string]report.CellStyle {
+func evalStyles(row Row, spec report.Composition, ev Evaluator, wc *warnCollector) map[string]report.CellStyle {
 	if len(spec.Conditional) == 0 || ev == nil {
 		return nil
 	}
@@ -168,7 +208,13 @@ func evalStyles(row Row, spec report.Composition, ev Evaluator) map[string]repor
 			continue // первое сработавшее правило на целевое поле
 		}
 		ok, err := ev.EvalBool(rule.When, row)
-		if err != nil || !ok {
+		if err != nil {
+			// Runtime-ошибка условия — это не «правило не сработало»: показываем
+			// её, а не молча гасим оформление (отличаем от обычного false).
+			wc.add(fmt.Sprintf("условие оформления «%s»: %v", rule.When, err))
+			continue
+		}
+		if !ok {
 			continue
 		}
 		if styles == nil {
@@ -179,10 +225,10 @@ func evalStyles(row Row, spec report.Composition, ev Evaluator) map[string]repor
 	return styles
 }
 
-func buildDetails(rows []Row, spec report.Composition, ev Evaluator) []DetailRow {
+func buildDetails(rows []Row, spec report.Composition, ev Evaluator, wc *warnCollector) []DetailRow {
 	out := make([]DetailRow, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, DetailRow{Values: r, Styles: evalStyles(r, spec, ev)})
+		out = append(out, DetailRow{Values: r, Styles: evalStyles(r, spec, ev, wc)})
 	}
 	sortDetails(out, spec)
 	return out
@@ -302,7 +348,30 @@ func normalizeGroupKey(v any) any {
 	return v
 }
 
-func aggregate(rows []Row, measures []report.Measure, ev Evaluator) map[string]any {
+// GroupByField сворачивает строки по одному произвольному полю и агрегирует
+// меры — для диаграмм, где ось категорий (Chart.Category) не совпадает с верхней
+// группировкой отчёта. Возвращает ключи в порядке появления и подытоги по ключу.
+// Строки выравниваются по spec (alignRowKeys) — поэтому field и поля мер
+// находятся регистронезависимо, как и в основном своде.
+func GroupByField(rows []Row, spec report.Composition, field string, ev Evaluator) (keys []any, subtotals map[any]map[string]any) {
+	rows = alignRowKeys(rows, spec)
+	buckets := map[any][]Row{}
+	for _, r := range rows {
+		k := normalizeGroupKey(r[field])
+		if _, ok := buckets[k]; !ok {
+			keys = append(keys, k)
+		}
+		buckets[k] = append(buckets[k], r)
+	}
+	subtotals = make(map[any]map[string]any, len(buckets))
+	for k, rs := range buckets {
+		// Предупреждения уже собраны основным проходом Compose — здесь nil-приёмник.
+		subtotals[k] = aggregate(rs, spec.Measures, ev, nil)
+	}
+	return keys, subtotals
+}
+
+func aggregate(rows []Row, measures []report.Measure, ev Evaluator, wc *warnCollector) map[string]any {
 	out := map[string]any{}
 	// Первый проход: обычные показатели (не вычисляемые).
 	for _, m := range measures {
@@ -311,30 +380,117 @@ func aggregate(rows []Row, measures []report.Measure, ev Evaluator) map[string]a
 		}
 		out[m.Field] = aggMeasure(rows, m)
 	}
-	// Второй проход: вычисляемые показатели по уже агрегированным значениям.
-	// Контракт порядка: Expr-показатели вычисляются в порядке объявления в measures.
-	// Если один Expr ссылается на результат другого Expr, зависимый обязан быть
-	// объявлен ПОЗЖЕ — только тогда его зависимость уже присутствует в out.
-	for _, m := range measures {
-		if m.Expr == "" {
-			continue
+	// Второй проход: вычисляемые показатели. Порядок определяется зависимостями
+	// (Expr, ссылающийся на другой Expr, вычисляется после него) — порядок
+	// объявления в YAML больше не критичен. Циклы разрываются с предупреждением.
+	order, cyclic := orderExprMeasures(measures)
+	if len(cyclic) > 0 {
+		names := make([]string, len(cyclic))
+		for i, idx := range cyclic {
+			names[i] = measures[idx].Field
 		}
+		wc.add("циклическая зависимость вычисляемых показателей: " + strings.Join(names, ", "))
+	}
+	for _, idx := range order {
+		m := measures[idx]
 		if ev == nil {
 			out[m.Field] = nil
 			continue
 		}
-		// ok=false означает неопределённое значение (например, деление на ноль) →
-		// пустая ячейка, как в 1С. Синтаксические ошибки выражения перехватываются
-		// заранее на этапе `onebase check`, поэтому ошибка здесь не является
-		// программной ошибкой и намеренно приводит к пустой ячейке (nil).
-		d, ok, _ := ev.EvalNum(m.Expr, out)
-		if ok {
+		d, ok, err := ev.EvalNum(m.Expr, out)
+		switch {
+		case err != nil:
+			// Runtime-ошибка (не синтаксис — тот ловит onebase check): показываем
+			// её и оставляем ячейку пустой, не выдавая за «неопределённое значение».
+			wc.add(fmt.Sprintf("показатель «%s»: %v", m.Field, err))
+			out[m.Field] = nil
+		case ok:
 			out[m.Field] = d
-		} else {
+		default:
+			// ok=false без ошибки — неопределённое значение (например деление на
+			// ноль) → пустая ячейка, как в 1С (без предупреждения).
 			out[m.Field] = nil
 		}
 	}
 	return out
+}
+
+// orderExprMeasures возвращает индексы вычисляемых (Expr) показателей в порядке,
+// при котором каждый идёт после тех Expr-показателей, на которые он ссылается
+// (топологическая сортировка, стабильная — при отсутствии зависимостей сохраняет
+// порядок объявления). cyclic — индексы показателей, оставшихся в цикле; они
+// добавляются в конец order в порядке объявления (вычислятся «как есть»).
+func orderExprMeasures(measures []report.Measure) (order []int, cyclic []int) {
+	// Имена приводим к нижнему регистру: интерпретатор разрешает идентификаторы
+	// регистронезависимо, поэтому и зависимости между Expr должны определяться так.
+	exprFields := map[string]bool{}
+	var idxs []int
+	for i, m := range measures {
+		if m.Expr != "" {
+			exprFields[strings.ToLower(m.Field)] = true
+			idxs = append(idxs, i)
+		}
+	}
+	if len(idxs) <= 1 {
+		return idxs, nil
+	}
+	deps := make(map[int]map[string]bool, len(idxs))
+	for _, i := range idxs {
+		deps[i] = exprIdentDeps(measures[i].Expr, exprFields, strings.ToLower(measures[i].Field))
+	}
+	resolved := map[string]bool{}
+	remaining := append([]int(nil), idxs...)
+	for len(remaining) > 0 {
+		var next []int
+		progressed := false
+		for _, i := range remaining {
+			ready := true
+			for d := range deps[i] {
+				if !resolved[d] {
+					ready = false
+					break
+				}
+			}
+			if ready {
+				order = append(order, i)
+				resolved[strings.ToLower(measures[i].Field)] = true
+				progressed = true
+			} else {
+				next = append(next, i)
+			}
+		}
+		if !progressed {
+			// Цикл: оставшиеся неразрешимы — выводим в порядке объявления.
+			order = append(order, next...)
+			return order, next
+		}
+		remaining = next
+	}
+	return order, nil
+}
+
+// exprIdentDeps возвращает множество имён ДРУГИХ вычисляемых показателей
+// (exprFields, ключи в нижнем регистре), на которые ссылается выражение expr.
+// Используем лексер DSL, чтобы брать идентификаторы по-токенно (а не подстрокой),
+// сравниваем регистронезависимо (как интерпретатор) и исключаем сам показатель
+// (self уже в нижнем регистре) — самоссылка не создаёт зависимости.
+func exprIdentDeps(expr string, exprFields map[string]bool, self string) map[string]bool {
+	deps := map[string]bool{}
+	lx := lexer.New(expr, "")
+	for {
+		t := lx.NextToken()
+		if t.Type == token.EOF {
+			break
+		}
+		if t.Type != token.IDENT {
+			continue
+		}
+		lit := strings.ToLower(t.Literal)
+		if lit != self && exprFields[lit] {
+			deps[lit] = true
+		}
+	}
+	return deps
 }
 
 func aggMeasure(rows []Row, m report.Measure) any {
@@ -399,6 +555,15 @@ func toDecimal(v any) (decimal.Decimal, bool) {
 		return decimal.NewFromFloat(x), true
 	case string:
 		d, err := decimal.NewFromString(x)
+		if err != nil {
+			return decimal.Zero, false
+		}
+		return d, true
+	case []byte:
+		// SQLite-драйвер может вернуть числовую колонку как []byte (как и для
+		// ключей группировки в normalizeGroupKey) — иначе значение молча
+		// выпало бы из сумм/средних/сортировки.
+		d, err := decimal.NewFromString(string(x))
 		if err != nil {
 			return decimal.Zero, false
 		}

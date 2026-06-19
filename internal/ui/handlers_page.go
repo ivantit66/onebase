@@ -170,6 +170,14 @@ func (s *Server) pageAction(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Действие — это КнопкаДействие, а не lifecycle-обработчик: запрещаем дёргать
+	// ПриФормировании напрямую (он отрабатывает при GET-формировании страницы),
+	// чтобы его побочные эффекты нельзя было вызвать в обход назначения.
+	if strings.EqualFold(action, "ПриФормировании") {
+		http.NotFound(w, r)
+		return
+	}
+
 	proc := s.reg.GetPageProcedure(pg.Name, action)
 	if proc == nil {
 		http.NotFound(w, r)

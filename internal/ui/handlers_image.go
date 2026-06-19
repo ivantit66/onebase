@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/ivantit66/onebase/internal/storage"
 )
 
 // imageUpload принимает картинку (multipart-поле "file") в контексте сущности,
@@ -48,8 +49,12 @@ func (s *Server) imageUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Тип определяем по СОДЕРЖИМОМУ файла, а не по Content-Type формы (он
 	// подделывается): читаем первые 512 байт для http.DetectContentType и
-	// «возвращаем» их в поток через MultiReader. Так image/svg+xml со скриптом и
-	// прочий не-растровый контент отсекаются ещё на загрузке.
+	// «возвращаем» их в поток через MultiReader. Это отсекает обычный SVG/HTML
+	// (он распознаётся как text/*), но НЕ является единственным барьером:
+	// GIF-полиглот (правильная сигнатура GIF89a + произвольный «хвост») всё ещё
+	// классифицируется как image/gif. Фактическую защиту от XSS даёт сторона
+	// отдачи imageServe — nosniff + честный Content-Type + sandbox-CSP, поэтому
+	// эти заголовки трогать нельзя.
 	head := make([]byte, 512)
 	n, _ := io.ReadFull(file, head)
 	head = head[:n]
@@ -60,7 +65,10 @@ func (s *Server) imageUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	body := io.MultiReader(bytes.NewReader(head), file)
 
-	b, err := s.store.PutBlob(r.Context(), mimeType, body, maxSize)
+	// Владелец бинарника = сущность, в контексте которой идёт загрузка. imageServe
+	// по нему проверяет право чтения при отдаче (защита от IDOR).
+	owner := storage.BlobOwner{Kind: string(entity.Kind), Entity: entity.Name}
+	b, err := s.store.PutBlob(r.Context(), mimeType, body, maxSize, owner)
 	if err != nil {
 		http.Error(w, s.errText(r, err), 500)
 		return
@@ -85,8 +93,27 @@ func (s *Server) imageServe(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rc.Close()
 
-	if b.Mime != "" {
+	// Авторизация (защита от IDOR): если у блоба есть владелец-сущность, отдаём
+	// только тем, у кого есть право чтения (или записи — чтобы превью сразу после
+	// загрузки работало у загрузчика). can() возвращает true для nil-пользователя,
+	// поэтому в открытом деплое без пользователей доступ остаётся свободным.
+	// Легаси-блобы без владельца уже защищены auth-middleware (аноним до сюда
+	// не доходит, если пользователи заведены) — отдельная проверка не нужна.
+	if b.OwnerEntity != "" {
+		if !s.can(r, b.OwnerKind, b.OwnerEntity, "read") && !s.can(r, b.OwnerKind, b.OwnerEntity, "write") {
+			http.Error(w, s.tr(s.resolveLang(r), "Нет доступа"), http.StatusForbidden)
+			return
+		}
+	}
+
+	// Content-Type отдаём как есть только для растровых типов; всё прочее
+	// (например text/html, сохранённый через СохранитьКартинку с произвольным
+	// mime) выдаём как application/octet-stream — вместе с nosniff и sandbox это
+	// исключает интерпретацию как HTML при прямом открытии /image/{id}.
+	if strings.HasPrefix(b.Mime, "image/") {
 		w.Header().Set("Content-Type", b.Mime)
+	} else {
+		w.Header().Set("Content-Type", "application/octet-stream")
 	}
 	if b.Size > 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(b.Size, 10))
@@ -101,9 +128,11 @@ func (s *Server) imageServe(w http.ResponseWriter, r *http.Request) {
 }
 
 // allowedImageMime определяет тип картинки по её первым байтам (server-side, без
-// доверия заголовку формы) и сообщает, разрешена ли она к загрузке. Только
-// настоящие растровые изображения: http.DetectContentType классифицирует SVG
-// как text/xml, поэтому image/svg+xml со скриптом сюда не проходит.
+// доверия заголовку формы) — первая линия фильтра загрузки. Отсекает обычный SVG
+// (распознаётся как text/xml) и HTML, но это НЕ гарантия безопасности: контент с
+// валидной растровой сигнатурой и произвольным «хвостом» (GIF-полиглот) пройдёт.
+// Защиту от XSS обеспечивает отдача imageServe (nosniff + sandbox-CSP), а не этот
+// фильтр — см. TestImageServe_SecurityHeaders.
 func allowedImageMime(head []byte) (string, bool) {
 	mime := http.DetectContentType(head)
 	if i := strings.IndexByte(mime, ';'); i >= 0 {

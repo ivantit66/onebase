@@ -1,6 +1,6 @@
 # План 56 — Техдолг, CI и наблюдаемость
 
-**Статус:** 🟡 Этапы 1, 2, 4 реализованы (2026-06-10, ветка `feature/ci-race-lint`); этапы 3 (RBAC вложений), 5 (slog+/metrics), 6 (onebase lint) — не начаты
+**Статус:** 🟡 Этапы 1, 2, 4 реализованы (2026-06-10, ветка `feature/ci-race-lint`); этап 3 (RBAC вложений) — 2026-06-19 (`fix/review-2day-followups`); `/metrics` есть (PR #19); slog-миграция и этап 6 (onebase lint) — не начаты
 
 > **Как реализовано.** Этап 1: CI гоняет `go test -race -coverprofile` на
 > ubuntu (первый улов — гонка Add/Wait в `locks_test.go`), coverage —

@@ -103,6 +103,13 @@ func (s *Server) attachmentDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 
+	// Авторизация (защита от IDOR): отдаём вложение только тем, у кого есть право
+	// чтения родителя (или записи — чтобы предпросмотр у загрузчика работал сразу).
+	if !s.can(r, att.OwnerKind, att.OwnerName, "read") && !s.can(r, att.OwnerKind, att.OwnerName, "write") {
+		http.Error(w, s.tr(s.resolveLang(r), "Нет доступа"), http.StatusForbidden)
+		return
+	}
+
 	w.Header().Set("Content-Type", att.MimeType)
 	w.Header().Set("Content-Disposition", contentDisposition(att.Filename))
 	http.ServeContent(w, r, att.Filename, att.UploadedAt, f)
@@ -113,6 +120,18 @@ func (s *Server) attachmentDelete(w http.ResponseWriter, r *http.Request) {
 	aid, err := uuid.Parse(chi.URLParam(r, "aid"))
 	if err != nil {
 		http.Error(w, "invalid id", 400)
+		return
+	}
+
+	// Авторизация (защита от IDOR): удалять вложение может только тот, у кого есть
+	// право записи на сущность-владельца. Метаданные грузим до удаления.
+	att, err := s.store.GetAttachment(r.Context(), aid)
+	if err != nil {
+		http.Error(w, s.tr(s.resolveLang(r), "Файл не найден"), 404)
+		return
+	}
+	if !s.can(r, att.OwnerKind, att.OwnerName, "write") {
+		http.Error(w, s.tr(s.resolveLang(r), "Нет доступа"), http.StatusForbidden)
 		return
 	}
 

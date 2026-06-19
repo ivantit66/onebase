@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/i18n/i18nerr"
@@ -24,6 +25,19 @@ type Blob struct {
 	ID   uuid.UUID
 	Mime string
 	Size int64
+	// Владелец — сущность, для которой загружен бинарник (kind+имя). Нужен
+	// авторизации отдачи (imageServe проверяет право чтения на владельца).
+	// Пустые значения = легаси-блоб или загрузка без контекста сущности (DSL
+	// СохранитьКартинку) — отдача таким требует лишь аутентификации.
+	OwnerKind   string
+	OwnerEntity string
+}
+
+// BlobOwner идентифицирует сущность-владельца бинарника для авторизации отдачи.
+// Нулевое значение (пустые поля) означает «без владельца».
+type BlobOwner struct {
+	Kind   string // "catalog"|"document"|... (как в auth.User.Has)
+	Entity string // имя сущности
 }
 
 // blobsDirName — подкаталог filesDir для дискового режима хранения.
@@ -43,18 +57,33 @@ func (db *DB) EnsureBlobTable(ctx context.Context) error {
 	if _, err := db.Exec(ctx, ddl); err != nil {
 		return fmt.Errorf("blobs: create _blobs: %w", err)
 	}
+	// Владелец бинарника (сущность) — для авторизации отдачи (IDOR). Добавляем
+	// через ALTER для уже существующих баз; пустые значения = легаси/без владельца.
+	if err := db.AddColumnIfMissing(ctx, "_blobs", "owner_kind", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("blobs: owner_kind: %w", err)
+	}
+	if err := db.AddColumnIfMissing(ctx, "_blobs", "owner_entity", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("blobs: owner_entity: %w", err)
+	}
+	// Время создания (unix-секунды) — для grace-окна сборки мусора: GC не трогает
+	// недавно загруженные блобы (могут быть ещё не привязаны к записи). 0 = легаси
+	// (создан до появления колонки) → считается «старым», подлежит сборке.
+	if err := db.AddColumnIfMissing(ctx, "_blobs", "created_at", "BIGINT NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("blobs: created_at: %w", err)
+	}
 	return nil
 }
 
 // PutBlob сохраняет бинарник и возвращает его метаданные с новым ID. Режим
 // (disk|db) берётся из ui.file_storage. Размер ограничен maxSizeBytes
 // (<=0 → 50 МБ по умолчанию).
-func (db *DB) PutBlob(ctx context.Context, mime string, r io.Reader, maxSizeBytes int64) (Blob, error) {
+func (db *DB) PutBlob(ctx context.Context, mime string, r io.Reader, maxSizeBytes int64, owner BlobOwner) (Blob, error) {
 	if maxSizeBytes <= 0 {
 		maxSizeBytes = 50 * 1024 * 1024
 	}
 	id := uuid.New()
 	d := db.dialect
+	createdAt := time.Now().Unix()
 	limited := io.LimitReader(r, maxSizeBytes+1)
 
 	if db.GetFileStorageMode(ctx) == FileStorageDB {
@@ -65,12 +94,12 @@ func (db *DB) PutBlob(ctx context.Context, mime string, r io.Reader, maxSizeByte
 		if int64(len(data)) > maxSizeBytes {
 			return Blob{}, i18nerr.Errorf("файл превышает максимальный размер %d МБ", maxSizeBytes/(1024*1024))
 		}
-		q := fmt.Sprintf(`INSERT INTO _blobs (id, mime, size, data) VALUES (%s,%s,%s,%s)`,
-			d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4))
-		if _, err := db.Exec(ctx, q, id.String(), mime, int64(len(data)), data); err != nil {
+		q := fmt.Sprintf(`INSERT INTO _blobs (id, mime, size, data, owner_kind, owner_entity, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)`,
+			d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4), d.Placeholder(5), d.Placeholder(6), d.Placeholder(7))
+		if _, err := db.Exec(ctx, q, id.String(), mime, int64(len(data)), data, owner.Kind, owner.Entity, createdAt); err != nil {
 			return Blob{}, err
 		}
-		return Blob{ID: id, Mime: mime, Size: int64(len(data))}, nil
+		return Blob{ID: id, Mime: mime, Size: int64(len(data)), OwnerKind: owner.Kind, OwnerEntity: owner.Entity}, nil
 	}
 
 	// Дисковый режим: файл на диске, в _blobs только метаданные.
@@ -93,13 +122,13 @@ func (db *DB) PutBlob(ctx context.Context, mime string, r io.Reader, maxSizeByte
 		os.Remove(fp)
 		return Blob{}, i18nerr.Errorf("файл превышает максимальный размер %d МБ", maxSizeBytes/(1024*1024))
 	}
-	q := fmt.Sprintf(`INSERT INTO _blobs (id, mime, size) VALUES (%s,%s,%s)`,
-		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3))
-	if _, err := db.Exec(ctx, q, id.String(), mime, n); err != nil {
+	q := fmt.Sprintf(`INSERT INTO _blobs (id, mime, size, owner_kind, owner_entity, created_at) VALUES (%s,%s,%s,%s,%s,%s)`,
+		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4), d.Placeholder(5), d.Placeholder(6))
+	if _, err := db.Exec(ctx, q, id.String(), mime, n, owner.Kind, owner.Entity, createdAt); err != nil {
 		os.Remove(fp)
 		return Blob{}, err
 	}
-	return Blob{ID: id, Mime: mime, Size: n}, nil
+	return Blob{ID: id, Mime: mime, Size: n, OwnerKind: owner.Kind, OwnerEntity: owner.Entity}, nil
 }
 
 // OpenBlob возвращает метаданные и читателя содержимого бинарника. Вызывающий
@@ -109,13 +138,14 @@ func (db *DB) OpenBlob(ctx context.Context, id uuid.UUID) (Blob, io.ReadCloser, 
 	var mime string
 	var size int64
 	var data []byte
+	var ownerKind, ownerEntity string
 	err := db.QueryRow(ctx,
-		fmt.Sprintf(`SELECT mime, size, data FROM _blobs WHERE id=%s`, d.Placeholder(1)),
-		id.String()).Scan(&mime, &size, &data)
+		fmt.Sprintf(`SELECT mime, size, data, owner_kind, owner_entity FROM _blobs WHERE id=%s`, d.Placeholder(1)),
+		id.String()).Scan(&mime, &size, &data, &ownerKind, &ownerEntity)
 	if err != nil {
 		return Blob{}, nil, err
 	}
-	b := Blob{ID: id, Mime: mime, Size: size}
+	b := Blob{ID: id, Mime: mime, Size: size, OwnerKind: ownerKind, OwnerEntity: ownerEntity}
 	if len(data) > 0 {
 		return b, io.NopCloser(bytes.NewReader(data)), nil
 	}

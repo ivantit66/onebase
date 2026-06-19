@@ -153,6 +153,21 @@ func LookupIdent(ident string) Type {
 	return IDENT
 }
 
+// keywordTypes — множество типов-ключевых слов, построенное из карты keywords.
+// Самоподдерживается: любое слово, добавленное в keywords, попадает сюда.
+var keywordTypes = func() map[Type]bool {
+	m := make(map[Type]bool, len(keywords))
+	for _, t := range keywords {
+		m[t] = true
+	}
+	return m
+}()
+
+// IsKeyword сообщает, является ли тип зарезервированным ключевым словом. Нужно
+// для «контекстных» позиций (имя свойства/метода после точки), где ключевое
+// слово допустимо как обычный идентификатор.
+func IsKeyword(t Type) bool { return keywordTypes[t] }
+
 func (t Type) String() string {
 	switch t {
 	case ILLEGAL:
