@@ -37,8 +37,9 @@ func TestConfigurator_BootstrapWired(t *testing.T) {
 	if !strings.Contains(out, "T(") {
 		t.Error("нет рантайм-хелпера T()")
 	}
-	// Чтение данных идёт из __cfg, а не из серверного литерала.
-	if !strings.Contains(out, "window.__cfg.entityNames") {
+	// Чтение данных идёт из __cfg, а не из серверного литерала. Главный скрипт
+	// вынесен в /static/configurator.js (план 55 фаза 2b-2) — ищем там.
+	if !strings.Contains(configuratorJS(t), "window.__cfg.entityNames") {
 		t.Error("_cfgEntityNames не читает window.__cfg.entityNames")
 	}
 }

@@ -144,3 +144,30 @@ func TestConfigurator_CSSExternalized(t *testing.T) {
 		t.Error("инлайн-CSS всё ещё в рендере — должен быть в файле")
 	}
 }
+
+// TestConfigurator_JSExternalized: основной JS вынесен в /static/configurator.js —
+// в HTML присутствует <script src>, тело главного скрипта (напр. функция
+// cfgNewObj) ушло из рендера в файл, а bootstrap-<script> (window.__cfg) идёт
+// СТРОГО РАНЬШЕ подключения файла, чтобы данные были доступны при его загрузке
+// (план 55 фаза 2b-2).
+func TestConfigurator_JSExternalized(t *testing.T) {
+	var buf bytes.Buffer
+	if err := cfgTmpl.ExecuteTemplate(&buf, "cfg-main", richCfgData("tree")); err != nil {
+		t.Fatalf("ExecuteTemplate cfg-main: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `src="/static/configurator.js"`) {
+		t.Error("нет <script src> на /static/configurator.js")
+	}
+	if strings.Contains(out, "function cfgNewObj(") {
+		t.Error("инлайн-JS всё ещё в рендере — должен быть в файле")
+	}
+	iBoot := strings.Index(out, "window.__cfg")
+	iSrc := strings.Index(out, `src="/static/configurator.js"`)
+	if iBoot < 0 {
+		t.Fatal("нет bootstrap window.__cfg в рендере")
+	}
+	if !(iBoot < iSrc) {
+		t.Errorf("bootstrap window.__cfg (%d) должен идти раньше <script src> (%d)", iBoot, iSrc)
+	}
+}
