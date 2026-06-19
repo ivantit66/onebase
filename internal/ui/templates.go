@@ -131,7 +131,7 @@ var tmpl = template.Must(template.New("root").Funcs(template.FuncMap{
 		}
 		return template.JS(b)
 	},
-}).Parse(tplHead + tplNav + tplIndex + tplList + tplForm + tplRegister + tplReport + tplProcessor + tplAbout + tplDeleteMarked + tplInfoReg + tplConstants + tplHistory + tplJournal + tplScheduled + tplAccountReg + tplQueryBuilder + tplAllFunctions + tplQueryConsole + tplCodeConsole))
+}).Parse(tplHead + tplNav + tplIndex + tplList + tplForm + tplRegister + tplReport + tplProcessor + tplAgentSettings + tplPOS + tplAbout + tplDeleteMarked + tplInfoReg + tplConstants + tplHistory + tplJournal + tplScheduled + tplAccountReg + tplQueryBuilder + tplAllFunctions + tplQueryConsole + tplCodeConsole))
 
 const tplHead = `
 {{define "head"}}<!DOCTYPE html>
@@ -263,6 +263,37 @@ body{padding-bottom:32px}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })();
 </script>
+<script>
+// onebaseDevice — тонкий мост браузер→локальный device-agent кассира.
+// Сервер onebase к агенту не ходит (агент за NAT на машине кассира); ходит
+// сам браузер кассира — он на той же машине, что и агент. Адрес и токен агента
+// per-машина, поэтому живут в localStorage (см. «Настройки агента»).
+window.onebaseDevice={
+  get base(){return (localStorage.getItem('obAgentURL')||'http://127.0.0.1:8765').replace(/\/+$/,'');},
+  get token(){return localStorage.getItem('obAgentToken')||'';},
+  async call(path,body){
+    const r=await fetch(this.base+path,{method:'POST',headers:{'Content-Type':'application/json','X-Agent-Token':this.token},body:JSON.stringify(body||{})});
+    let d={};try{d=await r.json();}catch(e){}
+    if(!r.ok)throw new Error(d.error||('HTTP '+r.status));
+    return d;
+  },
+  health(){return fetch(this.base+'/health').then(function(r){return r.json();});},
+  printReceipt(driver,params,receipt){return this.call('/print',{driver,params,receipt});},
+  drawer(driver,params){return this.call('/drawer',{driver,params});},
+  display(driver,params,lines){return this.call('/display',{driver,params,lines});},
+  weight(driver,params){return this.call('/weight',{driver,params});},
+  pay(driver,params,amount){return this.call('/pay',{driver,params,amount});},
+  fiscal(driver,params,receipt){return this.call('/fiscal',{driver,params,receipt});},
+  // events — SSE-поток сканера ШК в форму. EventSource не шлёт заголовки,
+  // поэтому токен и параметры устройства передаются строкой запроса.
+  events(driver,params,onCode){
+    const q=new URLSearchParams(Object.assign({driver:driver,token:this.token},params||{}));
+    const es=new EventSource(this.base+'/events?'+q.toString());
+    es.onmessage=function(e){onCode(e.data,es);};
+    return es;
+  }
+};
+</script>
 </head><body>
 {{end}}
 `
@@ -282,6 +313,8 @@ const tplNav = `
       <a href="/ui/admin/scheduled">Регламентные задания</a>
       <a href="/ui/delete-marked">Удалить помеченные</a>
       <a href="/ui/admin/cleanup">Очистка регистров</a>
+      <a href="/ui/pos">Рабочее место кассира (РМК)</a>
+      <a href="/ui/settings/agent">Настройки агента оборудования</a>
       {{if .IsAdmin}}<a href="/ui/all-functions">Все функции</a>{{end}}
       {{if .IsAdmin}}<div class="sys-sub"><a href="#" onclick="event.preventDefault()">Инструменты разработчика &#9654;</a>
       <div class="sys-submenu">
@@ -1054,6 +1087,191 @@ const tplProcessor = `
 {{end}}
 </div>
 {{end}}
+</main></div></body></html>
+{{end}}
+`
+
+const tplAgentSettings = `
+{{define "page-agent-settings"}}
+{{template "head" .}}{{template "nav" .}}
+<main>
+<h2>Настройки агента оборудования</h2>
+<div class="card" style="max-width:560px">
+  <p style="color:#64748b;font-size:14px;margin-bottom:16px">Адрес и токен локального <b>device-agent</b> на этой машине кассира (<code>onebase device-agent</code>). Хранятся в браузере (localStorage) — у каждого рабочего места свои, на сервер не отправляются.</p>
+  <div class="form-group">
+    <label>Адрес агента</label>
+    <input type="text" id="ag-url" placeholder="http://127.0.0.1:8765">
+  </div>
+  <div class="form-group">
+    <label>Токен (X-Agent-Token)</label>
+    <input type="text" id="ag-token" placeholder="оставьте пустым, если агент запущен без токена">
+  </div>
+  <div style="display:flex;gap:10px;align-items:center">
+    <button class="btn btn-primary" type="button" id="ag-save">Сохранить</button>
+    <button class="btn btn-secondary" type="button" id="ag-check">Проверить связь</button>
+    <span id="ag-status" style="font-size:13px"></span>
+  </div>
+</div>
+<script>
+(function(){
+  var url=document.getElementById('ag-url'),tok=document.getElementById('ag-token'),st=document.getElementById('ag-status');
+  url.value=localStorage.getItem('obAgentURL')||'';
+  tok.value=localStorage.getItem('obAgentToken')||'';
+  function apply(){localStorage.setItem('obAgentURL',url.value.trim());localStorage.setItem('obAgentToken',tok.value.trim());}
+  document.getElementById('ag-save').addEventListener('click',function(){apply();st.style.color='#16a34a';st.textContent='Сохранено';});
+  document.getElementById('ag-check').addEventListener('click',function(){
+    apply();st.style.color='#64748b';st.textContent='Проверяю…';
+    onebaseDevice.health().then(function(d){
+      st.style.color='#16a34a';st.textContent='Связь есть. Драйверы: '+((d.drivers||[]).join(', ')||'—');
+    }).catch(function(e){st.style.color='#dc2626';st.textContent='Нет связи: '+e.message+' (агент запущен?)';});
+  });
+})();
+</script>
+</main></div></body></html>
+{{end}}
+`
+
+const tplPOS = `
+{{define "page-pos"}}
+{{template "head" .}}{{template "nav" .}}
+<main>
+<h2>Рабочее место кассира</h2>
+<p style="color:#64748b;font-size:13px;margin:-12px 0 16px">Команды идут из браузера в <b>локальный агент</b> этой машины. Адрес/токен — в <a href="/ui/settings/agent">настройках агента</a>. Если связи нет, проверьте, что запущен <code>onebase device-agent</code>.</p>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;max-width:1000px">
+
+  <div class="card">
+    <h3 style="margin-top:0">Чек</h3>
+    <div class="form-group"><label>Товар</label><input type="text" id="pos-good" value="Товар"></div>
+    <div style="display:flex;gap:10px">
+      <div class="form-group" style="flex:1"><label>Кол-во</label><input type="number" id="pos-qty" value="1"></div>
+      <div class="form-group" style="flex:1"><label>Цена</label><input type="number" id="pos-price" value="100"></div>
+    </div>
+    <div class="form-group"><label>Оплата</label><input type="text" id="pos-pay" value="Наличные"></div>
+    <div class="form-group"><label>Касса: драйвер / порт</label>
+      <div style="display:flex;gap:8px"><input type="text" id="pos-prn-drv" value="escpos_tcp" style="flex:1"><input type="text" id="pos-prn-port" placeholder="127.0.0.1:9100" style="flex:1"></div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-primary btn-sm" type="button" id="pos-print">Напечатать чек</button>
+      <button class="btn btn-secondary btn-sm" type="button" id="pos-drawer">Открыть ящик</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Фискальный чек (ККТ)</h3>
+    <p style="color:#64748b;font-size:12px;margin-bottom:12px">Использует данные блока «Чек». Ставка НДС — 20%, признак — товар (демо).</p>
+    <div class="form-group"><label>ККТ: драйвер / адрес сервиса</label>
+      <div style="display:flex;gap:8px"><input type="text" id="pos-kkt-drv" value="atol_kkt" style="flex:1"><input type="text" id="pos-kkt-port" placeholder="127.0.0.1:16732" style="flex:1"></div>
+    </div>
+    <button class="btn btn-post btn-sm" type="button" id="pos-fiscal">Пробить фискальный чек</button>
+    <div id="pos-fiscal-res" style="font-size:12px;color:#475569;margin-top:10px;font-family:monospace"></div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Весы</h3>
+    <div class="form-group"><label>Драйвер / порт</label>
+      <div style="display:flex;gap:8px"><input type="text" id="pos-scl-drv" value="scale_tcp" style="flex:1"><input type="text" id="pos-scl-port" placeholder="127.0.0.1:5001" style="flex:1"></div>
+    </div>
+    <button class="btn btn-primary btn-sm" type="button" id="pos-weight">Получить вес</button>
+    <span id="pos-weight-res" style="font-size:14px;font-weight:600;margin-left:10px"></span>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Эквайринг</h3>
+    <div class="form-group"><label>Драйвер / порт</label>
+      <div style="display:flex;gap:8px"><input type="text" id="pos-pay-drv" value="acquiring_tcp" style="flex:1"><input type="text" id="pos-pay-port" placeholder="127.0.0.1:5002" style="flex:1"></div>
+    </div>
+    <div class="form-group"><label>Сумма</label><input type="number" id="pos-pay-sum" value="100"></div>
+    <button class="btn btn-primary btn-sm" type="button" id="pos-pay">Оплатить картой</button>
+    <div id="pos-pay-res" style="font-size:12px;color:#475569;margin-top:10px;font-family:monospace"></div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Сканер ШК</h3>
+    <div class="form-group"><label>Драйвер / порт</label>
+      <div style="display:flex;gap:8px"><input type="text" id="pos-scan-drv" value="scanner_tcp" style="flex:1"><input type="text" id="pos-scan-port" placeholder="127.0.0.1:5003" style="flex:1"></div>
+    </div>
+    <div class="form-group"><label>Штрихкод (последний)</label><input type="text" id="pos-barcode" placeholder="код появится при сканировании"></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-sm" type="button" id="pos-scan-on">Подключить сканер</button>
+      <button class="btn btn-cancel btn-sm" type="button" id="pos-scan-off" disabled>Отключить</button>
+    </div>
+  </div>
+
+</div>
+
+<div class="card" style="max-width:1000px;margin-top:16px">
+  <h3 style="margin-top:0">Журнал операций</h3>
+  <div id="pos-log" style="font-family:Consolas,monospace;font-size:12px;color:#334155;max-height:180px;overflow-y:auto"><span style="color:#94a3b8">пусто</span></div>
+</div>
+
+<script>
+(function(){
+  function el(id){return document.getElementById(id);}
+  function v(id){var e=el(id);return e?e.value.trim():'';}
+  // Сохраняем введённые значения в localStorage, чтобы пережили перезагрузку.
+  ['pos-good','pos-qty','pos-price','pos-pay','pos-prn-drv','pos-prn-port','pos-kkt-drv','pos-kkt-port','pos-scl-drv','pos-scl-port','pos-pay-drv','pos-pay-port','pos-pay-sum','pos-scan-drv','pos-scan-port'].forEach(function(id){
+    var saved=localStorage.getItem('ob:'+id);if(saved!==null&&el(id))el(id).value=saved;
+    if(el(id))el(id).addEventListener('change',function(){localStorage.setItem('ob:'+id,el(id).value);});
+  });
+  var logBox=el('pos-log'),logEmpty=true;
+  function log(msg,ok){
+    if(logEmpty){logBox.innerHTML='';logEmpty=false;}
+    var t=new Date().toLocaleTimeString();
+    var line=document.createElement('div');
+    line.style.cssText='padding:3px 0;border-bottom:1px solid #f1f5f9;color:'+(ok===false?'#dc2626':(ok?'#16a34a':'#334155'));
+    line.textContent='['+t+'] '+msg;
+    logBox.appendChild(line);logBox.scrollTop=logBox.scrollHeight;
+  }
+  function port(id){var p=v(id);return p?{'порт':p}:{};}
+  function num(id){return parseFloat(v(id))||0;}
+  function receipt(){
+    var qty=num('pos-qty')||1,price=num('pos-price'),sum=qty*price;
+    return {header:['РМК onebase'],items:[{name:v('pos-good'),qty:qty,price:price,sum:sum}],total:sum,payment:v('pos-pay'),footer:['Спасибо за покупку!']};
+  }
+  el('pos-print').addEventListener('click',function(){
+    onebaseDevice.printReceipt(v('pos-prn-drv'),port('pos-prn-port'),receipt())
+      .then(function(){log('Чек напечатан: '+v('pos-good'),true);})
+      .catch(function(e){log('Печать: '+e.message,false);});
+  });
+  el('pos-drawer').addEventListener('click',function(){
+    onebaseDevice.drawer(v('pos-prn-drv'),port('pos-prn-port'))
+      .then(function(){log('Денежный ящик открыт',true);})
+      .catch(function(e){log('Ящик: '+e.message,false);});
+  });
+  el('pos-fiscal').addEventListener('click',function(){
+    var qty=num('pos-qty')||1,price=num('pos-price'),sum=qty*price;
+    var pay=v('pos-pay').toLowerCase().indexOf('карт')>=0?'безналичные':'наличные';
+    var rec={type:'приход',taxation:'осн',items:[{name:v('pos-good'),qty:qty,price:price,sum:sum,vat:'ндс20',itemType:'товар'}],payments:[{type:pay,sum:sum}]};
+    onebaseDevice.fiscal(v('pos-kkt-drv'),port('pos-kkt-port'),rec)
+      .then(function(d){el('pos-fiscal-res').textContent='ФД '+d.fd+', ФП '+d.fp+', ФН '+d.fn;log('Чек пробит: ФД '+d.fd,true);})
+      .catch(function(e){el('pos-fiscal-res').textContent='';log('Фискализация: '+e.message,false);});
+  });
+  el('pos-weight').addEventListener('click',function(){
+    onebaseDevice.weight(v('pos-scl-drv'),port('pos-scl-port'))
+      .then(function(d){el('pos-weight-res').textContent=d.weight+' кг';log('Вес: '+d.weight+' кг',true);})
+      .catch(function(e){el('pos-weight-res').textContent='';log('Весы: '+e.message,false);});
+  });
+  el('pos-pay').addEventListener('click',function(){
+    onebaseDevice.pay(v('pos-pay-drv'),port('pos-pay-port'),num('pos-pay-sum'))
+      .then(function(d){el('pos-pay-res').textContent=(d.approved?'Одобрено':'Отказ')+(d.rrn?' RRN '+d.rrn:'')+(d.card?' '+d.card:'');log('Оплата: '+(d.approved?'одобрено':'отказ'),d.approved);})
+      .catch(function(e){el('pos-pay-res').textContent='';log('Эквайринг: '+e.message,false);});
+  });
+  var scannerES=null;
+  el('pos-scan-on').addEventListener('click',function(){
+    if(scannerES)return;
+    try{
+      scannerES=onebaseDevice.events(v('pos-scan-drv'),port('pos-scan-port'),function(code){el('pos-barcode').value=code;log('Скан: '+code,true);});
+      scannerES.onerror=function(){log('Сканер: соединение потеряно',false);};
+      el('pos-scan-on').disabled=true;el('pos-scan-off').disabled=false;log('Сканер подключён',true);
+    }catch(e){log('Сканер: '+e.message,false);}
+  });
+  el('pos-scan-off').addEventListener('click',function(){
+    if(scannerES){scannerES.close();scannerES=null;}
+    el('pos-scan-on').disabled=false;el('pos-scan-off').disabled=true;log('Сканер отключён');
+  });
+})();
+</script>
 </main></div></body></html>
 {{end}}
 `

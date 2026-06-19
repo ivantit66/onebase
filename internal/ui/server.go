@@ -157,6 +157,10 @@ func (s *Server) Mount(r chi.Router) {
 	// Journals
 	r.Get("/ui/journal/{name}", s.journalList)
 
+	// Оборудование кассира (мост браузер→локальный device-agent)
+	r.Get("/ui/pos", s.posPage)
+	r.Get("/ui/settings/agent", s.agentSettings)
+
 	// About
 	r.Get("/ui/about", s.about)
 
