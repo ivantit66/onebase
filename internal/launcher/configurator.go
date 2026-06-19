@@ -1586,7 +1586,7 @@ func applyFieldEdits(ent *saveEntity, fields []saveField, tpFields map[string][]
 	}
 }
 
-func saveEntityFieldsToFile(dir, entityName string, fields []saveField, tpFields map[string][]saveField, posting *bool, hierarchical *bool, basedOn *[]string, objTitles map[string]string) error {
+func saveEntityFieldsToFile(dir, entityName string, fields []saveField, tpFields map[string][]saveField, posting *bool, hierarchical *bool, basedOn *[]string, objTitles *map[string]string) error {
 	filePath, err := findEntityFilePath(dir, entityName)
 	if err != nil {
 		return err
@@ -1600,7 +1600,9 @@ func saveEntityFieldsToFile(dir, entityName string, fields []saveField, tpFields
 		return err
 	}
 	applyFieldEdits(&ent, fields, tpFields, posting, hierarchical, basedOn)
-	ent.Titles = objTitles
+	if objTitles != nil {
+		ent.Titles = *objTitles
+	}
 	out, err := yaml.Marshal(&ent)
 	if err != nil {
 		return err
@@ -1608,7 +1610,7 @@ func saveEntityFieldsToFile(dir, entityName string, fields []saveField, tpFields
 	return os.WriteFile(filePath, out, 0o644)
 }
 
-func (h *handler) saveEntityFieldsToDB(ctx context.Context, b *Base, entityName string, fields []saveField, tpFields map[string][]saveField, posting *bool, hierarchical *bool, basedOn *[]string, objTitles map[string]string) error {
+func (h *handler) saveEntityFieldsToDB(ctx context.Context, b *Base, entityName string, fields []saveField, tpFields map[string][]saveField, posting *bool, hierarchical *bool, basedOn *[]string, objTitles *map[string]string) error {
 	db, err := OpenDB(ctx, b)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -1646,7 +1648,9 @@ func (h *handler) saveEntityFieldsToDB(ctx context.Context, b *Base, entityName 
 	}
 
 	applyFieldEdits(&ent, fields, tpFields, posting, hierarchical, basedOn)
-	ent.Titles = objTitles
+	if objTitles != nil {
+		ent.Titles = *objTitles
+	}
 	out, err := yaml.Marshal(&ent)
 	if err != nil {
 		return err
@@ -2134,7 +2138,11 @@ func (h *handler) configuratorSaveFields(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	objTitles := parseMapForm(r, "titles")
+	var objTitles *map[string]string
+	if formHasMapField(r, "titles") {
+		tm := parseMapForm(r, "titles")
+		objTitles = &tm
+	}
 
 	var saveErr error
 	if b.ConfigSource == "database" {
@@ -2797,19 +2805,11 @@ func (h *handler) configuratorSaveReport(w http.ResponseWriter, r *http.Request)
 		})
 	}
 
-	// Переводы объекта: вычисляем до updateReportFile — нужен sentinel hasTitlesBlock,
-	// чтобы отличить «форма не имела блока переводов» (AvailableLangs пуст) от
+	// Переводы объекта: вычисляем до updateReportFile — нужен гейт, чтобы
+	// отличить «форма не имела блока переводов» (AvailableLangs пуст) от
 	// «пользователь очистил все переводы». Только во втором случае ключ titles: удаляется.
-	var (
-		newTitles      map[string]string
-		hasTitlesBlock bool
-	)
-	for k := range r.Form {
-		if strings.HasPrefix(k, "titles.") {
-			hasTitlesBlock = true
-			break
-		}
-	}
+	var newTitles map[string]string
+	hasTitlesBlock := formHasMapField(r, "titles")
 	if hasTitlesBlock {
 		newTitles = parseMapForm(r, "titles")
 	}

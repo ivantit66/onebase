@@ -134,7 +134,9 @@ fields:
 	form.Set("entity_kind", "Справочник")
 	form.Set("field.0.name", "Код")
 	form.Set("field.0.type", "string")
-	// titles.* НЕ отправляем — пользователь очистил все переводы объекта
+	// UI при очистке поля шлёт ключ titles.en с пустым значением —
+	// гейт formHasMapField срабатывает, parseMapForm возвращает nil (пусто).
+	form.Set("titles.en", "")
 
 	rec := postCfgRv(t, "test", "/bases/test/configurator/fields", form, h.configuratorSaveFields)
 	if rec.Code != http.StatusOK {
