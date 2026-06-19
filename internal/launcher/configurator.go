@@ -350,6 +350,13 @@ type configuratorData struct {
 	// LayoutMeta — JSON для панели «Данные» редактора макетов (план 64, этап 5b):
 	// метаданные сущностей (реквизиты/ТЧ) + константы + карта «макет → документ».
 	LayoutMeta template.JS
+	// Bootstrap — JSON-блоб данных для window.__cfg (план 55, фаза 2b-1): имена
+	// сущностей/перечислений, выбор дерева, флаги сохранения, база/порт/сессия.
+	// Главный скрипт читает значения отсюда вместо серверной интерполяции.
+	Bootstrap template.JS
+	// I18n — JSON-словарь переводов для window.__cfgI18n (ключ→перевод языка
+	// рендера; null для базового ru). Главный скрипт переводит через T(k).
+	I18n template.JS
 	// converter
 	ConvertSrcDir  string
 	ConvertResult  string
@@ -955,6 +962,49 @@ func (h *handler) loadCfgData(ctx context.Context, b *Base, tab string, lang ...
 	applyTreeOrder(data, h.loadTreeOrderFor(ctx, b))
 
 	return data
+}
+
+// populateBootstrap собирает JSON-блоб window.__cfg и словарь window.__cfgI18n
+// из уже заполненных полей configuratorData. Вынесено отдельно, чтобы тест мог
+// эмулировать продакшен-заполнение. lang — язык рендера (как в renderCfg).
+func populateBootstrap(data *configuratorData, lang string) {
+	boot := map[string]any{
+		"entityNames":    data.AllEntityNames,
+		"enumNames":      data.AllEnumNames,
+		"selectedTreeId": data.SelectedTreeID,
+		"fieldsSaved":    data.FieldsSavedEntity,
+		"moduleSaved":    data.ModuleSavedEntity,
+		"baseId":         baseIDOf(data.Base),
+		"basePort":       basePortOf(data.Base),
+		"hasSession":     data.SessionToken != "",
+		"groupOrder":     data.GroupOrder,
+	}
+	if bb, err := json.Marshal(boot); err == nil {
+		data.Bootstrap = template.JS(bb)
+	}
+	var dict map[string]string
+	if launcherBundle != nil {
+		dict = launcherBundle.Dict(lang)
+	}
+	if ib, err := json.Marshal(dict); err == nil {
+		data.I18n = template.JS(ib) // nil-словарь → "null"; в шаблоне `|| {}`
+	}
+}
+
+// baseIDOf/basePortOf — безопасные геттеры (data.Base может быть nil в тестах
+// минимального рендера, например renderCfgFoot).
+func baseIDOf(b *Base) string {
+	if b == nil {
+		return ""
+	}
+	return b.ID
+}
+
+func basePortOf(b *Base) int {
+	if b == nil {
+		return 0
+	}
+	return b.Port
 }
 
 // listManagedFormsFromDBNoRequest — версия для loadCfgData, где нет
@@ -2027,6 +2077,12 @@ func renderCfg(w http.ResponseWriter, r *http.Request, data *configuratorData) {
 		})
 		return
 	}
+	// Bootstrap-блоб window.__cfg + словарь window.__cfgI18n собираем здесь, а не
+	// в loadCfgData: флаги сохранения (FieldsSavedEntity/ModuleSavedEntity) и
+	// SelectedTreeID проставляются вызывающими ПОСЛЕ loadCfgData, поэтому их
+	// финальные значения известны лишь к моменту рендера (план 55, фаза 2b-1).
+	populateBootstrap(data, data.Lang)
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := cfgTmpl.ExecuteTemplate(w, "cfg-main", data); err != nil {
 		http.Error(w, err.Error(), 500)

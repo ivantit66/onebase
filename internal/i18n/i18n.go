@@ -131,6 +131,20 @@ func (b *Bundle) Available() []Lang {
 	return b.sorted
 }
 
+// Dict returns a copy of the translation dictionary for lang (key→translation),
+// or nil if the language has no dictionary loaded. The base language (ru) has
+// no dictionary — callers fall back to the key itself (front-end T(k)=dict[k]||k).
+func (b *Bundle) Dict(lang string) map[string]string {
+	if d, ok := b.dicts[lang]; ok {
+		out := make(map[string]string, len(d))
+		for k, v := range d {
+			out[k] = v
+		}
+		return out
+	}
+	return nil
+}
+
 // Resolve determines the effective language from the priority chain:
 // user preference → base default → Accept-Language header → "ru".
 func Resolve(userLang, baseLang, acceptHeader string, b *Bundle) string {

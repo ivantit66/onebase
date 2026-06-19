@@ -146,7 +146,7 @@ func TestLayoutEditor_UXImprovements(t *testing.T) {
 		"function ldDeselect",   // закрытие панели свойств
 		"function ldToggleYaml", // сворачивание YAML-панели
 		"function _ldGridCols",  // ширина фоновой сетки
-		`cfgToast('PDF открыт во внешнем приложении')`, // #5 тост вместо inline-iframe
+		`cfgToast(T("PDF открыт во внешнем приложении"))`, // #5 тост вместо inline-iframe (i18n рантайм, план 55 фаза 2b-1)
 		"format=pdf&open=1",                            // #5 PDF открывается сервером
 		"function _ldPageInfo",                         // границы листа: печатная ширина
 		"function ldEnsurePage",                        // материализация page без смены вывода

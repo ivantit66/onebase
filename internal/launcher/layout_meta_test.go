@@ -94,7 +94,7 @@ func TestLayoutEditor_DataBindingJS(t *testing.T) {
 		"function ldSetAreaRepeat",   // повтор по ТЧ
 		"function ldSetRepeatHeader", // повтор на каждой странице
 		"function _ldAreaBindingRow", // строка привязки области
-		"var _ldMeta=",               // встроенные метаданные
+		"var _ldMeta = window.__ldMeta", // метаданные из bootstrap (план 55 фаза 2b-1)
 	} {
 		if !strings.Contains(js, sub) {
 			t.Errorf("в JS редактора нет: %q", sub)

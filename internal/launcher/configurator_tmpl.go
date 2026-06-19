@@ -349,6 +349,15 @@ const cfgFoot = `{{define "cfg-foot"}}
     </div>
   </div>
 </div>
+<!-- bootstrap: данные и переводы для главного скрипта (план 55, фаза 2b-1).
+     Должен идти ПЕРЕД главным <script>, чтобы window.__cfg существовал. -->
+<script>
+window.__cfg = {{if .Bootstrap}}{{.Bootstrap}}{{else}}{}{{end}};
+window.__cfgI18n = {{if .I18n}}{{.I18n}}{{else}}null{{end}} || {};
+window.__ldMeta = {{if .LayoutMeta}}{{.LayoutMeta}}{{else}}{}{{end}};
+window.__qbSchema = {{if .QBSchema}}{{.QBSchema}}{{else}}null{{end}};
+function T(k){ return (window.__cfgI18n[k] || k); }
+</script>
 <script>
 // ── New object form ────────────────────────────────────────────
 var _cfgNewTitles = {catalog:'Новый справочник', document:'Новый документ', register:'Новый регистр', inforeg:'Новый регистр сведений', accountreg:'Новый регистр бухгалтерии', enum:'Новое перечисление', subsystem:'Новая подсистема', widget:'Новый виджет', module:'Новый общий модуль', processor:'Новая обработка', page:'Новая страница'};
@@ -479,7 +488,7 @@ function _cfgSubmitForm(action, fields) {
 // cfgNewLayout — «+ Печатная форма (макет)» у сущности: спрашивает имя и создаёт
 // декларативный макет со скелетом по первой ТЧ.
 function cfgNewLayout(action, entity) {
-  var name = prompt('{{t $.Lang "Имя печатной формы (макета):"}}');
+  var name = prompt(T("Имя печатной формы (макета):"));
   if (!name) return;
   _cfgSubmitForm(action, {entity: entity, name: name});
 }
@@ -496,15 +505,15 @@ function cfgImportPdfLayout(action) {
   var box = document.createElement('div');
   box.style.cssText = 'background:#fff;border-radius:8px;padding:20px;min-width:360px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,.3);font-size:13px';
   box.innerHTML =
-    '<div style="font-weight:600;font-size:15px;margin-bottom:12px">{{t $.Lang "Создать макет из PDF"}}</div>' +
-    '<div style="color:#64748b;font-size:12px;margin-bottom:12px">{{t $.Lang "Подходит вектор с текстовым слоем (выгрузка из 1С/Excel). Сканы импортировать нельзя. Черновик нужно доработать в редакторе."}}</div>' +
-    '<label style="display:block;margin-bottom:8px">{{t $.Lang "Имя макета"}}<br><input type="text" id="_pdfName" style="width:100%;padding:6px;border:1px solid #cbd5e1;border-radius:4px;box-sizing:border-box"></label>' +
-    '<label style="display:block;margin-bottom:8px">{{t $.Lang "PDF-файл"}}<br><input type="file" id="_pdfFile" accept="application/pdf,.pdf" style="width:100%"></label>' +
-    '<label style="display:block;margin-bottom:14px">{{t $.Lang "Номер страницы"}}<br><input type="number" id="_pdfPage" value="1" min="1" style="width:80px;padding:6px;border:1px solid #cbd5e1;border-radius:4px"></label>' +
+    '<div style="font-weight:600;font-size:15px;margin-bottom:12px">'+T("Создать макет из PDF")+'</div>' +
+    '<div style="color:#64748b;font-size:12px;margin-bottom:12px">'+T("Подходит вектор с текстовым слоем (выгрузка из 1С/Excel). Сканы импортировать нельзя. Черновик нужно доработать в редакторе.")+'</div>' +
+    '<label style="display:block;margin-bottom:8px">'+T("Имя макета")+'<br><input type="text" id="_pdfName" style="width:100%;padding:6px;border:1px solid #cbd5e1;border-radius:4px;box-sizing:border-box"></label>' +
+    '<label style="display:block;margin-bottom:8px">'+T("PDF-файл")+'<br><input type="file" id="_pdfFile" accept="application/pdf,.pdf" style="width:100%"></label>' +
+    '<label style="display:block;margin-bottom:14px">'+T("Номер страницы")+'<br><input type="number" id="_pdfPage" value="1" min="1" style="width:80px;padding:6px;border:1px solid #cbd5e1;border-radius:4px"></label>' +
     '<div id="_pdfErr" style="color:#dc2626;font-size:12px;margin-bottom:8px;display:none"></div>' +
     '<div style="text-align:right">' +
-    '<button type="button" id="_pdfCancel" style="padding:6px 14px;margin-right:8px;background:#e2e8f0;border:none;border-radius:4px;cursor:pointer">{{t $.Lang "Отмена"}}</button>' +
-    '<button type="button" id="_pdfOk" style="padding:6px 14px;background:#0369a1;color:#fff;border:none;border-radius:4px;cursor:pointer">{{t $.Lang "Импортировать"}}</button>' +
+    '<button type="button" id="_pdfCancel" style="padding:6px 14px;margin-right:8px;background:#e2e8f0;border:none;border-radius:4px;cursor:pointer">'+T("Отмена")+'</button>' +
+    '<button type="button" id="_pdfOk" style="padding:6px 14px;background:#0369a1;color:#fff;border:none;border-radius:4px;cursor:pointer">'+T("Импортировать")+'</button>' +
     '</div>';
   overlay.appendChild(box);
   document.body.appendChild(overlay);
@@ -518,13 +527,13 @@ function cfgImportPdfLayout(action) {
     var page = document.getElementById('_pdfPage').value || '1';
     var err = document.getElementById('_pdfErr');
     err.style.display = 'none';
-    if (!name) { err.textContent = '{{t $.Lang "Имя макета обязательно"}}'; err.style.display = ''; return; }
-    if (!fileInp.files || !fileInp.files[0]) { err.textContent = '{{t $.Lang "Выберите PDF-файл"}}'; err.style.display = ''; return; }
+    if (!name) { err.textContent = T("Имя макета обязательно"); err.style.display = ''; return; }
+    if (!fileInp.files || !fileInp.files[0]) { err.textContent = T("Выберите PDF-файл"); err.style.display = ''; return; }
     var fd = new FormData();
     fd.append('file', fileInp.files[0]);
     fd.append('name', name);
     fd.append('page', page);
-    okBtn.disabled = true; okBtn.textContent = '{{t $.Lang "Импорт..."}}';
+    okBtn.disabled = true; okBtn.textContent = T("Импорт...");
     fetch(action, {method:'POST', body:fd})
       .then(function(resp){ return resp.text().then(function(html){ return {ok:resp.ok, html:html}; }); })
       .then(function(res){
@@ -533,7 +542,7 @@ function cfgImportPdfLayout(action) {
         document.open(); document.write(res.html); document.close();
       })
       .catch(function(e){
-        okBtn.disabled = false; okBtn.textContent = '{{t $.Lang "Импортировать"}}';
+        okBtn.disabled = false; okBtn.textContent = T("Импортировать");
         err.textContent = String(e); err.style.display = '';
       });
   };
@@ -578,8 +587,8 @@ function removeLogo() {
 // при смене типа JS меняет options между списком сущностей и списком
 // перечислений. Сохраняем выбранное значение если оно есть в новой
 // группе options.
-var _cfgEntityNames = [{{range $i, $ := $.AllEntityNames}}{{if $i}},{{end}}'{{.}}'{{end}}];
-var _cfgEnumNames = [{{range $i, $ := $.AllEnumNames}}{{if $i}},{{end}}'{{.}}'{{end}}];
+var _cfgEntityNames = window.__cfg.entityNames;
+var _cfgEnumNames = window.__cfg.enumNames;
 function cfgToggleRef(sel, refId) {
   var r = document.getElementById(refId);
   if (!r) return;
@@ -588,7 +597,7 @@ function cfgToggleRef(sel, refId) {
     var src = sel.value === 'enum' ? _cfgEnumNames : _cfgEntityNames;
     var cur = r.value;
     var keep = false;
-    var html = '<option value="">{{t $.Lang "— выбрать —"}}</option>';
+    var html = '<option value="">'+T("— выбрать —")+'</option>';
     for (var i = 0; i < src.length; i++) {
       var n = src[i];
       var sel2 = (n === cur) ? ' selected' : '';
@@ -617,14 +626,14 @@ function cfgAddField(tblId, prefix, entityName) {
   var tr = document.createElement('tr');
   tr.innerHTML = '<td><input name="'+prefix+'.'+_cfgNewFieldIdx+'.name" style="width:100%;padding:3px 5px;border:1px solid #ccd0d8;border-radius:3px;font-size:12px" placeholder="ИмяПоля"></td>'
     +'<td><select name="'+prefix+'.'+_cfgNewFieldIdx+'.type" onchange="cfgToggleRef(this,\''+refId+'\');cfgToggleNum(this,\''+numId+'\')">'
-    +'<option value="string">{{t $.Lang "строка"}}</option><option value="number">{{t $.Lang "число"}}</option><option value="date">{{t $.Lang "дата"}}</option><option value="bool">{{t $.Lang "булево"}}</option><option value="reference">{{t $.Lang "ссылка →"}}</option><option value="enum">{{t $.Lang "перечисление →"}}</option>'
+    +'<option value="string">'+T("строка")+'</option><option value="number">'+T("число")+'</option><option value="date">'+T("дата")+'</option><option value="bool">'+T("булево")+'</option><option value="reference">'+T("ссылка →")+'</option><option value="enum">'+T("перечисление →")+'</option>'
     +'</select>'
-    +' <span id="'+numId+'" style="display:none" title="{{t $.Lang "Длина, Точность"}}">'
+    +' <span id="'+numId+'" style="display:none" title="'+T("Длина, Точность")+'">'
     +'<input type="number" min="1" name="'+prefix+'.'+_cfgNewFieldIdx+'.length" placeholder="дл" style="width:46px;padding:2px 3px;border:1px solid #ccd0d8;border-radius:3px;font-size:11px">'
     +' , <input type="number" min="0" name="'+prefix+'.'+_cfgNewFieldIdx+'.scale" placeholder="точн" style="width:46px;padding:2px 3px;border:1px solid #ccd0d8;border-radius:3px;font-size:11px">'
     +'</span></td>'
     +'<td><select name="'+prefix+'.'+_cfgNewFieldIdx+'.ref" id="'+refId+'" style="display:none">'
-    +'<option value="">{{t $.Lang "— выбрать —"}}</option>'
+    +'<option value="">'+T("— выбрать —")+'</option>'
     +'</select></td>';
   tbl.appendChild(tr);
   tr.querySelector('input').focus();
@@ -642,9 +651,9 @@ function cfgAddTP(btn, entityName) {
     +'<input type="hidden" name="new_tp_name" value="'+tpName+'">'
     +'<input type="hidden" name="'+prefix+'.idx" value="'+_cfgNewTpIdx+'">'
     +'<div class="tp-block"><table class="fields-tbl" id="'+tblId+'">'
-    +'<tr><th>{{t $.Lang "Поле"}}</th><th>{{t $.Lang "Тип"}}</th><th style="min-width:150px">{{t $.Lang "Объект"}}</th></tr>'
+    +'<tr><th>'+T("Поле")+'</th><th>'+T("Тип")+'</th><th style="min-width:150px">'+T("Объект")+'</th></tr>'
     +'</table>'
-    +'<button type="button" onclick="cfgAddField(\''+tblId+'\',\'new_tp.'+_cfgNewTpIdx+'.field\',\''+entityName+'\')" style="font-size:11px;color:#1a4a80;background:none;border:1px dashed #c0c8d8;padding:2px 8px;border-radius:3px;cursor:pointer;margin:4px 0">+ {{t $.Lang "Добавить поле"}}</button>'
+    +'<button type="button" onclick="cfgAddField(\''+tblId+'\',\'new_tp.'+_cfgNewTpIdx+'.field\',\''+entityName+'\')" style="font-size:11px;color:#1a4a80;background:none;border:1px dashed #c0c8d8;padding:2px 8px;border-radius:3px;cursor:pointer;margin:4px 0">+ '+T("Добавить поле")+'</button>'
     +'</div>';
   btn.parentNode.insertBefore(wrapper, btn);
   cfgAddField(tblId, 'new_tp.'+_cfgNewTpIdx+'.field', entityName);
@@ -679,7 +688,7 @@ function cfgAddARField(tblId) {
   var idx = tbl.querySelectorAll('tr').length - 1;
   var tr = document.createElement('tr');
   tr.innerHTML = '<td><input type="text" name="res.'+idx+'.name" placeholder="ИмяРесурса" style="width:100%;font-size:12px;padding:2px 4px;border:1px solid #dde;border-radius:3px"></td>'
-    +'<td><select name="res.'+idx+'.type"><option value="number">{{t $.Lang "число"}}</option><option value="string">{{t $.Lang "строка"}}</option><option value="bool">{{t $.Lang "булево"}}</option></select></td>';
+    +'<td><select name="res.'+idx+'.type"><option value="number">'+T("число")+'</option><option value="string">'+T("строка")+'</option><option value="bool">'+T("булево")+'</option></select></td>';
   tbl.appendChild(tr);
   tr.querySelector('input').focus();
 }
@@ -1220,7 +1229,7 @@ function cfgSaveActive() {
 // звёздочкой «требуется перезапуск» — как при серверном рендере ConfigDirty.
 function cfgMarkDirtyStar(running) {
   if (!running) return;
-  var title = '{{t $.Lang "Конфигурация на диске изменилась с момента запуска базы. Перезапустите базу, чтобы изменения применились."}}';
+  var title = T("Конфигурация на диске изменилась с момента запуска базы. Перезапустите базу, чтобы изменения применились.");
   var targets = [];
   var grp = document.querySelector('#cfg-sidebar .cfg-group');
   if (grp) targets.push(grp);
@@ -1411,8 +1420,8 @@ document.addEventListener('keydown', function(e) {
   }
 });
 (function(){
-  var directId='{{.SelectedTreeID}}';
-  var saved='{{.FieldsSavedEntity}}'?'{{.FieldsSavedEntity}}':'{{.ModuleSavedEntity}}';
+  var directId = window.__cfg.selectedTreeId;
+  var saved = window.__cfg.fieldsSaved || window.__cfg.moduleSaved;
   var el=null;
   if(directId)el=document.querySelector('[data-id="'+directId+'"]');
   if(!el&&saved&&saved!=='')['e-','r-','ir-','ar-','en-','cn-','rep-','mod-','proc-','pf-','dpf-','mkt-','sub-','panel-app'].forEach(function(p){if(!el)el=document.querySelector('[data-id="'+p+saved+'"]');});
@@ -1446,7 +1455,7 @@ function cfgObjTab(el, paneId){
 var _led={};
 // _ldMeta — метаданные для панели «Данные» (план 64, этап 5b, 6.5):
 // {entities:{Имя:{fields,tableParts}}, constants:[], formDoc:{макет→документ}}.
-var _ldMeta={{if .LayoutMeta}}{{.LayoutMeta}}{{else}}{}{{end}};
+var _ldMeta = window.__ldMeta;
 if(!_ldMeta||typeof _ldMeta!=='object')_ldMeta={entities:{},constants:[],formDoc:{}};
 // _ldEntityForForm возвращает метаданные сущности, к которой привязан макет n,
 // или null. Имя документа берётся из formDoc[n] (регистронезависимо).
@@ -1607,7 +1616,7 @@ function _ldPageInfo(n){
   var cmm=w-em.left-em.right;if(cmm<10)cmm=10;
   var disp={A4:'A4',A5:'A5',A3:'A3',LETTER:'Letter',LEGAL:'Legal'}[fmt]||'A4';
   return {contentMM:cmm,contentPx:cmm*96/25.4,fmt:disp,land:land,
-          label:disp+(land?' {{t $.Lang "альбомная"}}':' {{t $.Lang "книжная"}}')+' · '+Math.round(cmm)+' {{t $.Lang "мм"}}'};
+          label:disp+(land?' '+T("альбомная"):' '+T("книжная"))+' · '+Math.round(cmm)+' '+T("мм")};
 }
 // ldEnsurePage создаёт page с действующими значениями (вывод не меняется).
 function ldEnsurePage(n){
@@ -1630,18 +1639,18 @@ function _ldSyncPagePanel(n){
   _setVal('pg-ml-'+n,em.left);_setVal('pg-mt-'+n,em.top);
   _setVal('pg-mr-'+n,em.right);_setVal('pg-mb-'+n,em.bottom);
   var el=document.getElementById('pg-info-'+n);
-  if(el)el.textContent='{{t $.Lang "печатная ширина"}} '+Math.round(info.contentMM)+' {{t $.Lang "мм"}} (≈'+Math.round(info.contentPx)+' px)';
+  if(el)el.textContent=T("печатная ширина")+' '+Math.round(info.contentMM)+' '+T("мм")+' (≈'+Math.round(info.contentPx)+' px)';
 }
 // _ldRuler рисует линейку колонок (6.2): по клетке на колонку, клик → ширина.
 // columns — ГЛОБАЛЬНЫЕ для макета; линейка выводится один раз над первой областью.
 function _ldRuler(n){
   var nc=_ldGridCols(n);if(nc<=0)return '';
   var s=_led[n],cols=(s&&s.data&&Array.isArray(s.data.columns))?s.data.columns:[];
-  var h='<div style="display:flex;margin:0 0 2px 18px" title="{{t $.Lang "Ширины колонок"}}">';
+  var h='<div style="display:flex;margin:0 0 2px 18px" title="'+T("Ширины колонок")+'">';
   for(var i=0;i<nc;i++){
     var w=(cols[i]&&cols[i].width)?cols[i].width:'';
     var lbl=w?esc(w):'авто';
-    h+='<div onclick="ldColWidth(\''+n+'\','+i+')" style="flex:1;min-width:42px;text-align:center;font-size:9px;color:#888;background:#f1f5f9;border:1px solid #e2e8f0;padding:1px 2px;cursor:pointer;overflow:hidden;white-space:nowrap" title="{{t $.Lang "Колонка"}} '+(i+1)+'">'+lbl+'</div>';
+    h+='<div onclick="ldColWidth(\''+n+'\','+i+')" style="flex:1;min-width:42px;text-align:center;font-size:9px;color:#888;background:#f1f5f9;border:1px solid #e2e8f0;padding:1px 2px;cursor:pointer;overflow:hidden;white-space:nowrap" title="'+T("Колонка")+' '+(i+1)+'">'+lbl+'</div>';
   }
   return h+'</div>';
 }
@@ -1662,9 +1671,9 @@ function renderLayoutEditor(n,noYamlSync){
     h+='<div style="margin-bottom:16px">';
     h+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">';
     h+='<span style="font-weight:bold;color:#4a9">'+esc(an)+'</span>';
-    h+='<button type="button" title="{{t $.Lang "Вверх"}}" '+(ai===0?'disabled ':'')+'style="font-size:10px;padding:1px 6px;border:1px solid #ccc;border-radius:3px;cursor:pointer'+(ai===0?';opacity:.3':'')+'" onclick="moveLayoutArea(\''+n+'\','+ai+',-1)">↑</button>';
-    h+='<button type="button" title="{{t $.Lang "Вниз"}}" '+(ai===areas.length-1?'disabled ':'')+'style="font-size:10px;padding:1px 6px;border:1px solid #ccc;border-radius:3px;cursor:pointer'+(ai===areas.length-1?';opacity:.3':'')+'" onclick="moveLayoutArea(\''+n+'\','+ai+',1)">↓</button>';
-    h+='<button type="button" style="font-size:10px;padding:1px 6px;border:1px solid #ccc;border-radius:3px;cursor:pointer" onclick="addLayoutRow(\''+escJsAttr(n)+"','"+escJsAttr(an)+"')\">+ {{t $.Lang "Строка"}}</button>";
+    h+='<button type="button" title="'+T("Вверх")+'" '+(ai===0?'disabled ':'')+'style="font-size:10px;padding:1px 6px;border:1px solid #ccc;border-radius:3px;cursor:pointer'+(ai===0?';opacity:.3':'')+'" onclick="moveLayoutArea(\''+n+'\','+ai+',-1)">↑</button>';
+    h+='<button type="button" title="'+T("Вниз")+'" '+(ai===areas.length-1?'disabled ':'')+'style="font-size:10px;padding:1px 6px;border:1px solid #ccc;border-radius:3px;cursor:pointer'+(ai===areas.length-1?';opacity:.3':'')+'" onclick="moveLayoutArea(\''+n+'\','+ai+',1)">↓</button>';
+    h+='<button type="button" style="font-size:10px;padding:1px 6px;border:1px solid #ccc;border-radius:3px;cursor:pointer" onclick="addLayoutRow(\''+escJsAttr(n)+"','"+escJsAttr(an)+"')\">+ "+T("Строка")+"</button>";
     h+='<button type="button" style="font-size:10px;padding:1px 6px;border:1px solid #fcc;border-radius:3px;cursor:pointer;color:#c33" onclick="delLayoutArea(\''+escJsAttr(n)+"','"+escJsAttr(an)+"')\">✕</button>";
     h+='</div>';
     h+=_ldAreaBindingRow(n,an);
@@ -1675,7 +1684,7 @@ function renderLayoutEditor(n,noYamlSync){
       h+='<tr'+rowStyle+'>';
       // Левая ручка строки (6.2): клик → высота строки.
       var hLbl=rows[ri].height?esc(rows[ri].height):'↕';
-      h+='<td onclick="ldRowHeight(\''+escJsAttr(n)+"','"+escJsAttr(an)+"',"+ri+')" style="border:1px solid #e2e8f0;background:#f1f5f9;color:#888;font-size:9px;text-align:center;cursor:pointer;width:16px;padding:0" title="{{t $.Lang "Высота строки"}}">'+hLbl+'</td>';
+      h+='<td onclick="ldRowHeight(\''+escJsAttr(n)+"','"+escJsAttr(an)+"',"+ri+')" style="border:1px solid #e2e8f0;background:#f1f5f9;color:#888;font-size:9px;text-align:center;cursor:pointer;width:16px;padding:0" title="'+T("Высота строки")+'">'+hLbl+'</td>';
       var cells=rows[ri].cells||[];
       for(var ci=0;ci<cells.length;ci++){
         var c=cells[ci];
@@ -1695,18 +1704,18 @@ function renderLayoutEditor(n,noYamlSync){
       // до ширины сетки. Клик по пустой клетке добавляет ячейку в строку.
       var used=0;for(var ui=0;ui<cells.length;ui++){var uc=cells[ui];used+=(uc&&uc.colspan>1)?uc.colspan:1;}
       for(var pe=used;pe<gc;pe++){
-        h+='<td onclick="ldAddCellAt(\''+escJsAttr(n)+"','"+escJsAttr(an)+"',"+ri+')" style="border:1px dashed #dce4ee;min-width:38px;height:16px;cursor:cell" title="{{t $.Lang "Добавить ячейку"}}">&nbsp;</td>';
+        h+='<td onclick="ldAddCellAt(\''+escJsAttr(n)+"','"+escJsAttr(an)+"',"+ri+')" style="border:1px dashed #dce4ee;min-width:38px;height:16px;cursor:cell" title="'+T("Добавить ячейку")+'">&nbsp;</td>';
       }
       h+='<td style="border:none;padding:2px;white-space:nowrap">';
-      if(ri>0){h+='<button type="button" title="{{t $.Lang "Разрезать область перед этой строкой"}}" style="font-size:10px;color:#0369a1;border:none;cursor:pointer;background:transparent" onclick="splitLayoutArea(\''+escJsAttr(n)+"','"+escJsAttr(an)+"',"+ri+')\">✂</button>';}
-      h+='<button type="button" title="{{t $.Lang "Удалить строку"}}" style="font-size:10px;color:#c33;border:none;cursor:pointer;background:transparent" onclick="delLayoutRow(\''+escJsAttr(n)+"','"+escJsAttr(an)+"',"+ri+')\">✕</button></td>';
+      if(ri>0){h+='<button type="button" title="'+T("Разрезать область перед этой строкой")+'" style="font-size:10px;color:#0369a1;border:none;cursor:pointer;background:transparent" onclick="splitLayoutArea(\''+escJsAttr(n)+"','"+escJsAttr(an)+"',"+ri+')\">✂</button>';}
+      h+='<button type="button" title="'+T("Удалить строку")+'" style="font-size:10px;color:#c33;border:none;cursor:pointer;background:transparent" onclick="delLayoutRow(\''+escJsAttr(n)+"','"+escJsAttr(an)+"',"+ri+')\">✕</button></td>';
       h+='</tr>';
     }
     h+='</table></div>';
   }
   // Граница листа: красная пунктирная линия + подпись на печатной ширине страницы.
   h+='<div style="position:absolute;top:0;bottom:0;left:'+guideLeft+'px;border-left:2px dashed #ef4444;pointer-events:none;z-index:3"></div>';
-  h+='<div style="position:absolute;top:2px;left:'+(guideLeft+4)+'px;font-size:9px;color:#ef4444;background:rgba(255,255,255,.85);padding:0 3px;pointer-events:none;z-index:3;white-space:nowrap" title="{{t $.Lang "Край печатной области листа"}}">'+esc(pi.label)+'</div>';
+  h+='<div style="position:absolute;top:2px;left:'+(guideLeft+4)+'px;font-size:9px;color:#ef4444;background:rgba(255,255,255,.85);padding:0 3px;pointer-events:none;z-index:3;white-space:nowrap" title="'+T("Край печатной области листа")+'">'+esc(pi.label)+'</div>';
   h+='</div>';
   var ved=document.getElementById('veditor-'+n);
   if(ved)ved.innerHTML=h;
@@ -1870,7 +1879,7 @@ function _ldParamFormat(n,param){
 function ldSetFormat(n,fmt){
   var sc=_ldSelCell(n);if(!sc)return;
   var param=sc.c.parameter||'';
-  if(!param){alert('{{t $.Lang "У ячейки нет параметра"}}');return;}
+  if(!param){alert(T("У ячейки нет параметра"));return;}
   var s=_led[n];if(!s||!s.sel)return;
   var pm=_ldParamMapFor(n,s.sel.area,true);
   if(!pm)return;
@@ -1948,9 +1957,9 @@ function _ldAreaBindingRow(n,areaName){
   var rh=(b&&(b.repeat_header||'').toLowerCase()===(areaName||'').toLowerCase());
   var jn=escJsAttr(areaName);
   var h='<div style="display:flex;align-items:center;gap:8px;margin:0 0 4px;font-size:11px;color:#64748b">';
-  h+='<label style="display:flex;align-items:center;gap:3px">'+esc('{{t $.Lang "Повтор по ТЧ"}}')+':';
+  h+='<label style="display:flex;align-items:center;gap:3px">'+esc(T("Повтор по ТЧ"))+':';
   h+='<select style="font-size:11px;padding:1px 2px" onchange="ldSetAreaRepeat(\''+n+'\',\''+jn+'\',this.value)">';
-  h+='<option value="">'+esc('{{t $.Lang "нет"}}')+'</option>';
+  h+='<option value="">'+esc(T("нет"))+'</option>';
   var tps=(ent&&ent.tableParts)?ent.tableParts:[];
   var cur=rb?(rb.source||''):'';
   for(var t=0;t<tps.length;t++){
@@ -1964,7 +1973,7 @@ function _ldAreaBindingRow(n,areaName){
     if(!found)h+='<option value="'+esc(cur)+'" selected>'+esc(cur)+'</option>';
   }
   h+='</select></label>';
-  h+='<label style="display:flex;align-items:center;gap:3px"><input type="checkbox"'+(rh?' checked':'')+' onchange="ldSetRepeatHeader(\''+n+'\',\''+jn+'\',this.checked)"> '+esc('{{t $.Lang "Повторять на каждой странице"}}')+'</label>';
+  h+='<label style="display:flex;align-items:center;gap:3px"><input type="checkbox"'+(rh?' checked':'')+' onchange="ldSetRepeatHeader(\''+n+'\',\''+jn+'\',this.checked)"> '+esc(T("Повторять на каждой странице"))+'</label>';
   h+='</div>';
   return h;
 }
@@ -1977,7 +1986,7 @@ function renderDataPanel(n){
   var ent=_ldEntityForForm(n);
   var h='';
   if(!ent){
-    h='<p style="color:#999;font-size:11px;margin:4px 0">{{t $.Lang "Сущность не определена. Укажите document: в YAML."}}</p>';
+    h='<p style="color:#999;font-size:11px;margin:4px 0">'+T("Сущность не определена. Укажите document: в YAML.")+'</p>';
   }else{
     var s=_led[n];
     var selArea=(s&&s.sel)?s.sel.area:null;
@@ -1986,7 +1995,7 @@ function renderDataPanel(n){
       h+='<div style="font-size:10px;color:#94a3b8;margin-bottom:4px">'+esc(selArea)+(rb?' ↻ '+esc(rb.source||''):'')+'</div>';
     }
     // Реквизиты документа.
-    h+='<div style="font-weight:600;color:#475569;margin:2px 0">'+esc('{{t $.Lang "Реквизиты"}}')+'</div>';
+    h+='<div style="font-weight:600;color:#475569;margin:2px 0">'+esc(T("Реквизиты"))+'</div>';
     h+=_ldFieldList(n,ent.fields,'doc');
     // Табличные части.
     var tps=ent.tableParts||[];
@@ -1997,9 +2006,9 @@ function renderDataPanel(n){
     // Константы.
     var cs=(_ldMeta&&Array.isArray(_ldMeta.constants))?_ldMeta.constants:[];
     if(cs.length){
-      h+='<div style="font-weight:600;color:#475569;margin:6px 0 2px">'+esc('{{t $.Lang "Константы"}}')+'</div>';
+      h+='<div style="font-weight:600;color:#475569;margin:6px 0 2px">'+esc(T("Константы"))+'</div>';
       for(var ci=0;ci<cs.length;ci++){
-        h+='<div class="ld-data-fld" style="padding:2px 4px;cursor:pointer;border-radius:3px" onclick="onDataFieldClick(\''+escJsAttr(n)+'\',\'const\',\''+escJsAttr(cs[ci])+'\')" title="{{t $.Lang "Кликните по ячейке, затем по полю"}}">'+esc(cs[ci])+'</div>';
+        h+='<div class="ld-data-fld" style="padding:2px 4px;cursor:pointer;border-radius:3px" onclick="onDataFieldClick(\''+escJsAttr(n)+'\',\'const\',\''+escJsAttr(cs[ci])+'\')" title="'+T("Кликните по ячейке, затем по полю")+'">'+esc(cs[ci])+'</div>';
       }
     }
   }
@@ -2012,7 +2021,7 @@ function _ldFieldList(n,fields,scope){
   for(var i=0;i<fields.length;i++){
     var f=fields[i];
     var sub=(f.ref?' →':'');
-    h+='<div class="ld-data-fld" style="padding:2px 4px;cursor:pointer;border-radius:3px" onclick="onDataFieldClick(\''+escJsAttr(n)+'\',\''+escJsAttr(scope)+'\',\''+escJsAttr(f.name)+'\')" title="{{t $.Lang "Кликните по ячейке, затем по полю"}}">'+esc(f.name)+sub+'</div>';
+    h+='<div class="ld-data-fld" style="padding:2px 4px;cursor:pointer;border-radius:3px" onclick="onDataFieldClick(\''+escJsAttr(n)+'\',\''+escJsAttr(scope)+'\',\''+escJsAttr(f.name)+'\')" title="'+T("Кликните по ячейке, затем по полю")+'">'+esc(f.name)+sub+'</div>';
   }
   if(!fields.length)h='<div style="color:#cbd5e1;font-size:11px;padding:2px 4px">—</div>';
   return h;
@@ -2023,7 +2032,7 @@ function _ldFieldList(n,fields,scope){
 //   scope='const'  — Константы.Имя.
 function onDataFieldClick(n,scope,field){
   var s=_led[n];
-  if(!s||!s.sel){alert('{{t $.Lang "Сначала выделите ячейку"}}');return;}
+  if(!s||!s.sel){alert(T("Сначала выделите ячейку"));return;}
   var areaName=s.sel.area;
   var paramName=field;
   var expr=field;
@@ -2077,7 +2086,7 @@ function ldPreview(n,entity,format){
   fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({yaml:yaml,entity:entity||''})})
     .then(function(resp){
       if(!resp.ok)return resp.text().then(function(t){throw new Error(t||('HTTP '+resp.status));});
-      if(isPdf){cfgToast('{{t $.Lang "PDF открыт во внешнем приложении"}}');return null;}
+      if(isPdf){cfgToast(T("PDF открыт во внешнем приложении"));return null;}
       return resp.blob();
     })
     .then(function(blob){
@@ -2087,7 +2096,7 @@ function ldPreview(n,entity,format){
       if(frame)frame.src=u;
       document.getElementById('ld-preview-overlay').classList.add('active');
     })
-    .catch(function(err){alert('{{t $.Lang "Ошибка предпросмотра"}}: '+err.message);});
+    .catch(function(err){alert(T("Ошибка предпросмотра")+': '+err.message);});
 }
 function ldClosePreview(){
   var ov=document.getElementById('ld-preview-overlay');
@@ -2129,15 +2138,15 @@ function _ldEnsure(n){
   return s;
 }
 function addLayoutArea(n){
-  var name=prompt('{{t $.Lang "Имя новой области:"}}');
+  var name=prompt(T("Имя новой области:"));
   if(!name)return;
   var s=_ldEnsure(n);if(!s)return;
   if(!Array.isArray(s.data.areas))s.data.areas=[];
-  s.data.areas.push({name:name,rows:[{cells:[{text:'{{t $.Lang "Ячейка"}}'}]}]});
+  s.data.areas.push({name:name,rows:[{cells:[{text:T("Ячейка")}]}]});
   renderLayoutEditor(n);
 }
 function delLayoutArea(n,a){
-  if(!confirm('{{t $.Lang "Удалить область"}} '+a+'?'))return;
+  if(!confirm(T("Удалить область")+' '+a+'?'))return;
   var s=_led[n];if(!s)return;
   var i=_ldAreaIndex(n,a);
   if(i>=0)s.data.areas.splice(i,1);
@@ -2178,13 +2187,13 @@ function splitLayoutArea(n,a,ri){
   var idx=_ldAreaIndex(n,a);if(idx<0)return;
   var ar=s.data.areas[idx];
   var rows=ar.rows||[];
-  if(ri<=0||ri>=rows.length){alert('{{t $.Lang "Разрез возможен только перед строкой внутри области (не первой и не после последней)."}}');return;}
-  var n1=prompt('{{t $.Lang "Имя первой части (строки до разреза):"}}',a+'_1');
+  if(ri<=0||ri>=rows.length){alert(T("Разрез возможен только перед строкой внутри области (не первой и не после последней)."));return;}
+  var n1=prompt(T("Имя первой части (строки до разреза):"),a+'_1');
   if(n1===null)return; n1=n1.trim(); if(!n1)return;
-  var n2=prompt('{{t $.Lang "Имя второй части (строки от разреза):"}}',a+'_2');
+  var n2=prompt(T("Имя второй части (строки от разреза):"),a+'_2');
   if(n2===null)return; n2=n2.trim(); if(!n2)return;
-  if(_ldAreaIndex(n,n1)>=0&&n1!==a){alert('{{t $.Lang "Область с таким именем уже есть"}}'+': '+n1);return;}
-  if(_ldAreaIndex(n,n2)>=0){alert('{{t $.Lang "Область с таким именем уже есть"}}'+': '+n2);return;}
+  if(_ldAreaIndex(n,n1)>=0&&n1!==a){alert(T("Область с таким именем уже есть")+': '+n1);return;}
+  if(_ldAreaIndex(n,n2)>=0){alert(T("Область с таким именем уже есть")+': '+n2);return;}
   var top=rows.slice(0,ri), bottom=rows.slice(ri);
   ar.name=n1; ar.rows=top;
   s.data.areas.splice(idx+1,0,{name:n2,rows:bottom});
@@ -2198,10 +2207,10 @@ function ldColWidth(n,i){
   if(!Array.isArray(s.data.columns))s.data.columns=[];
   while(s.data.columns.length<=i)s.data.columns.push({});
   var cur=s.data.columns[i].width||'';
-  var v=prompt('{{t $.Lang "Ширина колонки (напр. 120px, 30mm, пусто = авто). %-ширины печатью НЕ поддерживаются."}}',cur);
+  var v=prompt(T("Ширина колонки (напр. 120px, 30mm, пусто = авто). %-ширины печатью НЕ поддерживаются."),cur);
   if(v===null)return;
   v=v.trim();
-  if(v.indexOf('%')>=0){alert('{{t $.Lang "%-ширины не поддерживаются печатью (PDF). Используйте px или mm."}}');return;}
+  if(v.indexOf('%')>=0){alert(T("%-ширины не поддерживаются печатью (PDF). Используйте px или mm."));return;}
   if(v==='')delete s.data.columns[i].width; else s.data.columns[i].width=v;
   // подрезаем хвост пустых элементов columns
   while(s.data.columns.length&&!s.data.columns[s.data.columns.length-1].width)s.data.columns.pop();
@@ -2211,7 +2220,7 @@ function ldColWidth(n,i){
 function ldRowHeight(n,a,ri){
   var ar=_ldAreaByName(n,a);if(!ar||!ar.rows||!ar.rows[ri])return;
   var cur=ar.rows[ri].height||'';
-  var v=prompt('{{t $.Lang "Высота строки (напр. 24px, пусто = авто):"}}',cur);
+  var v=prompt(T("Высота строки (напр. 24px, пусто = авто):"),cur);
   if(v===null)return;
   v=v.trim();
   if(v==='')delete ar.rows[ri].height; else ar.rows[ri].height=v;
@@ -2231,19 +2240,19 @@ function _ldFirstArea(n){
 function ldAddRow(n){
   var s=_led[n];if(!s)return;
   var area=s.sel?s.sel.area:_ldFirstArea(n);
-  if(!area){alert('{{t $.Lang "Сначала добавьте область"}}');return;}
+  if(!area){alert(T("Сначала добавьте область"));return;}
   addLayoutRow(n,area);
 }
 function ldDelRow(n){
   var sel=_ldSel(n);
-  if(!sel){alert('{{t $.Lang "Выделите ячейку в строке, которую нужно удалить"}}');return;}
-  if(!confirm('{{t $.Lang "Удалить строку?"}}'))return;
+  if(!sel){alert(T("Выделите ячейку в строке, которую нужно удалить"));return;}
+  if(!confirm(T("Удалить строку?")))return;
   delLayoutRow(n,sel.area,sel.ri);
 }
 function ldAddColumn(n){
   var s=_led[n];if(!s)return;
   var area=s.sel?s.sel.area:_ldFirstArea(n);
-  if(!area){alert('{{t $.Lang "Сначала добавьте область"}}');return;}
+  if(!area){alert(T("Сначала добавьте область"));return;}
   var ar=_ldAreaByName(n,area);if(!ar||!ar.rows)return;
   for(var i=0;i<ar.rows.length;i++){
     if(!ar.rows[i].cells)ar.rows[i].cells=[];
@@ -2255,8 +2264,8 @@ function ldAddColumn(n){
 }
 function ldDelColumn(n){
   var sel=_ldSel(n);
-  if(!sel){alert('{{t $.Lang "Выделите ячейку в колонке, которую нужно удалить"}}');return;}
-  if(!confirm('{{t $.Lang "Удалить колонку?"}}'))return;
+  if(!sel){alert(T("Выделите ячейку в колонке, которую нужно удалить"));return;}
+  if(!confirm(T("Удалить колонку?")))return;
   var s=sel.s,ar=sel.ar,ci=sel.ci;
   for(var i=0;i<ar.rows.length;i++){
     var cs=ar.rows[i].cells||[];
@@ -2268,9 +2277,9 @@ function ldDelColumn(n){
 }
 function ldMerge(n){
   var sel=_ldSel(n);
-  if(!sel){alert('{{t $.Lang "Выделите ячейку, которую нужно объединить с правой соседкой"}}');return;}
+  if(!sel){alert(T("Выделите ячейку, которую нужно объединить с правой соседкой"));return;}
   var ar=sel.ar,row=sel.row,ri=sel.ri,ci=sel.ci;
-  if(ci+1>=row.cells.length){alert('{{t $.Lang "Нет ячейки справа для объединения"}}');return;}
+  if(ci+1>=row.cells.length){alert(T("Нет ячейки справа для объединения"));return;}
   var c=row.cells[ci];
   var span=(c.colspan&&c.colspan>1)?c.colspan:1;
   var rs=(c.rowspan&&c.rowspan>1)?c.rowspan:1;
@@ -2291,9 +2300,9 @@ function ldMerge(n){
 }
 function ldSplit(n){
   var sel=_ldSel(n);
-  if(!sel){alert('{{t $.Lang "Выделите объединённую ячейку"}}');return;}
+  if(!sel){alert(T("Выделите объединённую ячейку"));return;}
   var c=sel.row.cells[sel.ci];
-  if(!c.colspan||c.colspan<=1){alert('{{t $.Lang "Ячейка не объединена"}}');return;}
+  if(!c.colspan||c.colspan<=1){alert(T("Ячейка не объединена"));return;}
   var span=c.colspan;
   delete c.colspan;
   // insert (span-1) empty cells to the right
@@ -2350,7 +2359,7 @@ function _ldCellIndexAtCol(ar,ri,col){
 // семантика модели: колонки определяются порядком в массиве cells).
 function ldDelCell(n){
   var sel=_ldSel(n);
-  if(!sel){alert('{{t $.Lang "Выделите ячейку для удаления"}}');return;}
+  if(!sel){alert(T("Выделите ячейку для удаления"));return;}
   var cells=sel.row.cells||[];
   if(sel.ci>=cells.length)return;
   cells.splice(sel.ci,1);
@@ -2363,12 +2372,12 @@ function ldDelCell(n){
 // визуальной колонке). Без удаления накрытая ячейка «всплыла» бы вправо.
 function ldMergeDown(n){
   var sel=_ldSel(n);
-  if(!sel){alert('{{t $.Lang "Выделите ячейку, которую нужно объединить с нижней"}}');return;}
+  if(!sel){alert(T("Выделите ячейку, которую нужно объединить с нижней"));return;}
   var ar=sel.ar,ri=sel.ri,ci=sel.ci;
   var c=sel.row.cells[ci];
   var span=(c.rowspan&&c.rowspan>1)?c.rowspan:1;
   var nextRi=ri+span; // строка под нижней границей текущего спана
-  if(nextRi>=ar.rows.length){alert('{{t $.Lang "Нет строки снизу для объединения"}}');return;}
+  if(nextRi>=ar.rows.length){alert(T("Нет строки снизу для объединения"));return;}
   var col=_ldVisualCol(ar,ri,ci);
   // удаляем ВСЕ ячейки строки nextRi, которые накроет спан: при colspan>1
   // накрывается несколько визуальных позиций (col..col+cs-1), иначе ячейка
@@ -2389,10 +2398,10 @@ function ldMergeDown(n){
 // которые были накрыты (по канону модели — в нужную визуальную позицию).
 function ldUnmergeVertical(n){
   var sel=_ldSel(n);
-  if(!sel){alert('{{t $.Lang "Выделите объединённую по вертикали ячейку"}}');return;}
+  if(!sel){alert(T("Выделите объединённую по вертикали ячейку"));return;}
   var ar=sel.ar,ri=sel.ri,ci=sel.ci;
   var c=sel.row.cells[ci];
-  if(!c.rowspan||c.rowspan<=1){alert('{{t $.Lang "Ячейка не объединена по вертикали"}}');return;}
+  if(!c.rowspan||c.rowspan<=1){alert(T("Ячейка не объединена по вертикали"));return;}
   var span=c.rowspan;
   var cs=(c.colspan&&c.colspan>1)?c.colspan:1;
   var col=_ldVisualCol(ar,ri,ci);
@@ -2784,8 +2793,8 @@ function repAddParam(tableId) {
   var tr = document.createElement('tr');
   tr.innerHTML = '<td><input type="text" name="param.' + i + '.name" value="" style="width:100%;padding:3px 5px;border:1px solid #ccd0d8;border-radius:3px;font-size:12px" placeholder="ИмяПараметра"></td>'
     + '<td><select name="param.' + i + '.type" style="padding:3px 5px;border:1px solid #ccd0d8;border-radius:3px;font-size:12px">'
-    + '<option value="string">{{t $.Lang "строка"}}</option><option value="date">{{t $.Lang "дата"}}</option><option value="number">{{t $.Lang "число"}}</option><option value="select">{{t $.Lang "список"}}</option>'
-    {{range $.AllEntityNames}}+'<option value="reference:{{.}}">ссылка: {{.}}</option>'{{end}}
+    + '<option value="string">'+T("строка")+'</option><option value="date">'+T("дата")+'</option><option value="number">'+T("число")+'</option><option value="select">'+T("список")+'</option>'
+    + window.__cfg.entityNames.map(function(n){return '<option value="reference:'+n+'">ссылка: '+n+'</option>';}).join('')
     + '</select></td>'
     + '<td><input type="text" name="param.' + i + '.label" value="" style="width:100%;padding:3px 5px;border:1px solid #ccd0d8;border-radius:3px;font-size:12px" placeholder="Заголовок"></td>'
     + '<td><button type="button" style="background:none;border:none;color:#c00;cursor:pointer;font-size:14px" onclick="this.closest(\'tr\').remove();repReindex(\'' + tableId + '\')">✕</button></td>';
@@ -2874,7 +2883,7 @@ window.cfgOpenQB=function(){
 var _mqbTA=null,_mqbMonacoId=null,_mqbSchema=null,_mqbSrcMap={};
 var _mqbCurFields=[],_mqbSel={},_mqbJoins=[];
 (function(){
-_mqbSchema={{.QBSchema}};
+_mqbSchema = window.__qbSchema;
 if(!_mqbSchema)_mqbSchema=[];
 _mqbSchema.forEach(function(s){_mqbSrcMap[s.id]=s;});
 // populate select
@@ -2931,7 +2940,7 @@ function openQBModal(ta,presetSel){
   document.getElementById('mqb-src').value='';
   document.getElementById('mqb-alias').value='';
   document.getElementById('mqb-vtp').style.display='none';
-  document.getElementById('mqb-joins').innerHTML='<p style="font-size:12px;color:#94a3b8;margin:0" id="mqb-joins-hint">{{t $.Lang "Нет"}}</p>';
+  document.getElementById('mqb-joins').innerHTML='<p style="font-size:12px;color:#94a3b8;margin:0" id="mqb-joins-hint">'+T("Нет")+'</p>';
   document.getElementById('mqb-conds').innerHTML='';
   document.getElementById('mqb-ords').innerHTML='';
   document.getElementById('mqb-fields').innerHTML='';
@@ -2956,7 +2965,7 @@ function openQBModalMonaco(editorId,presetSel){
   document.getElementById('mqb-src').value='';
   document.getElementById('mqb-alias').value='';
   document.getElementById('mqb-vtp').style.display='none';
-  document.getElementById('mqb-joins').innerHTML='<p style="font-size:12px;color:#94a3b8;margin:0" id="mqb-joins-hint">{{t $.Lang "Нет"}}</p>';
+  document.getElementById('mqb-joins').innerHTML='<p style="font-size:12px;color:#94a3b8;margin:0" id="mqb-joins-hint">'+T("Нет")+'</p>';
   document.getElementById('mqb-conds').innerHTML='';
   document.getElementById('mqb-ords').innerHTML='';
   document.getElementById('mqb-fields').innerHTML='';
@@ -3146,7 +3155,7 @@ function mqbSetSrc(id){
   var src=_mqbSrcMap[id];_mqbSel={};_mqbJoins=[];
   document.getElementById('mqb-conds').innerHTML='';
   document.getElementById('mqb-ords').innerHTML='';
-  document.getElementById('mqb-joins').innerHTML='<p style="font-size:12px;color:#94a3b8;margin:0" id="mqb-joins-hint">{{t $.Lang "Нет"}}</p>';
+  document.getElementById('mqb-joins').innerHTML='<p style="font-size:12px;color:#94a3b8;margin:0" id="mqb-joins-hint">'+T("Нет")+'</p>';
   document.getElementById('mqb-alias').value='';
   var vtp=document.getElementById('mqb-vtp');
   if(src&&src.vtParam){vtp.style.display='';document.getElementById('mqb-vtpv').value=src.vtParam;}
@@ -3231,7 +3240,7 @@ function mqbAddJoin(){
   var del=document.createElement('button');del.type='button';del.textContent='×';
   del.style.cssText='background:none;border:none;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;padding:0 2px';
   del.onclick=function(){div.remove();_mqbJoins=_mqbJoins.filter(function(j){return j.id!==jid;});
-    if(!_mqbJoins.length)document.getElementById('mqb-joins').innerHTML='<p style="font-size:12px;color:#94a3b8;margin:0" id="mqb-joins-hint">{{t $.Lang "Нет"}}</p>';
+    if(!_mqbJoins.length)document.getElementById('mqb-joins').innerHTML='<p style="font-size:12px;color:#94a3b8;margin:0" id="mqb-joins-hint">'+T("Нет")+'</p>';
     mqbRebuild();};
   r1.appendChild(ts);r1.appendChild(ss);r1.appendChild(ai);r1.appendChild(del);
   var r2=document.createElement('div');r2.style.cssText='display:flex;gap:4px;align-items:center';
@@ -3327,10 +3336,10 @@ function mqbGen(){
 }
 
 // ── Debug panel ──────────────────────────────────────────────────
-var _dbgBase = '{{.Base.ID}}'; // base ID for debug proxy
-var _basePort = {{.Base.Port}};
-var _hasSession = {{if .SessionToken}}true{{else}}false{{end}}; // сырой токен в страницу не вшиваем (план 53)
-var _treeGroupOrder = [{{range $i, $g := .GroupOrder}}{{if $i}},{{end}}'{{$g}}'{{end}}]; // пользовательский порядок групп дерева
+var _dbgBase = window.__cfg.baseId; // base ID for debug proxy
+var _basePort = window.__cfg.basePort;
+var _hasSession = window.__cfg.hasSession; // сырой токен в страницу не вшиваем (план 53)
+var _treeGroupOrder = window.__cfg.groupOrder; // пользовательский порядок групп дерева
 var _dbgEnabled = false;
 var _dbgPollTimer = null;
 var _dbgPollCount = 0;
@@ -3362,7 +3371,7 @@ function cfgAdmin(name) {
   var overlay = document.getElementById('admin-overlay');
   if(!overlay)return;
   overlay.style.display='flex';
-  overlay.innerHTML = '<div style="background:#fff;border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,.2);width:90%;max-width:800px;max-height:85vh;overflow-y:auto;position:relative"><div style="padding:20px;text-align:center;color:#888">{{t $.Lang "Загрузка..."}}</div></div>';
+  overlay.innerHTML = '<div style="background:#fff;border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,.2);width:90%;max-width:800px;max-height:85vh;overflow-y:auto;position:relative"><div style="padding:20px;text-align:center;color:#888">'+T("Загрузка...")+'</div></div>';
   fetch('/bases/' + _dbgBase + '/configurator/admin/' + name)
     .then(function(r){ return r.text(); })
     .then(function(html){
@@ -4218,7 +4227,7 @@ document.querySelectorAll('details.cfg-tree').forEach(function(d){
 <script>
 (function(){
   if(window.__cfgAiInit)return;window.__cfgAiInit=true;
-  var base='{{.Base.ID}}';
+  var base = window.__cfg.baseId;
   function anyPanelOpen(){
     return document.getElementById('cfgai-panel').style.display==='flex'||document.getElementById('cfggen-panel').style.display==='flex';
   }
