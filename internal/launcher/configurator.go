@@ -93,17 +93,21 @@ type saveEntity struct {
 }
 
 type saveRegister struct {
-	Name       string      `yaml:"name"`
-	Dimensions []saveField `yaml:"dimensions,omitempty"`
-	Resources  []saveField `yaml:"resources,omitempty"`
-	Attributes []saveField `yaml:"attributes,omitempty"`
+	Name       string            `yaml:"name"`
+	Title      string            `yaml:"title,omitempty"`
+	Titles     map[string]string `yaml:"titles,omitempty"`
+	Dimensions []saveField       `yaml:"dimensions,omitempty"`
+	Resources  []saveField       `yaml:"resources,omitempty"`
+	Attributes []saveField       `yaml:"attributes,omitempty"`
 }
 
 type saveInfoReg struct {
-	Name       string      `yaml:"name"`
-	Periodic   bool        `yaml:"periodic,omitempty"`
-	Dimensions []saveField `yaml:"dimensions,omitempty"`
-	Resources  []saveField `yaml:"resources,omitempty"`
+	Name       string            `yaml:"name"`
+	Title      string            `yaml:"title,omitempty"`
+	Titles     map[string]string `yaml:"titles,omitempty"`
+	Periodic   bool              `yaml:"periodic,omitempty"`
+	Dimensions []saveField       `yaml:"dimensions,omitempty"`
+	Resources  []saveField       `yaml:"resources,omitempty"`
 }
 
 type saveAccountReg struct {
@@ -148,6 +152,8 @@ type cfgConstant struct {
 	RefEntity string
 	Default   string
 	Label     string
+	Length    int // разрядность number(L,P): всего знаков (Длина)
+	Scale     int // знаков после запятой (Точность)
 }
 
 type cfgTablePart struct {
@@ -771,6 +777,8 @@ func (h *handler) loadCfgData(ctx context.Context, b *Base, tab string, lang ...
 			RefEntity: c.RefEntity,
 			Default:   c.Default,
 			Label:     c.Label,
+			Length:    c.Length,
+			Scale:     c.Scale,
 		})
 	}
 
@@ -1470,10 +1478,27 @@ func findEntityFilePath(dir, entityName string) (string, error) {
 
 func applyFieldEdits(ent *saveEntity, fields []saveField, tpFields map[string][]saveField, posting *bool, hierarchical *bool, basedOn *[]string) {
 	ent.Fields = fields
+	existingTP := make(map[string]bool, len(ent.TableParts))
 	for i, tp := range ent.TableParts {
+		existingTP[tp.Name] = true
 		if f, ok := tpFields[tp.Name]; ok {
 			ent.TableParts[i].Fields = f
 		}
+	}
+	// Новые табличные части — ключи tpFields, которых ещё нет среди
+	// существующих ТЧ. Раньше они молча терялись (цикл шёл только по
+	// ent.TableParts), из-за чего «Добавить табличную часть» в конфигураторе не
+	// сохранялось. Имена сортируем для детерминированного YAML (порядок обхода
+	// ключей карты в Go не определён).
+	var newTP []string
+	for name := range tpFields {
+		if !existingTP[name] {
+			newTP = append(newTP, name)
+		}
+	}
+	sort.Strings(newTP)
+	for _, name := range newTP {
+		ent.TableParts = append(ent.TableParts, saveTP{Name: name, Fields: tpFields[name]})
 	}
 	if posting != nil {
 		ent.Posting = *posting
@@ -1724,6 +1749,80 @@ func numberTypeWithSpec(typ, lengthVal, scaleVal string) string {
 	return fmt.Sprintf("number(%d,%d)", l, s)
 }
 
+// formRowIndices возвращает отсортированные числовые индексы строк, присланных
+// под базовым ключом base: ключи вида <base>.<idx>.name. Индексы на фронте
+// выдаёт глобальный счётчик (_cfgNewFieldIdx), поэтому непрерывности нет —
+// собираем фактически присланные. Точка после индекса исключает ложные
+// совпадения имён-префиксов (например «new_tp.Цен.field» против «...Цены...»).
+func formRowIndices(r *http.Request, base string) []int {
+	prefix := base + "."
+	var idxs []int
+	for k := range r.Form {
+		if !strings.HasPrefix(k, prefix) || !strings.HasSuffix(k, ".name") {
+			continue
+		}
+		mid := strings.TrimSuffix(strings.TrimPrefix(k, prefix), ".name")
+		if n, err := strconv.Atoi(mid); err == nil {
+			idxs = append(idxs, n)
+		}
+	}
+	sort.Ints(idxs)
+	return idxs
+}
+
+// parseRegSection читает секцию полей регистра/плана счетов из формы. Существующие
+// строки приходят как <prefix>.<i>.{name,type,length,scale,ref} (обрыв на первом
+// пустом), добавленные кнопкой «+ Добавить» — как new_<prefix>.<idx>.* (пропуск
+// пустых, индексы из глобального счётчика). Тип числа кодируется number(L,P) через
+// numberTypeWithSpec; reference/enum → typ:ref — как в редакторе реквизитов
+// сущности. Раньше точность и добавленные строки терялись.
+func parseRegSection(r *http.Request, prefix string) []saveField {
+	var fields []saveField
+	add := func(keyBase string) {
+		name := strings.TrimSpace(r.FormValue(keyBase + ".name"))
+		if name == "" {
+			return
+		}
+		typ := r.FormValue(keyBase + ".type")
+		ref := r.FormValue(keyBase + ".ref")
+		if (typ == "reference" || typ == "enum") && ref != "" {
+			typ = typ + ":" + ref
+		}
+		typ = numberTypeWithSpec(typ, r.FormValue(keyBase+".length"), r.FormValue(keyBase+".scale"))
+		fields = append(fields, saveField{Name: name, Type: typ})
+	}
+	for i := 0; i < 500; i++ {
+		if strings.TrimSpace(r.FormValue(fmt.Sprintf("%s.%d.name", prefix, i))) == "" {
+			break
+		}
+		add(fmt.Sprintf("%s.%d", prefix, i))
+	}
+	for _, i := range formRowIndices(r, "new_"+prefix) {
+		add(fmt.Sprintf("new_%s.%d", prefix, i))
+	}
+	return fields
+}
+
+// buildTPSaveField собирает saveField строки ТЧ из значений формы с базовым
+// ключом keyBase: тип, разрядность числа number(L,P), ссылку/перечисление.
+// Возвращает непустую строку ошибки, если для reference/enum не выбран объект.
+func buildTPSaveField(r *http.Request, lang, keyBase, tpName, name string) (saveField, string) {
+	typ := r.FormValue(keyBase + ".type")
+	ref := r.FormValue(keyBase + ".ref")
+	if typ == "reference" || typ == "enum" {
+		if ref == "" {
+			kind := "объект для ссылки"
+			if typ == "enum" {
+				kind = "перечисление"
+			}
+			return saveField{}, fmt.Sprintf(tr(lang, "Поле «%s.%s»: выберите %s"), tpName, name, kind)
+		}
+		typ = typ + ":" + ref
+	}
+	typ = numberTypeWithSpec(typ, r.FormValue(keyBase+".length"), r.FormValue(keyBase+".scale"))
+	return saveField{Name: name, Type: typ}, ""
+}
+
 func (h *handler) configuratorSaveFields(w http.ResponseWriter, r *http.Request) {
 	b, err := h.store.Get(chi.URLParam(r, "id"))
 	if err != nil {
@@ -1869,44 +1968,48 @@ func (h *handler) configuratorSaveFields(w http.ResponseWriter, r *http.Request)
 		}
 		tpFields[tpName] = f
 	}
-	// new table parts added via "+ Добавить табличную часть"
-	for _, tpIdx := range r.Form["new_tp_name"] {
-		tpName := strings.TrimSpace(tpIdx)
-		if tpName == "" {
+	// Новые табличные части («+ Добавить табличную часть») приходят маркером
+	// new_tp_name=<Имя>. Поля, добавленные кнопкой «+ Добавить поле» — и в
+	// новые, и в СУЩЕСТВУЮЩИЕ ТЧ — приходят под именным префиксом
+	// new_tp.<Имя>.field.<idx>.* (idx — глобальный счётчик фронта, непрерывности
+	// нет). Раньше бэкенд читал new_tp.<число>.idx, а имя клал отдельным ключом —
+	// поэтому и новые ТЧ, и реквизиты, дописанные в существующую ТЧ, терялись.
+	var newTPOrder []string
+	seenNewTP := make(map[string]bool)
+	for _, raw := range r.Form["new_tp_name"] {
+		name := strings.TrimSpace(raw)
+		if name == "" || seenNewTP[name] {
 			continue
 		}
-		tpFields[tpName] = nil
+		seenNewTP[name] = true
+		newTPOrder = append(newTPOrder, name)
+		if _, ok := tpFields[name]; !ok {
+			tpFields[name] = nil // пустая новая ТЧ всё равно должна создаться
+		}
 	}
-	for ntp := 1; ntp <= 100; ntp++ {
-		tpKey := strings.TrimSpace(r.FormValue(fmt.Sprintf("new_tp.%d.idx", ntp)))
-		if tpKey == "" {
+	// Дочитываем добавленные строки и дописываем к нужной ТЧ — существующей (из
+	// tp_names) или только что созданной (из new_tp_name).
+	appendDone := make(map[string]bool)
+	for _, tpName := range append(append([]string{}, tpNames...), newTPOrder...) {
+		if appendDone[tpName] {
 			continue
 		}
-		var f []saveField
-		for i := 1; i <= 500; i++ {
-			name := strings.TrimSpace(r.FormValue(fmt.Sprintf("new_tp.%d.field.%d.name", ntp, i)))
+		appendDone[tpName] = true
+		for _, i := range formRowIndices(r, "new_tp."+tpName+".field") {
+			keyBase := fmt.Sprintf("new_tp.%s.field.%d", tpName, i)
+			name := strings.TrimSpace(r.FormValue(keyBase + ".name"))
 			if name == "" {
 				continue
 			}
-			typ := r.FormValue(fmt.Sprintf("new_tp.%d.field.%d.type", ntp, i))
-			ref := r.FormValue(fmt.Sprintf("new_tp.%d.field.%d.ref", ntp, i))
-			if typ == "reference" || typ == "enum" {
-				if ref == "" {
-					data := h.loadCfgData(r.Context(), b, "tree")
-					kind := "объект для ссылки"
-					if typ == "enum" {
-						kind = "перечисление"
-					}
-					data.Error = fmt.Sprintf(tr(lang, "Поле «%s.%s»: выберите %s"), tpKey, name, kind)
-					renderCfg(w, r, data)
-					return
-				}
-				typ = typ + ":" + ref
+			sf, errMsg := buildTPSaveField(r, lang, keyBase, tpName, name)
+			if errMsg != "" {
+				data := h.loadCfgData(r.Context(), b, "tree")
+				data.Error = errMsg
+				renderCfg(w, r, data)
+				return
 			}
-			typ = numberTypeWithSpec(typ, r.FormValue(fmt.Sprintf("new_tp.%d.field.%d.length", ntp, i)), r.FormValue(fmt.Sprintf("new_tp.%d.field.%d.scale", ntp, i)))
-			f = append(f, saveField{Name: name, Type: typ})
+			tpFields[tpName] = append(tpFields[tpName], sf)
 		}
-		tpFields[tpKey] = f
 	}
 
 	var saveErr error
@@ -2141,26 +2244,9 @@ func (h *handler) configuratorSaveRegisterFields(w http.ResponseWriter, r *http.
 	}
 	regName := r.FormValue("register")
 
-	parseSection := func(prefix string) []saveField {
-		var fields []saveField
-		for i := 0; i < 500; i++ {
-			name := r.FormValue(fmt.Sprintf("%s.%d.name", prefix, i))
-			if name == "" {
-				break
-			}
-			typ := r.FormValue(fmt.Sprintf("%s.%d.type", prefix, i))
-			ref := r.FormValue(fmt.Sprintf("%s.%d.ref", prefix, i))
-			if typ == "reference" && ref != "" {
-				typ = "reference:" + ref
-			}
-			fields = append(fields, saveField{Name: name, Type: typ})
-		}
-		return fields
-	}
-
-	dims := parseSection("dim")
-	res := parseSection("res")
-	attrs := parseSection("attr")
+	dims := parseRegSection(r, "dim")
+	res := parseRegSection(r, "res")
+	attrs := parseRegSection(r, "attr")
 
 	var saveErr error
 	if b.ConfigSource == "database" {
@@ -2405,12 +2491,15 @@ func (h *handler) configuratorSaveConstant(w http.ResponseWriter, r *http.Reques
 	if typ == "reference" && ref != "" {
 		typ = "reference:" + ref
 	}
+	// Разрядность числовой константы number(L,P) — как у реквизитов сущности.
+	typ = numberTypeWithSpec(typ, r.FormValue("length"), r.FormValue("scale"))
 
 	type rawConst struct {
-		Name    string `yaml:"name"`
-		Type    string `yaml:"type"`
-		Default string `yaml:"default,omitempty"`
-		Label   string `yaml:"label,omitempty"`
+		Name    string            `yaml:"name"`
+		Type    string            `yaml:"type"`
+		Default string            `yaml:"default,omitempty"`
+		Label   string            `yaml:"label,omitempty"`
+		Labels  map[string]string `yaml:"labels,omitempty"`
 	}
 	type rawConstsFile struct {
 		Constants []rawConst `yaml:"constants"`
@@ -3330,6 +3419,14 @@ func saveInfoRegToFile(dir string, reg saveInfoReg) error {
 	if err != nil {
 		return err
 	}
+	// Title/Titles не редактируются в этой форме — переносим из существующего
+	// файла, иначе Marshal свежего reg затёр бы синоним регистра.
+	if raw, rerr := os.ReadFile(p); rerr == nil {
+		var existing saveInfoReg
+		if yaml.Unmarshal(raw, &existing) == nil {
+			reg.Title, reg.Titles = existing.Title, existing.Titles
+		}
+	}
 	out, err := yaml.Marshal(&reg)
 	if err != nil {
 		return err
@@ -3355,11 +3452,11 @@ func (h *handler) saveInfoRegToDB(ctx context.Context, b *Base, reg saveInfoReg)
 		if err := rows.Scan(&p, &content); err != nil {
 			continue
 		}
-		var tmp struct {
-			Name string `yaml:"name"`
-		}
-		if yaml.Unmarshal(content, &tmp) == nil && tmp.Name == reg.Name {
+		var existing saveInfoReg
+		if yaml.Unmarshal(content, &existing) == nil && existing.Name == reg.Name {
 			targetPath = p
+			// сохраняем синоним регистра (в форме не редактируется)
+			reg.Title, reg.Titles = existing.Title, existing.Titles
 			break
 		}
 	}
@@ -3390,27 +3487,11 @@ func (h *handler) configuratorSaveInfoRegFields(w http.ResponseWriter, r *http.R
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	parseSection := func(prefix string) []saveField {
-		var fields []saveField
-		for i := 0; i < 500; i++ {
-			name := r.FormValue(fmt.Sprintf("%s.%d.name", prefix, i))
-			if name == "" {
-				break
-			}
-			typ := r.FormValue(fmt.Sprintf("%s.%d.type", prefix, i))
-			ref := r.FormValue(fmt.Sprintf("%s.%d.ref", prefix, i))
-			if typ == "reference" && ref != "" {
-				typ = "reference:" + ref
-			}
-			fields = append(fields, saveField{Name: name, Type: typ})
-		}
-		return fields
-	}
 	reg := saveInfoReg{
 		Name:       r.FormValue("inforeg"),
 		Periodic:   r.FormValue("periodic") == "true",
-		Dimensions: parseSection("dim"),
-		Resources:  parseSection("res"),
+		Dimensions: parseRegSection(r, "dim"),
+		Resources:  parseRegSection(r, "res"),
 	}
 	var saveErr error
 	if b.ConfigSource == "database" {
@@ -3515,23 +3596,11 @@ func (h *handler) configuratorSaveAccountRegister(w http.ResponseWriter, r *http
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	parseSection := func(prefix string) []saveField {
-		var fields []saveField
-		for i := 0; i < 500; i++ {
-			name := r.FormValue(fmt.Sprintf("%s.%d.name", prefix, i))
-			if name == "" {
-				break
-			}
-			typ := r.FormValue(fmt.Sprintf("%s.%d.type", prefix, i))
-			fields = append(fields, saveField{Name: name, Type: typ})
-		}
-		return fields
-	}
 	reg := saveAccountReg{
 		Name:      r.FormValue("accountreg"),
 		Title:     strings.TrimSpace(r.FormValue("title")),
 		Accounts:  strings.TrimSpace(r.FormValue("accounts")),
-		Resources: parseSection("res"),
+		Resources: parseRegSection(r, "res"),
 	}
 	var saveErr error
 	if b.ConfigSource == "database" {
