@@ -2340,6 +2340,44 @@ const tplReport = `
     </tr>{{end}}
     </tbody>
   </table>
+  <div class="rs-filters" style="margin:12px 0">
+    <div style="font-weight:600;margin-bottom:6px">{{t $.Lang "Отбор"}}</div>
+    <div id="rs-filter-rows">
+      {{if .UserSettings}}{{range .UserSettings.Filters}}{{$f := .}}
+      <div class="rs-filter-row" style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+        <select class="rs-f-field">{{range $.ReportCols}}<option value="{{.}}" {{if eq . $f.Field}}selected{{end}}>{{.}}</option>{{end}}</select>
+        <select class="rs-f-op">
+          <option value="eq" {{if eq $f.Op "eq"}}selected{{end}}>=</option>
+          <option value="ne" {{if eq $f.Op "ne"}}selected{{end}}>≠</option>
+          <option value="gt" {{if eq $f.Op "gt"}}selected{{end}}>&gt;</option>
+          <option value="ge" {{if eq $f.Op "ge"}}selected{{end}}>≥</option>
+          <option value="lt" {{if eq $f.Op "lt"}}selected{{end}}>&lt;</option>
+          <option value="le" {{if eq $f.Op "le"}}selected{{end}}>≤</option>
+          <option value="contains" {{if eq $f.Op "contains"}}selected{{end}}>{{t $.Lang "содержит"}}</option>
+        </select>
+        <input class="rs-f-value" type="text" value="{{$f.Value}}">
+        <button type="button" class="btn btn-sm" onclick="this.parentNode.remove()">×</button>
+      </div>
+      {{end}}{{end}}
+    </div>
+    <button type="button" class="btn btn-sm" onclick="rsAddFilter()">+ {{t $.Lang "Отбор"}}</button>
+  </div>
+  <template id="rs-filter-tpl">
+    <div class="rs-filter-row" style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+      <select class="rs-f-field">{{range .ReportCols}}<option value="{{.}}">{{.}}</option>{{end}}</select>
+      <select class="rs-f-op">
+        <option value="eq">=</option>
+        <option value="ne">≠</option>
+        <option value="gt">&gt;</option>
+        <option value="ge">≥</option>
+        <option value="lt">&lt;</option>
+        <option value="le">≤</option>
+        <option value="contains">{{t $.Lang "содержит"}}</option>
+      </select>
+      <input class="rs-f-value" type="text" value="">
+      <button type="button" class="btn btn-sm" onclick="this.parentNode.remove()">×</button>
+    </div>
+  </template>
   <button class="btn btn-primary" type="submit">{{t $.Lang "Применить"}}</button>
 </form>
 <script>
@@ -2360,9 +2398,18 @@ const tplReport = `
   window.rsCollect=function(){
     var groupings=[];document.querySelectorAll('.rs-group:checked').forEach(function(c){groupings.push(c.value);});
     var measures=[];document.querySelectorAll('.rs-measure:checked').forEach(function(c){measures.push({Field:c.value,Agg:"sum"});});
+    var filters=[];document.querySelectorAll('.rs-filter-row').forEach(function(row){
+      var f=row.querySelector('.rs-f-field'),op=row.querySelector('.rs-f-op'),v=row.querySelector('.rs-f-value');
+      if(f&&op&&f.value){ filters.push({field:f.value,op:op.value,value:v?v.value:""}); }
+    });
     var variantEl=document.querySelector('input[name="__variant"]');
-    var s={variant:variantEl?variantEl.value:"",composition:{Groupings:groupings,Measures:measures}};
+    var s={variant:variantEl?variantEl.value:"",composition:{Groupings:groupings,Measures:measures},filters:filters};
     if(hidden)hidden.value=JSON.stringify(s);
+  };
+  window.rsAddFilter=function(){
+    var tpl=document.getElementById('rs-filter-tpl');
+    if(!tpl||!tpl.content) return;
+    document.getElementById('rs-filter-rows').appendChild(tpl.content.cloneNode(true));
   };
   preset();
 })();

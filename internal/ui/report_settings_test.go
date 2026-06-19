@@ -86,3 +86,37 @@ func TestReportSettingsPanelHidden(t *testing.T) {
 		t.Errorf("панель настроек не должна рендериться без ReportCols")
 	}
 }
+
+// TestReportSettingsFilters: сохранённые отборы предзаполняют строки панели —
+// select поля, select оператора (с выбранным gt) и значение.
+func TestReportSettingsFilters(t *testing.T) {
+	rep := &reportpkg.Report{Name: "sales", Title: "Продажи"}
+	var buf bytes.Buffer
+	data := map[string]any{
+		"Report":       rep,
+		"ParamValues":  map[string]any{},
+		"ReportParams": []reportParamUI{},
+		"ReportCols":   []string{"Товар", "Сумма"},
+		"UserSettings": &reportpkg.UserReportSettings{
+			Filters: []reportpkg.Filter{{Field: "Сумма", Op: "gt", Value: "100"}},
+		},
+		"Cfg":  Config{},
+		"Lang": "ru",
+	}
+	if err := tmpl.ExecuteTemplate(&buf, "page-report", data); err != nil {
+		t.Fatalf("execute page-report: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `class="rs-f-field"`) {
+		t.Errorf("нет select поля отбора")
+	}
+	if !strings.Contains(out, `class="rs-f-op"`) {
+		t.Fatalf("нет select оператора отбора")
+	}
+	if !strings.Contains(out, `value="gt" selected`) {
+		t.Errorf("оператор gt не помечен selected")
+	}
+	if !strings.Contains(out, `value="100"`) {
+		t.Errorf("значение отбора 100 не предзаполнено")
+	}
+}
