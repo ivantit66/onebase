@@ -139,8 +139,8 @@ func (s *Server) aiSchemaText(ctx context.Context) string {
 
 // aiDeniedSource возвращает имя первого объекта-источника, на чтение которого у
 // пользователя нет прав (для режима rbac). Пусто — все источники разрешены.
-// Источники без секции прав (бухрегистр, Kind=="") разрешены только админу и в
-// открытом деплое: canCtx с пустым kind → User.Has → false для не-админа.
+// Источники неизвестного типа (Kind=="") разрешены только админу и в открытом
+// деплое: canCtx с пустым kind → User.Has → false для не-админа.
 func (s *Server) aiDeniedSource(ctx context.Context, sources []query.SourceRef) string {
 	for _, src := range sources {
 		if !s.canCtx(ctx, src.Kind, src.Name, "read") {
