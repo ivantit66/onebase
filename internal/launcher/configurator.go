@@ -223,14 +223,16 @@ type cfgRegister struct {
 }
 
 type cfgParam struct {
-	Name  string
-	Type  string
-	Label string
+	Name   string
+	Type   string
+	Label  string
+	Labels map[string]string
 }
 
 type cfgReport struct {
 	Name        string
 	Title       string
+	Titles      map[string]string
 	Query       string
 	ChartProc   string
 	ChartSource string
@@ -824,12 +826,12 @@ func (h *handler) loadCfgData(ctx context.Context, b *Base, tab string, lang ...
 	repSources := readReportSources(proj.Dir)
 
 	for _, rep := range proj.Reports {
-		rv := cfgReport{Name: rep.Name, Title: rep.Title, Query: rep.Query, ChartProc: rep.ChartProc, Composition: rep.Composition}
+		rv := cfgReport{Name: rep.Name, Title: rep.Title, Titles: rep.Titles, Query: rep.Query, ChartProc: rep.ChartProc, Composition: rep.Composition}
 		if src, ok := repSources[strings.ToLower(rep.Name)]; ok {
 			rv.ChartSource = src
 		}
 		for _, p := range rep.Params {
-			rv.Params = append(rv.Params, cfgParam{Name: p.Name, Type: p.Type, Label: p.Label})
+			rv.Params = append(rv.Params, cfgParam{Name: p.Name, Type: p.Type, Label: p.Label, Labels: p.Labels})
 		}
 		data.Reports = append(data.Reports, rv)
 	}
@@ -1811,6 +1813,15 @@ func formRowIndices(r *http.Request, base string) []int {
 	return idxs
 }
 
+// anyOrNil превращает nil-карту в нетипизированный nil, чтобы setYAMLMapField
+// удалил ключ (типизированный nil map, обёрнутый в any, != nil).
+func anyOrNil(m map[string]string) any {
+	if m == nil {
+		return nil
+	}
+	return m
+}
+
 // parseMapForm читает значения формы вида "<prefix>.<lang>" в map[lang]value.
 // Скан по ключам формы (а не по списку языков) — чтобы не зависеть от бандла
 // локализации. Пропускает: базовый язык ru (он в title/label), пустые значения
@@ -2701,9 +2712,10 @@ func (h *handler) configuratorSaveReport(w http.ResponseWriter, r *http.Request)
 	chartSource := r.FormValue("chart_source")
 
 	type saveParam struct {
-		Name  string `yaml:"name"`
-		Type  string `yaml:"type"`
-		Label string `yaml:"label,omitempty"`
+		Name   string            `yaml:"name"`
+		Type   string            `yaml:"type"`
+		Label  string            `yaml:"label,omitempty"`
+		Labels map[string]string `yaml:"labels,omitempty"`
 	}
 	type saveReport struct {
 		Name        string              `yaml:"name"`
@@ -2723,7 +2735,29 @@ func (h *handler) configuratorSaveReport(w http.ResponseWriter, r *http.Request)
 		}
 		ptype := r.FormValue(fmt.Sprintf("param.%d.type", i))
 		plabel := strings.TrimSpace(r.FormValue(fmt.Sprintf("param.%d.label", i)))
-		newParams = append(newParams, saveParam{Name: pname, Type: ptype, Label: plabel})
+		newParams = append(newParams, saveParam{
+			Name:   pname,
+			Type:   ptype,
+			Label:  plabel,
+			Labels: parseMapForm(r, fmt.Sprintf("param.%d.labels", i)),
+		})
+	}
+
+	// Переводы объекта: вычисляем до updateReportFile — нужен sentinel hasTitlesBlock,
+	// чтобы отличить «форма не имела блока переводов» (AvailableLangs пуст) от
+	// «пользователь очистил все переводы». Только во втором случае ключ titles: удаляется.
+	var (
+		newTitles     map[string]string
+		hasTitlesBlock bool
+	)
+	for k := range r.Form {
+		if strings.HasPrefix(k, "titles.") {
+			hasTitlesBlock = true
+			break
+		}
+	}
+	if hasTitlesBlock {
+		newTitles = parseMapForm(r, "titles")
 	}
 
 	// Правим только редактируемые в форме ключи прямо в дереве YAML, чтобы не
@@ -2743,6 +2777,11 @@ func (h *handler) configuratorSaveReport(w http.ResponseWriter, r *http.Request)
 		}
 		if title != "" { // пустой title не трогаем — сохраняем существующий
 			if err := setYAMLMapField(doc, "title", title); err != nil {
+				return nil, err
+			}
+		}
+		if hasTitlesBlock {
+			if err := setYAMLMapField(doc, "titles", anyOrNil(newTitles)); err != nil {
 				return nil, err
 			}
 		}

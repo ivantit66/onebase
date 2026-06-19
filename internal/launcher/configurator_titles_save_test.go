@@ -8,6 +8,32 @@ import (
 	"testing"
 )
 
+func TestSaveReport_PersistsTitlesAndParamLabels(t *testing.T) {
+	h, cfgDir := newFileBaseHandler(t)
+	h.runner = NewRunner()
+	p := writeCfgFileRv(t, cfgDir, "reports", "Продажи.yaml", `name: Продажи
+title: Продажи
+query: ВЫБРАТЬ 1 КАК Один
+params:
+  - name: Период
+    type: date
+`)
+	form := url.Values{}
+	form.Set("report_name", "Продажи")
+	form.Set("title", "Продажи")
+	form.Set("query", "ВЫБРАТЬ 1 КАК Один")
+	form.Set("titles.en", "Sales")
+	form.Set("param.0.name", "Период")
+	form.Set("param.0.type", "date")
+	form.Set("param.0.labels.en", "Period")
+
+	rec := postCfgRv(t, "test", "/bases/test/configurator/report", form, h.configuratorSaveReport)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код %d: %s", rec.Code, rec.Body.String())
+	}
+	assertFileContainsRv(t, p, "titles:", "en: Sales", "labels:", "en: Period")
+}
+
 func TestSaveFields_PersistsTitles(t *testing.T) {
 	h, cfgDir := newFileBaseHandler(t)
 	h.runner = NewRunner()
