@@ -258,6 +258,7 @@ type cfgModule struct {
 type cfgProcessor struct {
 	Name   string
 	Title  string
+	Titles map[string]string
 	Source string
 	Params []cfgParam
 }
@@ -850,10 +851,11 @@ func (h *handler) loadCfgData(ctx context.Context, b *Base, tab string, lang ...
 		rv := cfgProcessor{
 			Name:   proc.Name,
 			Title:  proc.Title,
+			Titles: proc.Titles,
 			Source: procSources[strings.ToLower(proc.Name)],
 		}
 		for _, p := range proc.Params {
-			rv.Params = append(rv.Params, cfgParam{Name: p.Name, Type: p.Type, Label: p.Label})
+			rv.Params = append(rv.Params, cfgParam{Name: p.Name, Type: p.Type, Label: p.Label, Labels: p.Labels})
 		}
 		data.Processors = append(data.Processors, rv)
 	}
@@ -2951,14 +2953,16 @@ func (h *handler) configuratorSaveProcessor(w http.ResponseWriter, r *http.Reque
 	source := r.FormValue("source")
 
 	type saveParam struct {
-		Name  string `yaml:"name"`
-		Type  string `yaml:"type"`
-		Label string `yaml:"label,omitempty"`
+		Name   string            `yaml:"name"`
+		Type   string            `yaml:"type"`
+		Label  string            `yaml:"label,omitempty"`
+		Labels map[string]string `yaml:"labels,omitempty"`
 	}
 	type saveProcessor struct {
-		Name   string      `yaml:"name"`
-		Title  string      `yaml:"title,omitempty"`
-		Params []saveParam `yaml:"params,omitempty"`
+		Name   string            `yaml:"name"`
+		Title  string            `yaml:"title,omitempty"`
+		Titles map[string]string `yaml:"titles,omitempty"`
+		Params []saveParam       `yaml:"params,omitempty"`
 	}
 
 	var newParams []saveParam
@@ -2969,10 +2973,16 @@ func (h *handler) configuratorSaveProcessor(w http.ResponseWriter, r *http.Reque
 		}
 		ptype := r.FormValue(fmt.Sprintf("param.%d.type", i))
 		plabel := strings.TrimSpace(r.FormValue(fmt.Sprintf("param.%d.label", i)))
-		newParams = append(newParams, saveParam{Name: pname, Type: ptype, Label: plabel})
+		newParams = append(newParams, saveParam{
+			Name: pname, Type: ptype, Label: plabel,
+			Labels: parseMapForm(r, fmt.Sprintf("param.%d.labels", i)),
+		})
 	}
 
-	yamlData, _ := yaml.Marshal(saveProcessor{Name: procName, Title: title, Params: newParams})
+	yamlData, _ := yaml.Marshal(saveProcessor{
+		Name: procName, Title: title, Params: newParams,
+		Titles: parseMapForm(r, "titles"),
+	})
 	yamlFilename := "processors/" + nameToFilename(procName) + ".yaml"
 	srcFilename := "src/" + processorSrcFilename(procName)
 

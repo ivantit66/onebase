@@ -145,3 +145,23 @@ fields:
 		t.Errorf("перевод объекта должен был удалиться, но остался:\n%s", out)
 	}
 }
+
+func TestSaveProcessor_PersistsTitlesAndParamLabels(t *testing.T) {
+	h, cfgDir := newFileBaseHandler(t)
+	h.runner = NewRunner()
+	form := url.Values{}
+	form.Set("processor_name", "Загрузка")
+	form.Set("title", "Загрузка")
+	form.Set("source", "Процедура Старт() КонецПроцедуры")
+	form.Set("titles.en", "Import")
+	form.Set("param.0.name", "Файл")
+	form.Set("param.0.type", "string")
+	form.Set("param.0.labels.en", "File")
+
+	rec := postCfgRv(t, "test", "/bases/test/configurator/processor", form, h.configuratorSaveProcessor)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код %d: %s", rec.Code, rec.Body.String())
+	}
+	procPath := cfgDir + "/processors/" + nameToFilename("Загрузка") + ".yaml"
+	assertFileContainsRv(t, procPath, "titles:", "en: Import", "labels:", "en: File")
+}
