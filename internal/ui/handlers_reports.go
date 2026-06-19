@@ -142,6 +142,11 @@ func (s *Server) runReport(w http.ResponseWriter, r *http.Request, rep *reportpk
 	}
 	s.resolveUUIDsInReport(r.Context(), rows, detailLinkCol)
 
+	// Пользовательские отборы применяются к строкам до компоновки (план 70).
+	if settings != nil && len(settings.Filters) > 0 {
+		rows = compose.ApplyFilters(rows, settings.Filters)
+	}
+
 	if comp != nil {
 		ev := newInterpEvaluator(s.interp)
 		// Режим кросс-таблицы (pivot): измерения уходят в колонки. График в этом
