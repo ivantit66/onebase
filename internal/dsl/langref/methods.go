@@ -1126,7 +1126,7 @@ var methodDescriptors = []Descriptor{
 		Doc:     "Добавляет график (ECharts) и возвращает его построитель (Категории/Серия).",
 	},
 	{
-		Name: "кнопка", Display: "Кнопка", Aliases: []string{"Ссылка", "Button", "Link"},
+		Name: "кнопка", Display: "Кнопка", Aliases: []string{"Button"},
 		Kind: KindMethod, Object: "Страница",
 		Signature: "Страница.Кнопка(Подпись, URL)",
 		Params: []Param{
@@ -1193,7 +1193,7 @@ var methodDescriptors = []Descriptor{
 		Doc: "Делает ячейку кликабельной ссылкой.",
 	},
 	{
-		Name: "пункт", Display: "Пункт", Aliases: []string{"Добавить", "Item", "Add"},
+		Name: "пункт", Display: "Пункт", Aliases: []string{"Item"},
 		Kind: KindMethod, Object: "Страница.Список",
 		Signature: "Список.Пункт(Текст, URL)",
 		Params: []Param{

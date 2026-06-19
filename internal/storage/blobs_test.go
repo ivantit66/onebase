@@ -30,7 +30,7 @@ func TestBlobRoundtrip_DiskAndDB(t *testing.T) {
 	payload := []byte("\x89PNG\r\n\x1a\n притворимся картинкой")
 
 	t.Run("disk", func(t *testing.T) {
-		b, err := db.PutBlob(ctx, "image/png", bytes.NewReader(payload), 1<<20)
+		b, err := db.PutBlob(ctx, "image/png", bytes.NewReader(payload), 1<<20, BlobOwner{})
 		if err != nil {
 			t.Fatalf("PutBlob: %v", err)
 		}
@@ -59,7 +59,7 @@ func TestBlobRoundtrip_DiskAndDB(t *testing.T) {
 		if got := db.GetFileStorageMode(ctx); got != FileStorageDB {
 			t.Fatalf("режим = %q, ожидался db", got)
 		}
-		b, err := db.PutBlob(ctx, "image/jpeg", bytes.NewReader(payload), 1<<20)
+		b, err := db.PutBlob(ctx, "image/jpeg", bytes.NewReader(payload), 1<<20, BlobOwner{})
 		if err != nil {
 			t.Fatalf("PutBlob(db): %v", err)
 		}
@@ -71,6 +71,60 @@ func TestBlobRoundtrip_DiskAndDB(t *testing.T) {
 			t.Fatalf("содержимое (db) не совпало: %d байт", len(got))
 		}
 	})
+}
+
+// TestBlobOwnerRoundtrip проверяет, что владелец (сущность), указанный при
+// PutBlob, сохраняется и возвращается OpenBlob — основа авторизации отдачи
+// картинок (IDOR): imageServe проверяет право чтения на сущность-владельца.
+func TestBlobOwnerRoundtrip(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := ConnectSQLite(ctx, filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("ConnectSQLite: %v", err)
+	}
+	defer db.Close()
+	db.filesDir = filepath.Join(dir, "files")
+	if err := db.EnsureBlobTable(ctx); err != nil {
+		t.Fatalf("EnsureBlobTable: %v", err)
+	}
+
+	payload := []byte("\x89PNG\r\n\x1a\n картинка с владельцем")
+	owner := BlobOwner{Kind: "catalog", Entity: "Контрагенты"}
+	b, err := db.PutBlob(ctx, "image/png", bytes.NewReader(payload), 1<<20, owner)
+	if err != nil {
+		t.Fatalf("PutBlob: %v", err)
+	}
+	if b.OwnerKind != "catalog" || b.OwnerEntity != "Контрагенты" {
+		t.Fatalf("PutBlob не вернул владельца: kind=%q entity=%q", b.OwnerKind, b.OwnerEntity)
+	}
+
+	got, rc, err := db.OpenBlob(ctx, b.ID)
+	if err != nil {
+		t.Fatalf("OpenBlob: %v", err)
+	}
+	if rc != nil {
+		rc.Close()
+	}
+	if got.OwnerKind != "catalog" || got.OwnerEntity != "Контрагенты" {
+		t.Fatalf("OpenBlob потерял владельца: kind=%q entity=%q", got.OwnerKind, got.OwnerEntity)
+	}
+
+	// Пустой владелец (легаси / DSL СохранитьКартинку) сохраняется как пустые строки.
+	b2, err := db.PutBlob(ctx, "image/png", bytes.NewReader(payload), 1<<20, BlobOwner{})
+	if err != nil {
+		t.Fatalf("PutBlob(без владельца): %v", err)
+	}
+	got2, rc2, err := db.OpenBlob(ctx, b2.ID)
+	if err != nil {
+		t.Fatalf("OpenBlob(без владельца): %v", err)
+	}
+	if rc2 != nil {
+		rc2.Close()
+	}
+	if got2.OwnerKind != "" || got2.OwnerEntity != "" {
+		t.Fatalf("ожидался пустой владелец, получено kind=%q entity=%q", got2.OwnerKind, got2.OwnerEntity)
+	}
 }
 
 func readBlobBytes(t *testing.T, db *DB, id uuid.UUID) []byte {

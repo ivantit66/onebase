@@ -12,14 +12,25 @@ import (
 	"github.com/ivantit66/onebase/internal/report/compose"
 )
 
-// numForExcel: nil-значение показателя → пустая ячейка Excel (excel.ExportList
-// рендерит nil как ""), иначе число через numFor. Расхождение с HTML
-// (где nil → пустая ячейка) иначе приводило бы к ложному 0 в выгрузке.
-func numForExcel(v any) any {
+// measureCellForExcel выбирает значение ячейки показателя для Excel так, чтобы
+// она совпадала с HTML-рендером (fmtMeasure) и выгрузка не расходилась с экраном:
+//   - nil → пустая ячейка;
+//   - число с заданным Format → отформатированная строка (как FormatNumber в
+//     HTML); иначе формат «0.0%» давал бы на экране «12,3%», а в XLSX 0.123;
+//   - число без Format → float64 (Excel видит число, сортируемое);
+//   - не-число (текстовый показатель в детали) → текст, а не ложный 0.
+func measureCellForExcel(v any, m report.Measure) any {
 	if v == nil {
 		return nil
 	}
-	return composeFloat(v)
+	if d, ok := compose.ExportToDecimal(v); ok {
+		if m.Format != "" {
+			return compose.FormatNumber(d, m.Format)
+		}
+		f, _ := d.Float64()
+		return f
+	}
+	return fmtVal(v)
 }
 
 // composedRows строит заголовки и строки данных для excel.ExportList из
@@ -54,7 +65,7 @@ func (e *excelComposeSink) row(label string, vals map[string]any) {
 	r := make([]any, e.colCount)
 	r[0] = label
 	for i, m := range e.spec.Measures {
-		r[i+1] = numForExcel(vals[m.Field])
+		r[i+1] = measureCellForExcel(vals[m.Field], m)
 	}
 	e.rows = append(e.rows, r)
 }

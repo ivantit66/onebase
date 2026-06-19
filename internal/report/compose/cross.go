@@ -199,8 +199,11 @@ func crossAgg(rows []Row, spec report.Composition, ev Evaluator) (map[string]any
 	cells := map[string]any{}
 	var styles map[string]report.CellStyle
 	for k, sub := range byPath {
-		agg := aggregate(sub, spec.Measures, ev)
-		st := evalStyles(agg, spec, ev)
+		// wc=nil: кросс-таблица не собирает предупреждения компоновки (CrossResult
+		// их не несёт) — отдельный режим вывода; ошибки показателей/условий в нём
+		// не аккумулируются.
+		agg := aggregate(sub, spec.Measures, ev, nil)
+		st := evalStyles(agg, spec, ev, nil)
 		p := paths[k]
 		for _, m := range spec.Measures {
 			ck := colKey(p, m.Field)

@@ -12,8 +12,9 @@ import (
 )
 
 // crossSheetRows строит заголовки и строки данных для excel.ExportList из
-// результата кросс-компоновки. Значения показателей передаются как float64
-// (numForExcel: nil → пустая ячейка), чтобы Excel видел числа, а не текст.
+// результата кросс-компоновки. Значения показателей проходят через
+// measureCellForExcel (nil → пустая ячейка; формат показателя учитывается, как в
+// обычной выгрузке), чтобы вид совпадал с HTML и Excel видел числа, а не текст.
 func crossSheetRows(cr *compose.CrossResult, spec *report.Composition) (headers []string, rows [][]any) {
 	byField := make(map[string]report.Measure, len(spec.Measures))
 	for _, m := range spec.Measures {
@@ -33,7 +34,7 @@ func crossSheetRows(cr *compose.CrossResult, spec *report.Composition) (headers 
 		r := make([]any, colCount)
 		r[0] = strings.Repeat("  ", level) + fmtVal(row.Key)
 		for i, c := range cr.Cols {
-			r[i+1] = numForExcel(row.Cells[c.Key()])
+			r[i+1] = measureCellForExcel(row.Cells[c.Key()], byField[c.Measure])
 		}
 		rows = append(rows, r)
 		for _, ch := range row.Children {
@@ -47,7 +48,7 @@ func crossSheetRows(cr *compose.CrossResult, spec *report.Composition) (headers 
 	tot := make([]any, colCount)
 	tot[0] = "ВСЕГО"
 	for i, c := range cr.Cols {
-		tot[i+1] = numForExcel(cr.RowTotal[c.Key()])
+		tot[i+1] = measureCellForExcel(cr.RowTotal[c.Key()], byField[c.Measure])
 	}
 	rows = append(rows, tot)
 	return headers, rows

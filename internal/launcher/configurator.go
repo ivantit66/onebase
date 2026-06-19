@@ -117,6 +117,42 @@ type saveAccountReg struct {
 	Resources []saveField `yaml:"resources,omitempty"`
 }
 
+// applyAccountRegFields точечно правит редактируемые в форме ключи плана счетов
+// прямо в дереве YAML, сохраняя блок subconto, многоязычные titles и любые
+// прочие поля (раньше свежий marshal saveAccountReg стирал subconto и titles).
+func applyAccountRegFields(raw []byte, reg saveAccountReg) ([]byte, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(raw, &root); err != nil {
+		return nil, err
+	}
+	if root.Kind != yaml.DocumentNode || len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("applyAccountRegFields: ожидалось YAML-отображение в корне")
+	}
+	doc := root.Content[0]
+	if err := setYAMLMapField(doc, "name", reg.Name); err != nil {
+		return nil, err
+	}
+	var t, a, rv any
+	if reg.Title != "" {
+		t = reg.Title
+	}
+	if reg.Accounts != "" {
+		a = reg.Accounts
+	}
+	if len(reg.Resources) > 0 {
+		rv = reg.Resources
+	}
+	for _, kv := range []struct {
+		k string
+		v any
+	}{{"title", t}, {"accounts", a}, {"resources", rv}} {
+		if err := setYAMLMapField(doc, kv.k, kv.v); err != nil {
+			return nil, err
+		}
+	}
+	return yaml.Marshal(&root)
+}
+
 // ── view types ────────────────────────────────────────────────────────────────
 
 type cfgField struct {
@@ -2288,6 +2324,12 @@ func (h *handler) configuratorNewObject(w http.ResponseWriter, r *http.Request) 
 		renderCfg(w, r, data)
 		return
 	}
+	if !validObjectName(name) {
+		data := h.loadCfgData(r.Context(), b, "tree")
+		data.Error = tr(lang, "Недопустимое имя объекта")
+		renderCfg(w, r, data)
+		return
+	}
 
 	subdir, content := newObjectContent(kind, name)
 	if subdir == "" {
@@ -2646,21 +2688,50 @@ func (h *handler) configuratorSaveReport(w http.ResponseWriter, r *http.Request)
 		newParams = append(newParams, saveParam{Name: pname, Type: ptype, Label: plabel})
 	}
 
+	// Правим только редактируемые в форме ключи прямо в дереве YAML, чтобы не
+	// терять прочие поля отчёта — многоязычные titles и любые будущие (раньше
+	// round-trip через типизированную saveReport стирал titles, issue #86).
 	updateReportFile := func(raw []byte) ([]byte, error) {
-		var rep saveReport
-		if err := yaml.Unmarshal(raw, &rep); err != nil {
+		var root yaml.Node
+		if err := yaml.Unmarshal(raw, &root); err != nil {
 			return nil, err
 		}
-		rep.Query = query
-		if title != "" {
-			rep.Title = title
+		if root.Kind != yaml.DocumentNode || len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("updateReportFile: ожидалось YAML-отображение в корне отчёта")
 		}
-		rep.Params = newParams
-		rep.ChartProc = chartProc
+		doc := root.Content[0]
+		if err := setYAMLMapField(doc, "query", query); err != nil {
+			return nil, err
+		}
+		if title != "" { // пустой title не трогаем — сохраняем существующий
+			if err := setYAMLMapField(doc, "title", title); err != nil {
+				return nil, err
+			}
+		}
+		var cp any
+		if chartProc != "" {
+			cp = chartProc // пусто → ключ удаляется (как omitempty)
+		}
+		if err := setYAMLMapField(doc, "chart_proc", cp); err != nil {
+			return nil, err
+		}
+		var pv any
+		if len(newParams) > 0 {
+			pv = newParams
+		}
+		if err := setYAMLMapField(doc, "params", pv); err != nil {
+			return nil, err
+		}
 		if c, present := parseCompositionForm(r.Form); present {
-			rep.Composition = c
+			var cv any
+			if c != nil {
+				cv = c
+			}
+			if err := setYAMLMapField(doc, "composition", cv); err != nil {
+				return nil, err
+			}
 		}
-		return yaml.Marshal(&rep)
+		return yaml.Marshal(&root)
 	}
 
 	var saveErr error
@@ -3535,13 +3606,22 @@ func findAccountRegFilePath(dir, name string) (string, error) {
 func saveAccountRegToFile(dir string, reg saveAccountReg) error {
 	p, err := findAccountRegFilePath(dir, reg.Name)
 	if err != nil {
-		// create new file
+		// новый файл — subconto/titles сохранять неоткуда, marshal свежего reg
 		os.MkdirAll(filepath.Join(dir, "accountregs"), 0o755)
 		p = filepath.Join(dir, "accountregs", nameToFilename(reg.Name)+".yaml")
+		out, merr := yaml.Marshal(&reg)
+		if merr != nil {
+			return merr
+		}
+		return os.WriteFile(p, out, 0o644)
 	}
-	out, err := yaml.Marshal(&reg)
-	if err != nil {
-		return err
+	raw, rerr := os.ReadFile(p)
+	if rerr != nil {
+		return rerr
+	}
+	out, merr := applyAccountRegFields(raw, reg)
+	if merr != nil {
+		return merr
 	}
 	return os.WriteFile(p, out, 0o644)
 }
@@ -3558,6 +3638,7 @@ func (h *handler) saveAccountRegToDB(ctx context.Context, b *Base, reg saveAccou
 	}
 	defer rows.Close()
 	targetPath := "accountregs/" + nameToFilename(reg.Name) + ".yaml"
+	var existingContent []byte
 	for rows.Next() {
 		var p string
 		var content []byte
@@ -3569,11 +3650,19 @@ func (h *handler) saveAccountRegToDB(ctx context.Context, b *Base, reg saveAccou
 		}
 		if yaml.Unmarshal(content, &tmp) == nil && tmp.Name == reg.Name {
 			targetPath = p
+			existingContent = content
 			break
 		}
 	}
 	rows.Close()
-	out, err := yaml.Marshal(&reg)
+	// Сохраняем subconto/titles из существующей записи через node-редактирование;
+	// для новой записи marshal свежего reg.
+	var out []byte
+	if len(existingContent) > 0 {
+		out, err = applyAccountRegFields(existingContent, reg)
+	} else {
+		out, err = yaml.Marshal(&reg)
+	}
 	if err != nil {
 		return err
 	}

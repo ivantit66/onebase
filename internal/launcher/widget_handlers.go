@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -182,10 +183,30 @@ func (h *handler) configuratorSaveHomePageYAML(w http.ResponseWriter, r *http.Re
 	renderCfg(w, r, data)
 }
 
+// configFileEntry — путь (относительный, со слешами) и содержимое одного файла
+// конфигурации для пакетной записи через saveConfigFiles.
+type configFileEntry struct {
+	relPath string
+	content []byte
+}
+
 // saveConfigFile is a small wrapper used by widget/homepage handlers. It writes
 // the given relative path either to the database-backed config table or to the
 // file-based project directory, matching whichever storage mode the base uses.
 func saveConfigFile(r *http.Request, h *handler, b *Base, relPath string, content []byte) error {
+	return saveConfigFiles(r, h, b, []configFileEntry{{relPath: relPath, content: content}})
+}
+
+// saveConfigFiles атомарно сохраняет несколько файлов конфигурации как одну
+// операцию (например, страница = pages/X.yaml + src/X.page.os).
+//
+//	database: все upsert'ы в ОДНОЙ транзакции (WithTx) — перечитка конфигурации
+//	          не увидит половину объекта, и отказ на втором файле откатывает первый.
+//	file:     каждый файл пишется атомарно (temp+rename), поэтому --watch никогда
+//	          не читает частичный/пустой файл. Порядок files сохраняется —
+//	          вызывающий передаёт сначала исходник, затем метаданные, чтобы reload
+//	          по записи .yaml уже видел готовый .os.
+func saveConfigFiles(r *http.Request, h *handler, b *Base, files []configFileEntry) error {
 	if b.ConfigSource == "database" {
 		db, err := OpenDB(r.Context(), b)
 		if err != nil {
@@ -196,16 +217,45 @@ func saveConfigFile(r *http.Request, h *handler, b *Base, relPath string, conten
 		if err := repo.EnsureSchema(r.Context()); err != nil {
 			return err
 		}
-		return repo.SaveFile(r.Context(), relPath, content)
+		return db.WithTx(r.Context(), func(ctx context.Context) error {
+			for _, f := range files {
+				if err := repo.SaveFile(ctx, f.relPath, f.content); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
 	}
-	full := filepath.Join(b.Path, filepath.FromSlash(relPath))
+	for _, f := range files {
+		if err := atomicWriteConfigFile(b.Path, f.relPath, f.content); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// atomicWriteConfigFile пишет файл через temp+rename в том же каталоге, чтобы
+// читатель (--watch) никогда не видел частично записанный файл (эталон — store.save).
+func atomicWriteConfigFile(basePath, relPath string, content []byte) error {
+	full := filepath.Join(basePath, filepath.FromSlash(relPath))
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(full, content, 0o644)
+	tmp := full + ".tmp"
+	if err := os.WriteFile(tmp, content, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, full)
 }
 
 func deleteConfigFile(r *http.Request, h *handler, b *Base, relPath string) error {
+	return deleteConfigFiles(r, h, b, []string{relPath})
+}
+
+// deleteConfigFiles удаляет несколько файлов конфигурации как одну операцию.
+// database: в одной транзакции; file: последовательно (отсутствие файла — не ошибка).
+// Вызывающий передаёт пути в порядке, безопасном для reload (сначала метаданные).
+func deleteConfigFiles(r *http.Request, h *handler, b *Base, relPaths []string) error {
 	if b.ConfigSource == "database" {
 		db, err := OpenDB(r.Context(), b)
 		if err != nil {
@@ -213,11 +263,20 @@ func deleteConfigFile(r *http.Request, h *handler, b *Base, relPath string) erro
 		}
 		defer db.Close()
 		repo := configdb.New(db)
-		return repo.DeleteFile(r.Context(), relPath)
+		return db.WithTx(r.Context(), func(ctx context.Context) error {
+			for _, p := range relPaths {
+				if err := repo.DeleteFile(ctx, p); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
 	}
-	full := filepath.Join(b.Path, filepath.FromSlash(relPath))
-	if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
-		return err
+	for _, p := range relPaths {
+		full := filepath.Join(b.Path, filepath.FromSlash(p))
+		if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
 	return nil
 }

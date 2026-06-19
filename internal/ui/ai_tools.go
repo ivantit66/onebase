@@ -27,6 +27,12 @@ func (s *Server) aiDataAllowed(r *http.Request) bool {
 	if s.isAdmin(r) {
 		return true
 	}
+	// Режим доступа ИИ к данным (план 54). В дефолтном admin_only флаг
+	// AIDataAccess не даёт доступа — данные только администраторам. В режимах
+	// rbac (с фильтрацией источников) и all флаг работает.
+	if s.store.GetAIDataScope(r.Context()) == storage.AIDataScopeAdminOnly {
+		return false
+	}
 	u := auth.UserFromContext(r.Context())
 	return u != nil && u.AIDataAccess
 }
@@ -99,6 +105,19 @@ func (s *Server) aiSchemaText() string {
 	})
 }
 
+// aiDeniedSource возвращает имя первого объекта-источника, на чтение которого у
+// пользователя нет прав (для режима rbac). Пусто — все источники разрешены.
+// Источники без секции прав (бухрегистр, Kind=="") разрешены только админу и в
+// открытом деплое: canCtx с пустым kind → User.Has → false для не-админа.
+func (s *Server) aiDeniedSource(ctx context.Context, sources []query.SourceRef) string {
+	for _, src := range sources {
+		if !s.canCtx(ctx, src.Kind, src.Name, "read") {
+			return src.Name
+		}
+	}
+	return ""
+}
+
 // aiRunQuery компилирует и выполняет запрос инструмента, возвращая строки в JSON.
 func (s *Server) aiRunQuery(ctx context.Context, call llm.ToolCall) llm.ToolResult {
 	qtext, _ := call.Input["запрос"].(string)
@@ -121,6 +140,14 @@ func (s *Server) aiRunQuery(ctx context.Context, call llm.ToolCall) llm.ToolResu
 	})
 	if err != nil {
 		return llm.ToolResult{ID: call.ID, Content: "ошибка компиляции запроса: " + err.Error(), IsError: true}
+	}
+	// Объектный RBAC (план 54): в режиме rbac до выполнения проверяем право чтения
+	// на каждый объект-источник. Запрещённый объект → отказ модели (QueryAll не
+	// выполняется), она переформулирует ответ.
+	if s.store.GetAIDataScope(ctx) == storage.AIDataScopeRBAC {
+		if denied := s.aiDeniedSource(ctx, res.Sources); denied != "" {
+			return llm.ToolResult{ID: call.ID, Content: "нет доступа к объекту: " + denied, IsError: true}
+		}
 	}
 	rows, err := s.store.QueryAll(ctx, res.SQL, res.Args...)
 	if err != nil {

@@ -1,6 +1,6 @@
 # План 54 — Безопасность и аудит ИИ-помощника
 
-**Статус:** 🟡 Этапы 2–3 реализованы (2026-06-10, ветка `feature/ai-security-audit`); этап 1 (объектный RBAC) — не начат
+**Статус:** ✅ Этапы 1–3 реализованы. Этапы 2–3 (журнал/лимиты) — 2026-06-10 (`feature/ai-security-audit`); этап 1 (объектный RBAC: настройка `ai.data_scope` admin_only/rbac/all, `query.Result.Sources` + `s.canCtx` в `aiRunQuery`, селектор режима в конфигураторе) — 2026-06-19 (`fix/review-2day-followups`)
 
 > **Как реализовано.** Этап 2: таблица `_ai_audit` (`storage/ai_audit.go`) —
 > `LogAIQuery`/`ListAIAudit`/`AITokensUsedSince`; чат пишет сводную запись

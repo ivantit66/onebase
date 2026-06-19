@@ -76,7 +76,9 @@ func LoadFile(path string, kind Kind) (*Entity, error) {
 	e.ListForm = raw.ListForm
 	e.ItemForm = raw.ItemForm
 	e.BasedOn = raw.BasedOn
-	e.ListMode = raw.ListMode
+	// Нормализуем: «Feed», «FEED», « feed » → «feed». Иначе resolveListMode
+	// (сравнение с точной строкой "feed") молча откатывался бы на постранично.
+	e.ListMode = strings.ToLower(strings.TrimSpace(raw.ListMode))
 	if raw.Numerator != nil {
 		n := &Numerator{
 			Prefix: raw.Numerator.Prefix,

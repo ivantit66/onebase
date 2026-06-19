@@ -1166,15 +1166,15 @@ const tplList = `
 {{/* Лента: догрузка по скроллу. Без JS «Показать ещё» = переход на след. страницу. */}}
 {{if .HasNext}}
 <div id="feed-more" data-next="{{.NextPage}}" data-pages="{{.TotalPages}}" data-container="{{if .TilesView}}.tile-grid{{else}}#list-body{{end}}" data-item="{{if .TilesView}}.tile-card{{else}}tr{{end}}" style="margin-top:14px;text-align:center">
-  <a class="btn btn-secondary btn-sm" href="?page={{.NextPage}}&lm=feed{{if .TilesView}}&view=tiles{{end}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "Показать ещё"}}</a>
+  <a class="btn btn-secondary btn-sm" href="?page={{.NextPage}}&lm=feed{{if .ParentStr}}&parent={{.ParentStr}}{{end}}{{if .TilesView}}&view=tiles{{end}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "Показать ещё"}}</a>
 </div>
 {{end}}
 {{if gt .Total 0}}<div style="color:#94a3b8;font-size:12px;margin-top:8px;text-align:center">{{t $.Lang "Загружено:"}} <span id="feed-loaded">{{len .Rows}}</span> {{t $.Lang "из"}} {{.Total}}</div>{{end}}
 {{else if gt .TotalPages 1}}
 <div style="display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap">
-  {{if .HasPrev}}<a class="btn btn-secondary btn-sm" href="?page={{.PrevPage}}{{if .TilesView}}&view=tiles{{end}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "← Назад"}}</a>{{end}}
+  {{if .HasPrev}}<a class="btn btn-secondary btn-sm" href="?page={{.PrevPage}}{{if .ParentStr}}&parent={{.ParentStr}}{{end}}{{if .TilesView}}&view=tiles{{end}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "← Назад"}}</a>{{end}}
   <span style="color:#64748b;font-size:13px">{{t $.Lang "Стр."}} {{.Page}} {{t $.Lang "из"}} {{.TotalPages}} ({{.Total}} {{t $.Lang "записей"}})</span>
-  {{if .HasNext}}<a class="btn btn-secondary btn-sm" href="?page={{.NextPage}}{{if .TilesView}}&view=tiles{{end}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "Вперёд →"}}</a>{{end}}
+  {{if .HasNext}}<a class="btn btn-secondary btn-sm" href="?page={{.NextPage}}{{if .ParentStr}}&parent={{.ParentStr}}{{end}}{{if .TilesView}}&view=tiles{{end}}{{if .Params.Search}}&q={{.Params.Search}}{{end}}{{filterQuery .Params}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "Вперёд →"}}</a>{{end}}
 </div>
 {{else if gt .Total 0}}
 <div style="color:#94a3b8;font-size:12px;margin-top:8px">{{t $.Lang "Всего:"}} {{.Total}}</div>
@@ -2438,6 +2438,7 @@ const tplReport = `
 {{end}}
 {{if .ComposedHTML}}
 {{if .Capped}}<div class="card" style="background:#fffbeb;border-color:#fde68a;margin-bottom:8px;padding:8px 12px">{{t $.Lang "Показаны первые строки — данных больше потолка."}}</div>{{end}}
+{{if .ComposeWarnings}}<div class="card" style="background:#fef2f2;border-color:#fecaca;margin-bottom:8px;padding:8px 12px"><strong>{{t $.Lang "Предупреждения компоновки:"}}</strong><ul style="margin:4px 0 0;padding-left:20px">{{range .ComposeWarnings}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
 <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
   <a class="btn btn-sm" href="/ui/report/{{lower .Report.Name}}/excel{{variantQuery (reportParamQuery .Report.Params .ParamValues) .ActiveVariant}}" style="background:#16a34a;color:#fff" title="{{t $.Lang "Скачать Excel"}}">{{t $.Lang "Excel ↓"}}</a>
 </div>

@@ -36,6 +36,33 @@ func dialectOrDefault(d storage.Dialect) storage.Dialect {
 type Result struct {
 	SQL  string
 	Args []any
+	// Sources перечисляет объекты-источники запроса (для объектного RBAC, план 54).
+	// Имя — исходное имя сущности/регистра; Kind — секция прав ("catalog"|
+	// "document"|"register"|"inforeg"; пусто для бухрегистра — секции прав нет).
+	Sources []SourceRef
+}
+
+// SourceRef — объект-источник запроса (для проверки прав доступа).
+type SourceRef struct {
+	Kind string
+	Name string
+}
+
+// sourcePermKind переводит ключевое слово типа источника в секцию прав User.Has.
+// Для бухрегистра (РегистрБухгалтерии) и неизвестных типов возвращает "" —
+// проверяемой секции прав нет.
+func sourcePermKind(typeUpper string) string {
+	switch {
+	case typeUpper == "СПРАВОЧНИК" || typeUpper == "CATALOG":
+		return "catalog"
+	case typeUpper == "ДОКУМЕНТ" || typeUpper == "DOCUMENT":
+		return "document"
+	case isAccumRegType(typeUpper):
+		return "register"
+	case isInfoRegType(typeUpper):
+		return "inforeg"
+	}
+	return ""
 }
 
 // Compile translates a 1C-style query to PostgreSQL SQL.
@@ -434,6 +461,12 @@ type translator struct {
 	mainEmitted bool                          // главная таблица FROM уже эмитирована (refDims авто-JOIN — только для неё)
 	section     querySection                  // current clause context
 	aliases     map[string]struct{}           // имена алиасов вывода (КАК ...) — их не квалифицируем и не CAST'им
+	sources     []SourceRef                   // объекты-источники запроса (для RBAC, план 54)
+}
+
+// addSource фиксирует объект-источник запроса для последующей проверки прав.
+func (tr *translator) addSource(typeUpper, name string) {
+	tr.sources = append(tr.sources, SourceRef{Kind: sourcePermKind(typeUpper), Name: name})
 }
 
 func (tr *translator) peek(offset int) tok {
@@ -1650,6 +1683,7 @@ func translate(tokens []tok, opts CompileOpts) (Result, error) {
 					tr.advance() // TypeName
 					tr.advance() // .
 					regName := tr.advance().val
+					tr.addSource(upper, regName)
 					tr.advance() // .
 					tr.advance() // VTName
 					tr.advance() // (
@@ -1666,6 +1700,7 @@ func translate(tokens []tok, opts CompileOpts) (Result, error) {
 					tr.advance() // TypeName
 					tr.advance() // .
 					regName := tr.advance().val
+					tr.addSource(upper, regName)
 					tr.advance() // .
 					tr.advance() // VTName
 					tr.advance() // (
@@ -1682,6 +1717,7 @@ func translate(tokens []tok, opts CompileOpts) (Result, error) {
 					tr.advance() // TypeName
 					tr.advance() // .
 					regName := tr.advance().val
+					tr.addSource(upper, regName)
 					tr.advance() // .
 					tr.advance() // VTName
 					tr.advance() // (
@@ -1712,6 +1748,7 @@ func translate(tokens []tok, opts CompileOpts) (Result, error) {
 			tr.advance()
 			tr.advance()
 			entity := tr.advance()
+			tr.addSource(upper, entity.val)
 			tableName := sourceToTable(upper, entity.val)
 			// Главная таблица — первый источник FROM. Присоединяемые через явный
 			// JOIN (ЛЕВОЕ СОЕДИНЕНИЕ ... ПО ...) не должны перезаписывать mainTable
@@ -1893,7 +1930,7 @@ func translate(tokens []tok, opts CompileOpts) (Result, error) {
 
 		tr.advance()
 	}
-	return Result{SQL: tr.build(), Args: tr.args}, nil
+	return Result{SQL: tr.build(), Args: tr.args, Sources: tr.sources}, nil
 }
 
 // dialectName возвращает строковое имя диалекта SQL для opts.Dialect; nil → "pg"

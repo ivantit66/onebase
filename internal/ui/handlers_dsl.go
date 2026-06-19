@@ -16,6 +16,7 @@ import (
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
 	"github.com/ivantit66/onebase/internal/dslvars"
 	"github.com/ivantit66/onebase/internal/runtime"
+	"github.com/ivantit66/onebase/internal/storage"
 )
 
 // langCtxKeyT — ключ контекста, несущий разрешённый язык интерфейса для
@@ -128,11 +129,24 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 		if mime == "" {
 			mime = "image/png"
 		}
+		if !strings.HasPrefix(mime, "image/") {
+			// блокируем нерастровые типы (например text/html), которые иначе
+			// сохранились бы в blob с произвольным Content-Type.
+			return nil, fmt.Errorf("СохранитьКартинку: тип %q не является изображением", mime)
+		}
+		// Размер проверяем ДО декодирования: декодированный размер ≈ len*3/4.
+		// Иначе гигантский base64 материализуется в память целиком ещё до
+		// отсечения лимитом в PutBlob (риск исчерпания памяти).
+		if max := s.maxFileSizeBytes; max > 0 && int64(len(dataB64))/4*3 > max {
+			return nil, fmt.Errorf("СохранитьКартинку: картинка превышает максимальный размер")
+		}
 		data, err := base64.StdEncoding.DecodeString(dataB64)
 		if err != nil {
 			return nil, fmt.Errorf("СохранитьКартинку: некорректный Base64: %w", err)
 		}
-		blob, err := s.store.PutBlob(txState.Ctx(), mime, bytes.NewReader(data), s.maxFileSizeBytes)
+		// Без владельца: builtin вызывается из произвольного модуля и не знает
+		// целевую сущность. Отдача таких блобов требует лишь аутентификации.
+		blob, err := s.store.PutBlob(txState.Ctx(), mime, bytes.NewReader(data), s.maxFileSizeBytes, storage.BlobOwner{})
 		if err != nil {
 			return nil, fmt.Errorf("СохранитьКартинку: %w", err)
 		}

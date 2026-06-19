@@ -62,6 +62,9 @@ func defaultFilesDir(dsn string) string {
 
 func (db *DB) FilesDir() string { return db.filesDir }
 
+// SetFilesDir переопределяет каталог файлового хранилища (вложения, блобы).
+func (db *DB) SetFilesDir(dir string) { db.filesDir = dir }
+
 func (db *DB) Close() {
 	if db.pool != nil {
 		db.pool.Close()
