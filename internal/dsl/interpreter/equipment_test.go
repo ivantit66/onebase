@@ -285,3 +285,15 @@ func TestEquipment_ScriptedDisplay_DSL(t *testing.T) {
 	assert.Contains(t, got, "\x1bQA", "нет hex-префикса верхней строки (ESC Q A)")
 	assert.Contains(t, got, "\x1bQB", "нет hex-префикса нижней строки (ESC Q B)")
 }
+
+// ПодключитьОборудование должна быть известна синтакс-чекеру: иначе обработки/
+// формы конфигураций, вызывающие оборудование, валятся в onebase check как
+// «unknown function» (функция инжектится в рантайм через dslvars).
+func TestEquipment_InKnownBuiltins(t *testing.T) {
+	known := interpreter.KnownBuiltinNames()
+	for _, name := range []string{"подключитьоборудование", "connectequipment"} {
+		if _, ok := known[name]; !ok {
+			t.Errorf("KnownBuiltinNames не содержит %q — onebase check будет ругаться на конфигурации с оборудованием", name)
+		}
+	}
+}
