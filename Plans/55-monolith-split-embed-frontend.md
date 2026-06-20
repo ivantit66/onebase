@@ -1,6 +1,6 @@
 # План 55 — Раскол монолитов и фронт в go:embed
 
-**Статус:** 🟡 Этап 1 реализован (2026-06-10, ветка `refactor/split-ui-handlers`); этапы 2 (фронт конфигуратора в go:embed) и 3 (inline-JS ui) — не начаты
+**Статус:** 🟡 Этап 1 реализован (2026-06-10, ветка `refactor/split-ui-handlers`); этап 2 **Фаза 1** (конфигуратор на `html/template`, XSS-долг плана 47 §1.3 закрыт) — реализована 2026-06-19 (ветка `feature/55-configurator-htmltemplate`, см. `55-impl-htmltemplate-embed.md`); этап 2 **Фаза 2** (вынос CSS/JS конфигуратора в `/static` + go:embed, bootstrap `window.__cfg`/`__cfgI18n`) — реализована 2026-06-19 (`configurator_tmpl.go` 6726→2443 строк; `static/configurator.{css,js}`); этап 3 (inline-JS `ui/templates.go`) — не начат
 
 > **Как реализовано (этап 1).** `ui/handlers.go` разнесён механически (as-is,
 > вместе с doc-комментариями) с 3908 до 660 строк: `handlers_entity.go` (CRUD

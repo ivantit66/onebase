@@ -85,16 +85,16 @@ func TestLayoutEditor_DataPanelControls(t *testing.T) {
 
 // JS-редактор содержит функции привязки данных, форматов и повтора областей.
 func TestLayoutEditor_DataBindingJS(t *testing.T) {
-	js := renderCfgFootJS(t)
+	js := configuratorJS(t)
 	for _, sub := range []string{
-		"function renderDataPanel",   // дерево данных
-		"function onDataFieldClick",  // клик по полю → параметр
-		"function _ldBindParameter",  // автопривязка по имени
-		"function ldSetFormat",       // форматтер
-		"function ldSetAreaRepeat",   // повтор по ТЧ
-		"function ldSetRepeatHeader", // повтор на каждой странице
-		"function _ldAreaBindingRow", // строка привязки области
-		"var _ldMeta=",               // встроенные метаданные
+		"function renderDataPanel",      // дерево данных
+		"function onDataFieldClick",     // клик по полю → параметр
+		"function _ldBindParameter",     // автопривязка по имени
+		"function ldSetFormat",          // форматтер
+		"function ldSetAreaRepeat",      // повтор по ТЧ
+		"function ldSetRepeatHeader",    // повтор на каждой странице
+		"function _ldAreaBindingRow",    // строка привязки области
+		"var _ldMeta = window.__ldMeta", // метаданные из bootstrap (план 55 фаза 2b-1)
 	} {
 		if !strings.Contains(js, sub) {
 			t.Errorf("в JS редактора нет: %q", sub)
