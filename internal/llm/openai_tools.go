@@ -86,7 +86,11 @@ func completeOpenAITools(ctx context.Context, hc *http.Client, rm ResolvedModel,
 			return ChatResponse{}, fmt.Errorf("openai: пустой ответ (нет choices)")
 		}
 		ch := out.Choices[0]
-		if ch.FinishReason != "tool_calls" || len(ch.Message.ToolCalls) == 0 {
+		// Исполняем инструменты при наличии tool_calls независимо от finish_reason:
+		// OpenAI-совместимые провайдеры (Ollama, LM Studio, прокси) нередко ставят
+		// finish_reason:"stop" даже с заполненным tool_calls — привязка к
+		// "tool_calls" молча проглатывала бы запрос модели на инструмент.
+		if len(ch.Message.ToolCalls) == 0 {
 			return ChatResponse{Text: ch.Message.Content, Model: rm.Model.Name, InputTokens: totalIn, OutputTokens: totalOut}, nil
 		}
 
