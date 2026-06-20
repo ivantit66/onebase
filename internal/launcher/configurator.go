@@ -2582,7 +2582,7 @@ func (h *handler) configuratorSaveEnum(w http.ResponseWriter, r *http.Request) {
 	for i := 0; i < 500; i++ {
 		name := strings.TrimSpace(r.FormValue(fmt.Sprintf("value.%d.name", i)))
 		if name == "" {
-			break
+			continue
 		}
 		titles := parseMapForm(r, fmt.Sprintf("value.%d.titles", i))
 		if len(titles) == 0 {

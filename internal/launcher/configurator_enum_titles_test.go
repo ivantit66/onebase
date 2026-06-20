@@ -52,3 +52,25 @@ values:
 		t.Errorf("без переводов не должно быть titles:\n%s", out)
 	}
 }
+
+func TestSaveEnum_SkipsEmptyNameInMiddle(t *testing.T) {
+	h, cfgDir := newFileBaseHandler(t)
+	h.runner = NewRunner()
+	p := writeCfgFileRv(t, cfgDir, "enums", "статус2.yaml", `name: Статус2
+values:
+  - Открыт
+  - Закрыт
+`)
+	form := url.Values{}
+	form.Set("enum_name", "Статус2")
+	form.Set("value.0.name", "Открыт")
+	form.Set("value.1.name", "") // «дыра» в середине (очищенное имя)
+	form.Set("value.2.name", "Закрыт")
+
+	rec := postCfgRv(t, "test", "/bases/test/configurator/enum", form, h.configuratorSaveEnum)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код %d", rec.Code)
+	}
+	// оба непустых значения должны сохраниться (Закрыт не потерян из-за дыры)
+	assertFileContainsRv(t, p, "- Открыт", "- Закрыт")
+}
