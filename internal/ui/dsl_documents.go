@@ -97,6 +97,19 @@ func (p *docProxy) CallMethod(method string, args []any) any {
 			return nil
 		}
 		return p.findByField("Номер", fmt.Sprint(args[0]), args[0])
+	case "найтипоидентификатору", "findbyid":
+		// Ссылка по строковому UUID — для перебора документов из результата
+		// запроса (р.Ссылка приходит UUID-строкой), когда номер неуникален и
+		// НайтиПоНомеру() вернул бы не тот объект. Существование не проверяется:
+		// .ПолучитьОбъект() поднимет понятную ошибку, если объекта нет.
+		if len(args) == 0 {
+			return nil
+		}
+		uuidStr := fmt.Sprint(args[0])
+		if _, err := uuid.Parse(uuidStr); err != nil {
+			interpreter.RaiseUserError("НайтиПоИдентификатору(" + p.entity.Name + "): неверный идентификатор ссылки: " + uuidStr)
+		}
+		return &interpreter.Ref{UUID: uuidStr, Name: uuidStr, Type: p.entity.Name, Manager: p}
 	case "найтипореквизиту", "findbyattribute":
 		if len(args) < 2 {
 			interpreter.RaiseUserError("НайтиПоРеквизиту(" + p.entity.Name + "): нужны имя реквизита и значение")
