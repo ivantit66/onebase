@@ -16,10 +16,16 @@ body{font-family:'Segoe UI',Arial,sans-serif;font-size:13px;background:#f0f2f5;h
 
 /* ── Two-panel tree ─────────────────────────────────── */
 .cfg-split{display:flex;flex:1;overflow:hidden}
-.cfg-left{width:220px;flex-shrink:0;background:#fff;border-right:1px solid #d8dde8;overflow-y:auto;padding:6px 0;transition:width .2s}
+.cfg-left{width:var(--cfg-left-w,220px);flex-shrink:0;background:#fff;border-right:1px solid #d8dde8;overflow-y:auto;padding:6px 0;transition:width .2s}
 .cfg-left.collapsed{width:0;padding:0;overflow:hidden;border:none}
-.sidebar-toggle{position:absolute;left:220px;top:50%;z-index:10;width:16px;height:40px;background:#e8ecf2;border:1px solid #d8dde8;border-left:none;border-radius:0 4px 4px 0;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:10px;color:#666;transition:left .2s}
+.sidebar-toggle{position:absolute;left:var(--cfg-left-w,220px);top:50%;z-index:10;width:16px;height:40px;background:#e8ecf2;border:1px solid #d8dde8;border-left:none;border-radius:0 4px 4px 0;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:10px;color:#666;transition:left .2s}
 .sidebar-toggle.collapsed{left:0}
+/* ── Перетаскиваемые разделители панелей (issue #131) ── */
+.cfg-resizer{flex:0 0 5px;align-self:stretch;cursor:col-resize;background:transparent;position:relative;z-index:6;transition:background .15s}
+.cfg-resizer:hover,.cfg-resizer.dragging{background:#bcd0ec}
+.cfg-left.collapsed + .cfg-resizer{display:none}
+body.cfg-resizing{cursor:col-resize}
+body.cfg-resizing .cfg-left,body.cfg-resizing .dbg-panel{transition:none}
 .cfg-group{font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;padding:10px 12px 4px;margin-top:4px}
 .cfg-tree details summary{font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;padding:10px 12px 4px;margin-top:4px;cursor:pointer;list-style:none;display:flex;align-items:center;gap:2px}
 .cfg-tree details summary::-webkit-details-marker{display:none}
@@ -236,7 +242,7 @@ pre.convert-out{background:#f5f7fa;border:1px solid #e2e6ed;padding:12px;border-
 .cfg-menu-dropdown a:last-child{border-bottom:none}
 .cfg-menu-dropdown a:hover{background:#f0f4ff;color:#1a4a80}
 
-.dbg-panel{width:320px;flex-shrink:0;background:#fff;border-left:1px solid #d8dde8;display:flex;flex-direction:column;overflow:hidden}
+.dbg-panel{width:var(--cfg-dbg-w,320px);flex-shrink:0;background:#fff;border-left:1px solid #d8dde8;display:flex;flex-direction:column;overflow:hidden}
 .dbg-status{padding:8px 12px;font-size:12px;font-weight:600;border-bottom:1px solid #eef0f5;display:flex;align-items:center;gap:6px}
 .dbg-status .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
 .dbg-status .dot.running{background:#16a34a}
