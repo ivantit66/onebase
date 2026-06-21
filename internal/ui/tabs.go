@@ -30,6 +30,8 @@ const tplAppShell = `{{define "page-app-shell"}}
 .ob-tab{display:inline-flex;align-items:center;gap:6px;background:#f1f5f9;border:1px solid #cbd5e1;border-bottom:none;border-radius:6px 6px 0 0;padding:5px 8px 5px 12px;font-size:12px;color:#334155;cursor:pointer;white-space:nowrap;max-width:230px}
 .ob-tab.active{background:#fff;color:#1a4a80;font-weight:600}
 .ob-tab-label{overflow:hidden;text-overflow:ellipsis}
+.ob-tab-dup{color:#94a3b8;font-size:12px;line-height:1;border-radius:3px;padding:0 3px}
+.ob-tab-dup:hover{color:#1a4a80;background:#dbeafe}
 .ob-tab-close{color:#94a3b8;font-size:14px;line-height:1;border-radius:3px;padding:0 3px}
 .ob-tab-close:hover{color:#dc2626;background:#fee2e2}
 .ob-tabbody{flex:1;position:relative;background:#fff;min-height:0}
@@ -68,12 +70,14 @@ const tplAppShell = `{{define "page-app-shell"}}
     if(!opts.allowDup){ for(var i=0;i<tabs.length;i++){ if(tabs[i].url===url){ setActive(tabs[i]); return tabs[i]; } } }
     var btn=document.createElement('div'); btn.className='ob-tab'; btn.setAttribute('role','tab');
     var lab=document.createElement('span'); lab.className='ob-tab-label'; lab.textContent=title||'Форма'; btn.appendChild(lab);
+    var dup=document.createElement('span'); dup.className='ob-tab-dup'; dup.textContent='⧉'; dup.title='Открыть ещё один экземпляр'; btn.appendChild(dup);
     var cl=document.createElement('span'); cl.className='ob-tab-close'; cl.textContent='✕'; cl.title='Закрыть'; btn.appendChild(cl);
     var frame=document.createElement('iframe'); frame.src=url;
     var t={url:url,title:title,btn:btn,frame:frame,label:lab};
-    btn.addEventListener('click',function(e){ if(e.target===cl)return; setActive(t); });
+    btn.addEventListener('click',function(e){ if(e.target===cl||e.target===dup)return; setActive(t); });
     btn.addEventListener('mousedown',function(e){ if(e.button===1){ e.preventDefault(); closeTab(t); } });
     cl.addEventListener('click',function(e){ e.stopPropagation(); closeTab(t); });
+    dup.addEventListener('click',function(e){ e.stopPropagation(); openTab(t.url, t.title, {allowDup:true}); }); // #130
     strip.appendChild(btn); body.appendChild(frame); tabs.push(t); setActive(t); persist();
     return t;
   }

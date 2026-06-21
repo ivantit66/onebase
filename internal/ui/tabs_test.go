@@ -31,6 +31,8 @@ func TestAppShell_Render(t *testing.T) {
 		`'obTabs'`,                   // ключ sessionStorage для restore
 		`source==='obOpenTab'`,       // приём запросов из iframe
 		`<header class="topbar">`,    // переиспользован nav (хром оболочки)
+		`ob-tab-dup`,                 // кнопка «новый экземпляр» (#130)
+		`{allowDup:true}`,            // дубликат = новый экземпляр
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("оболочка вкладок не содержит %q", want)
@@ -51,6 +53,9 @@ func TestHead_EmbeddedChromeHidden(t *testing.T) {
 		`window.__obEmbedded = (window.self !== window.top)`,
 		`ob-embedded`,
 		`.ob-embedded .topbar,.ob-embedded .subsys-bar{display:none`,
+		`obOpenableForm`,                  // фаза 2: перехват открытия форм во вкладку
+		`source: 'obOpenTab'`,             // постит запрос родителю-оболочке
+		`window.parent && window.parent.obOpenTab`, // guard: только если родитель — оболочка
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("head не содержит embedded-логику %q", want)

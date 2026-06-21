@@ -419,11 +419,39 @@ const tplHead = `
 <meta name="apple-mobile-web-app-title" content="onebase">
 <title>{{if .Cfg.AppName}}{{.Cfg.AppName}}{{else}}onebase{{end}}</title>
 <script>
-// Вкладочная оболочка (issue #129): когда страница открыта во фрейме оболочки
-// /ui/app, прячем хром (топбар/подсистемы) — навигация идёт из оболочки. Флаг
-// читают формы (напр. «провалиться в карточку» открывает вкладку, а не окно).
+// Вкладочная оболочка (issue #129/#130): когда страница открыта во фрейме
+// оболочки /ui/app, прячем хром (топбар/подсистемы) — навигация идёт из оболочки.
 window.__obEmbedded = (window.self !== window.top);
-if (window.__obEmbedded) document.documentElement.className += ' ob-embedded';
+if (window.__obEmbedded) {
+  document.documentElement.className += ' ob-embedded';
+  // Фаза 2: открытие записи/новой формы/отчёта внутри вкладки — это новая
+  // вкладка рядом, а не замена текущей (пагинация/сортировка/фильтры остаются
+  // в той же вкладке — у них тот же путь списка, без id-сегмента).
+  var obOpenableForm = function (href) {
+    if (!/^\/ui\//.test(href)) return false;
+    if (/^\/ui\/(admin|about|logout|login|logo|debug|app|_)/.test(href)) return false;
+    if (href.indexOf('_popup=1') >= 0) return false;
+    if (/^\/ui\/(report|processor)\/[^\/?#]+/.test(href)) return true;     // отчёт/обработка
+    if (/^\/ui\/[^\/?#]+\/[^\/?#]+\/[^\/?#]+/.test(href)) return true;      // {kind}/{entity}/{id|new}
+    return false;
+  };
+  document.addEventListener('click', function (e) {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    var a = e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a || a.target === '_blank') return;
+    var href = a.getAttribute('href') || '';
+    if (!obOpenableForm(href)) return;
+    // Дивертим во вкладку только если родитель — действительно оболочка
+    // (есть obOpenTab). Иначе (напр. picker-модал на обычной странице) —
+    // обычная навигация внутри фрейма.
+    var shell = null;
+    try { if (window.parent && window.parent.obOpenTab) shell = window.parent; } catch (_) {}
+    if (!shell) return;
+    e.preventDefault();
+    var title = (a.getAttribute('title') || a.textContent || '').replace(/\s+/g, ' ').trim() || 'Форма';
+    try { shell.postMessage({ source: 'obOpenTab', url: href, title: title }, '*'); } catch (_) {}
+  });
+}
 </script>
 <style>
 .ob-embedded .topbar,.ob-embedded .subsys-bar{display:none!important}
