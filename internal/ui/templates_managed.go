@@ -1562,6 +1562,9 @@ function addVtRow(vtName, fields) {
 })();</script>
 {{end}}
 
+{{/* Вложения к записи (issue #152) — тот же UI, что и в авто-форме. */}}
+{{template "ob-attachments" .}}
+
 {{template "form-shared-js" .}}
 
 {{/* Авто-вызов ПриОткрытииФормы при загрузке страницы. Без этого

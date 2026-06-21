@@ -1689,7 +1689,18 @@ const tplForm = `
   });
 })();
 </script>
-{{if and (not .IsNew) (not .IsPopup)}}
+{{template "ob-attachments" .}}
+</div>
+{{template "form-shared-js" .}}
+</main></div></body></html>
+{{end}}
+
+{{/* ob-attachments — панель вложений к записи (issue #152). Общая для
+     page-form и page-managed-form; бэкенд один (handlers_attachments.go,
+     роуты POST /ui/<kind>/<entity>/<id>/attachments). Показывается для
+     сохранённой записи объекта (не новая, не попап, не обработка). */}}
+{{define "ob-attachments"}}
+{{if and (not .IsNew) (not .IsPopup) (not .IsProcessor)}}
 <div class="card" style="margin-top:16px">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
     <h3 style="margin:0;font-size:14px;font-weight:600;color:#374151">{{t $.Lang "Вложения"}}</h3>
@@ -1735,9 +1746,6 @@ const tplForm = `
 })();
 </script>
 {{end}}
-</div>
-{{template "form-shared-js" .}}
-</main></div></body></html>
 {{end}}
 
 {{/* form-shared-js — общий <script> блок, используется page-form и
