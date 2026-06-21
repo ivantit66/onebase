@@ -728,16 +728,18 @@ const tplNav = `
     <button class="sys-btn" onclick="var d=document.getElementById('sysd');d.classList.toggle('open')">&#9881; {{t $.Lang "Система"}} &#9660;</button>
     <div class="sys-drop" id="sysd">
       <a href="/ui/about">{{t $.Lang "О программе"}}</a>
+      {{if .IsAdmin}}
       <a href="/ui/admin/users">{{t $.Lang "Пользователи"}}</a>
       <a href="/ui/admin/roles">{{t $.Lang "Роли и права"}}</a>
       <a href="/ui/admin/sessions">{{t $.Lang "Активные пользователи"}}</a>
       <a href="/ui/admin/audit">{{t $.Lang "Журнал изменений"}}</a>
-      {{if .IsAdmin}}<a href="/ui/admin/webhooks">{{t $.Lang "Журнал веб-хуков"}}</a>{{end}}
+      <a href="/ui/admin/webhooks">{{t $.Lang "Журнал веб-хуков"}}</a>
       <a href="/ui/admin/scheduled">{{t $.Lang "Регламентные задания"}}</a>
       <a href="/ui/delete-marked">{{t $.Lang "Удалить помеченные"}}</a>
       <a href="/ui/admin/cleanup">{{t $.Lang "Очистка регистров"}}</a>
+      {{end}}
       <a href="/ui/pos">{{t $.Lang "Рабочее место кассира (РМК)"}}</a>
-      <a href="/ui/settings/agent">{{t $.Lang "Настройки агента оборудования"}}</a>
+      {{if .IsAdmin}}<a href="/ui/settings/agent">{{t $.Lang "Настройки агента оборудования"}}</a>{{end}}
       {{if .IsAdmin}}<a href="/ui/admin/extforms">{{t $.Lang "Внешние печатные формы"}}</a>{{end}}
       {{if .IsAdmin}}<a href="/ui/admin/extreports">{{t $.Lang "Внешние отчёты"}}</a>{{end}}
       {{if .IsAdmin}}<a href="/ui/admin/extprocessors">{{t $.Lang "Внешние обработки"}}</a>{{end}}

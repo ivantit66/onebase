@@ -6,6 +6,13 @@ import "net/http"
 // device-agent. Серверу хранить нечего (значения per-машина живут в localStorage
 // браузера), поэтому страница статична — только рендер формы.
 func (s *Server) agentSettings(w http.ResponseWriter, r *http.Request) {
+	// Настройки агента оборудования (адрес/токен устройства) — конфигурация
+	// уровня администратора. Без этой проверки страница была доступна любому
+	// аутентифицированному пользователю (issue #149).
+	if !s.isAdmin(r) {
+		s.renderForbidden(w, r)
+		return
+	}
 	s.render(w, r, "page-agent-settings", map[string]any{})
 }
 
