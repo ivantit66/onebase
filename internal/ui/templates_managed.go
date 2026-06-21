@@ -395,7 +395,7 @@ const tplManagedForm = `
       </div>
     </div>
     {{end}}
-    {{if .CanDelete}}
+    {{if and .CanDelete (not (deleteHidden .Form))}}
     <form method="POST" action="/ui/{{lower (str .Entity.Kind)}}/{{.Entity.Name}}/{{.ID}}/delete"
           onsubmit="return confirm('{{if .IsAdmin}}Удалить запись навсегда?{{else}}Пометить запись на удаление?{{end}}')" style="margin-left:auto">
       <button class="btn btn-danger btn-sm" type="submit">{{if .IsAdmin}}Удалить{{else}}Пометить на удаление{{end}}</button>

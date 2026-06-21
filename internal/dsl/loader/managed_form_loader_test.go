@@ -138,6 +138,35 @@ func TestManagedFormLoader_ParseYAML(t *testing.T) {
 	}
 }
 
+func TestManagedFormLoader_ParsesDeleteAction(t *testing.T) {
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "контрагенты.form.yaml")
+	doc := `schema: onebase.form/v1
+form:
+  name: ФормаОбъекта
+  kind: object
+  entity: Контрагенты
+actions:
+  delete:
+    visible: false
+`
+	if err := os.WriteFile(yamlPath, []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mfl := NewManagedFormLoader()
+	form, err := mfl.LoadFormFile(yamlPath, "Контрагенты")
+	if err != nil {
+		t.Fatalf("LoadFormFile: %v", err)
+	}
+	a, ok := form.Actions["delete"]
+	if !ok || a == nil {
+		t.Fatalf("actions.delete не разобран из YAML; Actions=%v", form.Actions)
+	}
+	if a.Visible == nil || *a.Visible {
+		t.Errorf("actions.delete.visible должно быть false, got %v", a.Visible)
+	}
+}
+
 func TestManagedFormLoader_LoadEntityForms_NoDir(t *testing.T) {
 	dir := t.TempDir()
 	mfl := NewManagedFormLoader()

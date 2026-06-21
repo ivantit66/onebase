@@ -103,12 +103,13 @@ type formYAMLDoc struct {
 		AutoSaveDataInSettings bool              `yaml:"auto_save_settings"`
 		VerticalScroll         string            `yaml:"vertical_scroll"`
 	} `yaml:"form"`
-	Attributes []*metadata.FormAttribute `yaml:"attributes"`
-	Commands   []*metadata.FormCommand   `yaml:"commands"`
-	CommandBar *metadata.FormCommandBar  `yaml:"command_bar"`
-	Elements   []*metadata.FormElement   `yaml:"elements"`
-	Events     map[string]string         `yaml:"events"`
-	OneCMeta   map[string]any            `yaml:"oneC_meta"`
+	Attributes []*metadata.FormAttribute       `yaml:"attributes"`
+	Commands   []*metadata.FormCommand         `yaml:"commands"`
+	CommandBar *metadata.FormCommandBar        `yaml:"command_bar"`
+	Elements   []*metadata.FormElement         `yaml:"elements"`
+	Events     map[string]string               `yaml:"events"`
+	Actions    map[string]*metadata.FormAction `yaml:"actions"`
+	OneCMeta   map[string]any                  `yaml:"oneC_meta"`
 }
 
 func (mfl *ManagedFormLoader) parseYAML(data []byte, entityNameFallback string) (*metadata.FormModule, error) {
@@ -143,6 +144,7 @@ func (mfl *ManagedFormLoader) parseYAML(data []byte, entityNameFallback string) 
 		AutoCommandBar:         doc.CommandBar,
 		Elements:               doc.Elements,
 		Handlers:               toEventMap(doc.Events),
+		Actions:                doc.Actions,
 		Procedures:             make(map[string]*metadata.FormProcedure),
 		OneCMeta:               doc.OneCMeta,
 	}

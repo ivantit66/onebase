@@ -123,6 +123,13 @@ type FormElement struct {
 	UnknownXML      []byte            `yaml:"unknown_xml,omitempty"`    // экзотический XML, сохраняется как есть
 }
 
+// FormAction — переопределение стандартного действия формы объекта (issue #151).
+type FormAction struct {
+	// Visible — показывать ли кнопку действия. nil = поведение по умолчанию
+	// (для delete — по праву CanDelete). false = скрыть кнопку.
+	Visible *bool `yaml:"visible,omitempty"`
+}
+
 // FormModule represents a form module with event handlers
 type FormModule struct {
 	EntityName string                    `yaml:"entity,omitempty"`
@@ -131,6 +138,13 @@ type FormModule struct {
 	Elements   []*FormElement            `yaml:"elements,omitempty"`
 	Handlers   map[FormEventType]string  `yaml:"events,omitempty"`
 	Procedures map[string]*FormProcedure `yaml:"-"`
+
+	// Actions — переопределение стандартных действий формы объекта (issue #151).
+	// Пока поддерживается ключ "delete": actions.delete.visible=false скрывает
+	// платформенную кнопку «Удалить», чтобы конфиг мог увести удаление в свой
+	// процессор. Платформенное удаление и так пишется в _audit и закрыто правом
+	// delete — это про управление UI-кнопкой.
+	Actions map[string]*FormAction `yaml:"actions,omitempty"`
 
 	// Поля, добавленные планом 37 для управляемых форм.
 	LayoutKind             string            `yaml:"layout_kind,omitempty"`      // "managed"|"autogen" (пусто=autogen)

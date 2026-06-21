@@ -46,8 +46,8 @@ var tmpl = template.Must(template.New("root").Funcs(template.FuncMap{
 		}
 		return fmt.Sprintf("%v", v)
 	},
-	"isRef":      func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "reference:") },
-	"isEnum":     func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "enum:") },
+	"isRef":  func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "reference:") },
+	"isEnum": func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "enum:") },
 	"enumLabel": func(labels map[string]map[string]string, field, value string) string {
 		if m, ok := labels[field]; ok {
 			if lbl, ok := m[value]; ok && lbl != "" {
@@ -149,6 +149,19 @@ var tmpl = template.Must(template.New("root").Funcs(template.FuncMap{
 		}
 		_, ok := form.Handlers[metadata.FormEventType(eventName)]
 		return ok
+	},
+	// deleteHidden — скрыта ли кнопка «Удалить» формы через
+	// actions.delete.visible=false (issue #151). По умолчанию (нет actions
+	// или visible) — false: кнопка показывается по праву CanDelete.
+	"deleteHidden": func(form *metadata.FormModule) bool {
+		if form == nil || form.Actions == nil {
+			return false
+		}
+		a, ok := form.Actions["delete"]
+		if !ok || a == nil || a.Visible == nil {
+			return false
+		}
+		return !*a.Visible
 	},
 	// tablePartByName ищет metadata.TablePart в Entity по имени.
 	// Возвращает указатель на копию (или nil) — нужно managed-шаблону
