@@ -30,6 +30,9 @@ starterplan.MD
 tz.md
 improvement-roadmap.md
 
+# Локальные заметки ручной проверки фич (не в публичном репо)
+ПРОВЕРКА*.md
+
 # OS
 .DS_Store
 Thumbs.db
