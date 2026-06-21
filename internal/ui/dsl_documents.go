@@ -236,37 +236,11 @@ func (p *docProxy) LoadObject(uuidStr string) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("неверный идентификатор ссылки: %q", uuidStr)
 	}
-	row, err := p.s.store.GetByID(p.ctx(), p.entity.Name, id, p.entity)
+	// loadRuntimeObject грузит шапку + ТЧ и обогащает ссылочные поля до
+	// *Ref{…,Manager}, чтобы DSL мог писать Док.СсылочноеПоле.ПолучитьОбъект().
+	obj, err := p.s.loadRuntimeObject(p.ctx(), p.entity, id)
 	if err != nil {
 		return nil, err
-	}
-	fields := make(map[string]any, len(row))
-	for _, f := range p.entity.Fields {
-		if v, ok := row[f.Name]; ok && v != nil {
-			fields[strings.ToLower(f.Name)] = v
-		}
-	}
-	tpRows := make(map[string][]map[string]any, len(p.entity.TableParts))
-	for _, tp := range p.entity.TableParts {
-		rows, err := p.s.store.GetTablePartRows(p.ctx(), p.entity.Name, tp.Name, id, tp)
-		if err != nil {
-			return nil, fmt.Errorf("табличная часть %s: %w", tp.Name, err)
-		}
-		tpRows[tp.Name] = rows
-	}
-	obj := &runtime.Object{
-		ID:            id,
-		Type:          p.entity.Name,
-		Kind:          p.entity.Kind,
-		Fields:        fields,
-		TablePartRows: tpRows,
-	}
-	// Обогащаем UUID-строки в ссылочных полях шапки и ТЧ до *Ref{…,Manager},
-	// чтобы DSL мог писать Док.СсылочноеПоле.ПолучитьОбъект()/.Наименование.
-	// Без этого Док.Покупатель — голая строка UUID, у которой нет методов.
-	p.s.enrichHeaderRefs(p.ctx(), p.entity, obj)
-	for _, tp := range p.entity.TableParts {
-		p.s.enrichTPRowsWithRefs(p.ctx(), tp, tpRows[tp.Name])
 	}
 	return &docWriter{
 		s:      p.s,

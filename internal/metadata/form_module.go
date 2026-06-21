@@ -10,43 +10,44 @@ import (
 type FormEventType string
 
 const (
-	FormEventOnOpen        FormEventType = "ПриОткрытии"         // OnOpen
-	FormEventBeforeWrite   FormEventType = "ПередЗаписью"        // BeforeWrite
-	FormEventOnWrite       FormEventType = "ПриЗаписи"           // OnWrite
-	FormEventAfterWrite    FormEventType = "ПослеЗаписи"         // AfterWrite
-	FormEventBeforeClose   FormEventType = "ПередЗакрытием"      // BeforeClose
-	FormEventOnClose       FormEventType = "ПриЗакрытии"         // OnClose
-	FormEventOnActivate    FormEventType = "ПриАктивации"        // OnActivate
-	FormEventItemChoice    FormEventType = "ОбработкаВыбора"     // ItemChoice
-	FormEventStartChoice   FormEventType = "НачалоВыбора"        // StartChoice
-	FormEventOnChange      FormEventType = "ПриИзменении"        // OnChange
-	FormEventOnCreate      FormEventType = "ПриСоздании"         // OnCreate
-	FormEventBeforeDelete  FormEventType = "ПередУдалением"      // BeforeDelete
-	FormEventOnDelete      FormEventType = "ПриУдалении"         // OnDelete
-	FormEventAfterDelete   FormEventType = "ПослеУдаления"       // AfterDelete
+	FormEventOnOpen         FormEventType = "ПриОткрытии"        // OnOpen (client-side, after render)
+	FormEventOnReadAtServer FormEventType = "ПриЧтенииНаСервере" // OnReadAtServer (server-side, before render → может запретить чтение)
+	FormEventBeforeWrite    FormEventType = "ПередЗаписью"       // BeforeWrite
+	FormEventOnWrite        FormEventType = "ПриЗаписи"          // OnWrite
+	FormEventAfterWrite     FormEventType = "ПослеЗаписи"        // AfterWrite
+	FormEventBeforeClose    FormEventType = "ПередЗакрытием"     // BeforeClose
+	FormEventOnClose        FormEventType = "ПриЗакрытии"        // OnClose
+	FormEventOnActivate     FormEventType = "ПриАктивации"       // OnActivate
+	FormEventItemChoice     FormEventType = "ОбработкаВыбора"    // ItemChoice
+	FormEventStartChoice    FormEventType = "НачалоВыбора"       // StartChoice
+	FormEventOnChange       FormEventType = "ПриИзменении"       // OnChange
+	FormEventOnCreate       FormEventType = "ПриСоздании"        // OnCreate
+	FormEventBeforeDelete   FormEventType = "ПередУдалением"     // BeforeDelete
+	FormEventOnDelete       FormEventType = "ПриУдалении"        // OnDelete
+	FormEventAfterDelete    FormEventType = "ПослеУдаления"      // AfterDelete
 	// События для табличных частей (замечание #15): даём YAML-конфигу
 	// возможность их объявлять. UI пока умеет дергать ExecuteElementEvent
 	// generic-маршрутом — кастомные триггеры (auto-fill цены при добавлении
 	// строки и т.п.) реализуются в конфиге пользователя.
-	FormEventOnRowAdded     FormEventType = "ПриДобавленииСтроки"   // OnRowAdded
-	FormEventOnRowChanged   FormEventType = "ПриИзмененииСтроки"    // OnRowChanged
-	FormEventOnRowDeleted   FormEventType = "ПриУдаленииСтроки"     // OnRowDeleted
-	FormEventOnRowActivated FormEventType = "ПриАктивизацииСтроки"  // OnRowActivated
+	FormEventOnRowAdded     FormEventType = "ПриДобавленииСтроки"  // OnRowAdded
+	FormEventOnRowChanged   FormEventType = "ПриИзмененииСтроки"   // OnRowChanged
+	FormEventOnRowDeleted   FormEventType = "ПриУдаленииСтроки"    // OnRowDeleted
+	FormEventOnRowActivated FormEventType = "ПриАктивизацииСтроки" // OnRowActivated
 	// События, добавленные для управляемых форм (план 37). Используются
 	// конвертером 1С и редактором; интерпретатор вызывает их по той же
 	// generic-схеме что и существующие row-события.
-	FormEventOnClick           FormEventType = "Нажатие"                // OnClick
-	FormEventBeforeRowAdd      FormEventType = "ПередДобавлениемСтроки" // BeforeAddRow
-	FormEventAfterRowAdd       FormEventType = "ПослеДобавленияСтроки"  // AfterAddRow
-	FormEventBeforeRowDelete   FormEventType = "ПередУдалениемСтроки"   // BeforeDeleteRow
-	FormEventStartListChoice   FormEventType = "НачалоВыбораИзСписка"   // StartListChoice
-	FormEventAutoComplete      FormEventType = "АвтоПодбор"             // AutoComplete
-	FormEventExecuteCommand    FormEventType = "ВыполнитьКоманду"       // Command
+	FormEventOnClick         FormEventType = "Нажатие"                // OnClick
+	FormEventBeforeRowAdd    FormEventType = "ПередДобавлениемСтроки" // BeforeAddRow
+	FormEventAfterRowAdd     FormEventType = "ПослеДобавленияСтроки"  // AfterAddRow
+	FormEventBeforeRowDelete FormEventType = "ПередУдалениемСтроки"   // BeforeDeleteRow
+	FormEventStartListChoice FormEventType = "НачалоВыбораИзСписка"   // StartListChoice
+	FormEventAutoComplete    FormEventType = "АвтоПодбор"             // AutoComplete
+	FormEventExecuteCommand  FormEventType = "ВыполнитьКоманду"       // Command
 	// Выбор — вторая фаза диалога подбора (план 46): обработчик кнопки
 	// показывает диалог через билтин ПоказатьПодбор (фаза 1, событие Нажатие),
 	// а результат пользователь возвращает событием Выбор с переменной
 	// ПодборРезультат. Generic: годится для любого диалога мультивыбора.
-	FormEventOnChoice          FormEventType = "Выбор"                  // OnChoice
+	FormEventOnChoice FormEventType = "Выбор" // OnChoice
 )
 
 // FormElementType represents types of form elements
@@ -67,10 +68,10 @@ const (
 	FormElementFormField  FormElementType = "ПолеФормы"      // FormField
 	FormElementTablePart  FormElementType = "ТабличнаяЧасть" // TablePart
 	// Управляемые формы (план 37): дополнения для покрытия XML 1С и UI-редактора.
-	FormElementColumn           FormElementType = "Колонка"          // Column (Table inner)
-	FormElementCommandBar       FormElementType = "КоманднаяПанель"  // CommandBar
-	FormElementPicture          FormElementType = "ПолеКартинки"     // PictureField
-	FormElementCommandBarButton FormElementType = "КнопкаКП"         // CommandBar Button
+	FormElementColumn           FormElementType = "Колонка"         // Column (Table inner)
+	FormElementCommandBar       FormElementType = "КоманднаяПанель" // CommandBar
+	FormElementPicture          FormElementType = "ПолеКартинки"    // PictureField
+	FormElementCommandBarButton FormElementType = "КнопкаКП"        // CommandBar Button
 )
 
 // Layout kinds of a form module. Пустая строка трактуется как "autogen"
@@ -90,8 +91,8 @@ type FormElement struct {
 	// TitleMap (поле yaml:"title"); это поле не сериализуется в YAML
 	// (тег "-"), и заполняется ToFormModule из TitleMap.Get("ru") как
 	// fallback для legacy-рендерера.
-	Title     string `yaml:"-"`
-	FieldName string `yaml:"field,omitempty"`
+	Title     string                   `yaml:"-"`
+	FieldName string                   `yaml:"field,omitempty"`
 	TablePart string                   `yaml:"table_part,omitempty"`
 	Visible   bool                     `yaml:"visible,omitempty"`
 	Enabled   bool                     `yaml:"enabled,omitempty"`
@@ -103,23 +104,23 @@ type FormElement struct {
 	// Поля, добавленные планом 37. Все опциональны; YAML-загрузчик
 	// заполняет их при чтении managed-формы, конвертер 1С использует
 	// для round-trip, рендерер — для отрисовки HTML.
-	OriginalID string            `yaml:"original_id,omitempty"` // id из Form.xml для round-trip
-	TitleMap   map[string]string `yaml:"title,omitempty"`       // локализованный заголовок (ru, en, ...) — основной источник в managed-YAML
-	DataPath        string            `yaml:"data_path,omitempty"`         // "Объект.Контрагент", "Список.Цена"
-	Picture         string            `yaml:"picture,omitempty"`           // "_resources/.../Picture.png" или "stdpic:Post"
-	ValuesPicture   string            `yaml:"values_picture,omitempty"`    // палитра выбора (для PictureField/InputField)
-	Width           int               `yaml:"width,omitempty"`             // ширина в условных единицах
-	Height          int               `yaml:"height,omitempty"`            // высота
-	HorizontalAlign string            `yaml:"halign,omitempty"`            // left|center|right|stretch
-	VerticalAlign   string            `yaml:"valign,omitempty"`            // top|center|bottom
-	ReadOnly        bool              `yaml:"readonly,omitempty"`          // только чтение
-	UseGrid         bool              `yaml:"use_grid,omitempty"`          // (устар.) SlickGrid теперь включён по умолчанию
-	NoGrid          bool              `yaml:"no_grid,omitempty"`           // отключить SlickGrid у ТЧ (вернуть простую таблицу)
-	Hint            string            `yaml:"hint,omitempty"`              // всплывающая подсказка
-	Mask            string            `yaml:"mask,omitempty"`              // маска ввода
-	Type            string            `yaml:"type,omitempty"`              // "file" для файлового поля, и т.п.
-	Choice          bool              `yaml:"choice,omitempty"`            // включена кнопка выбора у InputField
-	UnknownXML      []byte            `yaml:"unknown_xml,omitempty"`       // экзотический XML, сохраняется как есть
+	OriginalID      string            `yaml:"original_id,omitempty"`    // id из Form.xml для round-trip
+	TitleMap        map[string]string `yaml:"title,omitempty"`          // локализованный заголовок (ru, en, ...) — основной источник в managed-YAML
+	DataPath        string            `yaml:"data_path,omitempty"`      // "Объект.Контрагент", "Список.Цена"
+	Picture         string            `yaml:"picture,omitempty"`        // "_resources/.../Picture.png" или "stdpic:Post"
+	ValuesPicture   string            `yaml:"values_picture,omitempty"` // палитра выбора (для PictureField/InputField)
+	Width           int               `yaml:"width,omitempty"`          // ширина в условных единицах
+	Height          int               `yaml:"height,omitempty"`         // высота
+	HorizontalAlign string            `yaml:"halign,omitempty"`         // left|center|right|stretch
+	VerticalAlign   string            `yaml:"valign,omitempty"`         // top|center|bottom
+	ReadOnly        bool              `yaml:"readonly,omitempty"`       // только чтение
+	UseGrid         bool              `yaml:"use_grid,omitempty"`       // (устар.) SlickGrid теперь включён по умолчанию
+	NoGrid          bool              `yaml:"no_grid,omitempty"`        // отключить SlickGrid у ТЧ (вернуть простую таблицу)
+	Hint            string            `yaml:"hint,omitempty"`           // всплывающая подсказка
+	Mask            string            `yaml:"mask,omitempty"`           // маска ввода
+	Type            string            `yaml:"type,omitempty"`           // "file" для файлового поля, и т.п.
+	Choice          bool              `yaml:"choice,omitempty"`         // включена кнопка выбора у InputField
+	UnknownXML      []byte            `yaml:"unknown_xml,omitempty"`    // экзотический XML, сохраняется как есть
 }
 
 // FormModule represents a form module with event handlers
@@ -132,14 +133,14 @@ type FormModule struct {
 	Procedures map[string]*FormProcedure `yaml:"-"`
 
 	// Поля, добавленные планом 37 для управляемых форм.
-	LayoutKind             string           `yaml:"layout_kind,omitempty"`              // "managed"|"autogen" (пусто=autogen)
-	Title                  map[string]string `yaml:"title,omitempty"`                   // локализованный заголовок формы
-	OriginalID             string           `yaml:"original_id,omitempty"`              // id корневого узла из 1С
-	Attributes             []*FormAttribute `yaml:"attributes,omitempty"`               // реквизиты формы
-	Commands               []*FormCommand   `yaml:"commands,omitempty"`                 // команды формы
-	AutoCommandBar         *FormCommandBar  `yaml:"auto_command_bar,omitempty"`         // авто-командная панель
-	AutoSaveDataInSettings bool             `yaml:"auto_save_data_in_settings,omitempty"`
-	VerticalScroll         string           `yaml:"vertical_scroll,omitempty"`          // auto|never|always
+	LayoutKind             string            `yaml:"layout_kind,omitempty"`      // "managed"|"autogen" (пусто=autogen)
+	Title                  map[string]string `yaml:"title,omitempty"`            // локализованный заголовок формы
+	OriginalID             string            `yaml:"original_id,omitempty"`      // id корневого узла из 1С
+	Attributes             []*FormAttribute  `yaml:"attributes,omitempty"`       // реквизиты формы
+	Commands               []*FormCommand    `yaml:"commands,omitempty"`         // команды формы
+	AutoCommandBar         *FormCommandBar   `yaml:"auto_command_bar,omitempty"` // авто-командная панель
+	AutoSaveDataInSettings bool              `yaml:"auto_save_data_in_settings,omitempty"`
+	VerticalScroll         string            `yaml:"vertical_scroll,omitempty"` // auto|never|always
 	// OneCMeta — служебный блок, используемый только конвертером 1С,
 	// рантайм его игнорирует. Может содержать version, unknown_xml и т.п.
 	OneCMeta map[string]any `yaml:"oneC_meta,omitempty"`
@@ -176,18 +177,18 @@ type FormProcParam struct {
 // FormAttribute — реквизит формы (живёт только в форме, отдельно от полей сущности).
 // При импорте из 1С строится из Form.xml/Attributes.
 type FormAttribute struct {
-	ID            string                 `yaml:"id,omitempty"`            // ID из IR, опционально
-	OriginalID    string                 `yaml:"original_id,omitempty"`   // id из 1С
+	ID            string                 `yaml:"id,omitempty"`          // ID из IR, опционально
+	OriginalID    string                 `yaml:"original_id,omitempty"` // id из 1С
 	Name          string                 `yaml:"name"`
 	Title         map[string]string      `yaml:"title,omitempty"`
-	TypeRef       string                 `yaml:"type"`                    // "string(40)", "decimal(15,2)", "CatalogRef.Контрагенты", "ValueTable"
+	TypeRef       string                 `yaml:"type"` // "string(40)", "decimal(15,2)", "CatalogRef.Контрагенты", "ValueTable"
 	Length        int                    `yaml:"length,omitempty"`
 	Precision     int                    `yaml:"precision,omitempty"`
 	AllowedLength string                 `yaml:"allowed_length,omitempty"` // "Variable"|"Fixed"
 	Save          bool                   `yaml:"save,omitempty"`
 	FillingValue  string                 `yaml:"filling_value,omitempty"`
-	MainAttribute bool                   `yaml:"main,omitempty"`          // соответствует <MainAttribute>true</MainAttribute>
-	Columns       []*FormAttributeColumn `yaml:"columns,omitempty"`       // для ValueTable
+	MainAttribute bool                   `yaml:"main,omitempty"`    // соответствует <MainAttribute>true</MainAttribute>
+	Columns       []*FormAttributeColumn `yaml:"columns,omitempty"` // для ValueTable
 	Props         map[string]any         `yaml:"props,omitempty"`
 }
 

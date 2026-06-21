@@ -569,6 +569,16 @@ func (s *Server) formEdit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, s.errText(r, err), 404)
 		return
 	}
+	// Issue #148: серверный обработчик ПриЧтенииНаСервере исполняется ДО рендера
+	// HTML. Если он бросает исключение — отдаём 403 и не раскрываем данные записи
+	// (row-level security на чтение). Без этого ПриОткрытии срабатывал лишь на
+	// клиенте, уже после отдачи формы со всеми полями.
+	if managed := pickManagedForm(entity, "object"); managed != nil {
+		if denied := s.runFormReadHook(r.Context(), entity, managed, id); denied != nil {
+			s.renderForbidden(w, r)
+			return
+		}
+	}
 	refOptions, _ := s.loadRefOptions(r.Context(), entity)
 	tpRefOpts, _ := s.loadTPRefOptions(r.Context(), entity)
 	langEdit := s.resolveLang(r)
