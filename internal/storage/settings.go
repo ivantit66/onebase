@@ -225,6 +225,71 @@ func (db *DB) SaveFormOpenMode(ctx context.Context, mode string) error {
 	return nil
 }
 
+// userFormModeKey — ключ персонального режима пользователя в _settings.
+func userFormModeKey(user string) string {
+	return "ui.form_open_mode.user." + user
+}
+
+// GetUserFormOpenMode возвращает персональный режим пользователя или "" если
+// не задан (пустой логин — всегда "", персонального режима нет).
+func (db *DB) GetUserFormOpenMode(ctx context.Context, user string) string {
+	if user == "" {
+		return ""
+	}
+	d := db.dialect
+	var v string
+	err := db.QueryRow(ctx,
+		`SELECT value FROM _settings WHERE key = `+d.Placeholder(1),
+		userFormModeKey(user)).Scan(&v)
+	if err != nil {
+		return ""
+	}
+	switch strings.TrimSpace(v) {
+	case FormModeTabs:
+		return FormModeTabs
+	case FormModePages:
+		return FormModePages
+	default:
+		return ""
+	}
+}
+
+// SaveUserFormOpenMode пишет персональный режим. Значение "" или "default"
+// удаляет персональную настройку (вернуться к глобальному дефолту).
+func (db *DB) SaveUserFormOpenMode(ctx context.Context, user, mode string) error {
+	if user == "" {
+		return nil
+	}
+	if err := db.EnsureSettingsSchema(ctx); err != nil {
+		return err
+	}
+	d := db.dialect
+	m := strings.TrimSpace(mode)
+	if m == "" || m == "default" {
+		_, err := db.Exec(ctx,
+			`DELETE FROM _settings WHERE key = `+d.Placeholder(1),
+			userFormModeKey(user))
+		return err
+	}
+	q := fmt.Sprintf(
+		`INSERT INTO _settings (key, value) VALUES (%s, %s)
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		d.Placeholder(1), d.Placeholder(2))
+	if _, err := db.Exec(ctx, q, userFormModeKey(user), normFormMode(m)); err != nil {
+		return fmt.Errorf("settings: save user form mode: %w", err)
+	}
+	return nil
+}
+
+// EffectiveFormOpenMode — итоговый режим: персональный, если задан, иначе
+// глобальный (который при отсутствии — pages).
+func (db *DB) EffectiveFormOpenMode(ctx context.Context, user string) string {
+	if p := db.GetUserFormOpenMode(ctx, user); p != "" {
+		return p
+	}
+	return db.GetFormOpenMode(ctx)
+}
+
 // Режимы хранения бинарников (картинки поля image). Аналог двух способов
 // хранения файлов в 1С: «тома на диске» и «в информационной базе».
 const (
