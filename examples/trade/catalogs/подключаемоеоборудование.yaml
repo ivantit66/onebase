@@ -1,0 +1,20 @@
+name: ПодключаемоеОборудование
+fields:
+  - name: Наименование
+    type: string
+  - name: ТипОборудования
+    type: enum:ТипОборудования
+  - name: Драйвер
+    type: string
+  - name: Порт
+    type: string
+  - name: Ширина
+    type: number
+  # Поля декларативного протокола (драйвер «scripted»): описывают модель
+  # устройства данными, без программирования драйвера в платформе.
+  - name: КомандаЗапроса
+    type: string
+  - name: Шаблон
+    type: string
+  - name: Множитель
+    type: number

@@ -21,6 +21,9 @@ fields:
     type: richtext
   - name: СтавкаНДС
     type: reference:СтавкаНДС
+  - name: ПризнакПредмета
+    type: enum:ПризнакПредмета
+    label: Признак предмета расчёта (тег ФФД 1212)
   - name: Вес
     type: number
   - name: Объём
