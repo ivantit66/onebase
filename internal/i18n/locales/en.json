@@ -953,6 +953,7 @@
   "имена через запятую (?имя=…)": "comma-separated names (?name=…)",
   "через запятую; пусто — всем": "comma-separated; empty — everyone",
   "Переводы": "Translations",
+  "Показать/скрыть поля переводов у всех объектов": "Show/hide translation fields for all objects",
   "Рабочее место кассира (РМК)": "Cashier workstation (POS)",
   "Настройки агента оборудования": "Equipment agent settings"
 }
