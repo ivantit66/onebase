@@ -415,6 +415,11 @@ func (i *Interpreter) assign(target ast.Expr, val any, e *env) {
 			o.Set(field, val)
 		case *Struct:
 			o.Set(field, val)
+		case *Map:
+			// Симметрично чтению: запись по точке у Соответствия не работает —
+			// раньше тихо терялась, теперь явная ошибка с подсказкой.
+			RaiseUserError("Соответствие не поддерживает запись по точке «." + t.Field.Literal +
+				"» — используйте Вставить(\"" + t.Field.Literal + "\", Значение)")
 		}
 	case *ast.IndexExpr:
 		obj := i.evalExpr(t.Object, e)
@@ -455,6 +460,12 @@ func (i *Interpreter) evalExpr(expr ast.Expr, e *env) any {
 			return o.Get(field)
 		case *Ref:
 			return o.Get(field)
+		case *Map:
+			// Соответствие не поддерживает чтение по точке (как в 1С) — частая
+			// ошибка с результатом ПрочитатьJSON. Раньше тихо возвращали
+			// Неопределено, что прятало опечатку; теперь — понятная ошибка.
+			RaiseUserError("Соответствие не поддерживает чтение по точке «." + v.Field.Literal +
+				"» — используйте Получить(\"" + v.Field.Literal + "\")")
 		}
 		return nil
 	case *ast.IndexExpr:
