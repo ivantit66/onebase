@@ -114,13 +114,22 @@ elements:
                   de: "Geschäftsbetrag"
                 data_path: Объект.Сумма
                 hint: "Ожидаемая сумма сделки"
-              - kind: ПолеВвода
+              - kind: ПолеСписка
                 name: ПолеВалюта
                 title:
                   ru: "Валюта"
                   en: "Currency"
                   de: "Währung"
                 data_path: Объект.Валюта
+                choices:
+                  - value: RUB
+                    title: { ru: "Российский рубль", en: "Russian ruble", de: "Russischer Rubel" }
+                  - value: USD
+                    title: { ru: "Доллар США", en: "US dollar", de: "US-Dollar" }
+                  - value: EUR
+                    title: { ru: "Евро", en: "Euro", de: "Euro" }
+                events:
+                  ПриИзменении: ВалютаПриИзменении
               - kind: ПолеВвода
                 name: ПолеВероятность
                 title:
