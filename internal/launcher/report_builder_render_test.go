@@ -60,3 +60,23 @@ func TestReportBuilderCondTab(t *testing.T) {
 		}
 	}
 }
+
+func TestReportBuilderAppearance(t *testing.T) {
+	// Секция «Оформление вывода» рендерится и преднаполняется из Composition.Appearance.
+	html := renderConfiguratorReport(t, &report.Composition{
+		Groupings:  []string{"М"},
+		Measures:   []report.Measure{{Field: "Сумма", Agg: "sum"}},
+		Appearance: report.Appearance{Lines: "both", Zebra: true},
+	})
+	for _, want := range []string{
+		"Оформление вывода",
+		`name="comp.appearance.lines"`,
+		`value="both" selected`,                  // линии both выбраны
+		`name="comp.appearance.zebra" checked`,   // зебра включена
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("нет %q", want)
+		}
+	}
+	_ = renderConfiguratorReport(t, nil) // nil composition не должен паниковать
+}

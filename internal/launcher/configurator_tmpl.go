@@ -1168,7 +1168,19 @@ const cfgTabTree = `{{define "tab-tree"}}
           </table>
         </div>
         <div class="obj-pane" id="ot-rep-cond-{{$rn}}">
-          <div class="section-hd" style="margin-top:12px">{{t $.Lang "Условное оформление"}}
+          <div class="section-hd">{{t $.Lang "Оформление вывода"}}</div>
+          {{$al := ""}}{{with .Composition}}{{$al = .Appearance.Lines}}{{end}}
+          <div style="margin-top:6px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+            <div class="fg"><label>{{t $.Lang "Линии сетки"}}</label>
+              <select name="comp.appearance.lines" style="padding:3px 5px;border:1px solid #ccd0d8;border-radius:3px;font-size:12px">
+                <option value="" {{if or (eq $al "") (eq $al "horizontal")}}selected{{end}}>{{t $.Lang "горизонтальные (как сейчас)"}}</option>
+                <option value="vertical" {{if eq $al "vertical"}}selected{{end}}>{{t $.Lang "вертикальные"}}</option>
+                <option value="both" {{if eq $al "both"}}selected{{end}}>{{t $.Lang "и те и те"}}</option>
+                <option value="none" {{if eq $al "none"}}selected{{end}}>{{t $.Lang "без линий"}}</option>
+              </select></div>
+            <label><input type="checkbox" name="comp.appearance.zebra" {{with .Composition}}{{if .Appearance.Zebra}}checked{{end}}{{end}}> {{t $.Lang "Чередование строк (зебра)"}}</label>
+          </div>
+          <div class="section-hd" style="margin-top:14px">{{t $.Lang "Условное оформление"}}
             <button type="button" class="cfg-add-btn" style="font-size:14px;margin-left:8px" onclick="compAddCond('cc-{{$rn}}')">+</button></div>
           <table class="fields-tbl" id="cc-{{$rn}}">
             <tr><th>{{t $.Lang "Когда"}} (DSL)</th><th>{{t $.Lang "Поле"}}</th><th>{{t $.Lang "Цвет"}}</th><th>{{t $.Lang "Фон"}}</th><th>{{t $.Lang "Ж"}}</th><th>{{t $.Lang "К"}}</th><th></th></tr>
