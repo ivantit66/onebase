@@ -82,12 +82,11 @@ func (d *scriptedPayDevice) Pay(amount float64) (PaymentResult, error) {
 	if _, err := d.conn.Write([]byte(req)); err != nil {
 		return PaymentResult{}, err
 	}
-	buf := make([]byte, 256)
-	n, err := d.conn.Read(buf)
+	raw, err := readFrame(d.conn)
 	if err != nil {
 		return PaymentResult{}, fmt.Errorf("эквайринг: чтение ответа: %w", err)
 	}
-	resp := strings.TrimSpace(string(buf[:n]))
+	resp := strings.TrimSpace(string(raw))
 	if resp == "" {
 		return PaymentResult{}, fmt.Errorf("эквайринг: пустой ответ терминала")
 	}

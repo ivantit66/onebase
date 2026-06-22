@@ -551,6 +551,44 @@ try {
 </script>Готово.</body></html>`, idJSON, labelJSON)
 }
 
+// pickObjectFormWithReadHook возвращает форму ОБЪЕКТА (Kind=="object"),
+// объявляющую серверный обработчик ПриЧтенииНаСервере, — независимо от того,
+// managed она (forms/<entity>/*.form.yaml) или autogen (src/<entity>.form.os).
+//
+// Замечание #13: раньше RLS-хук на чтение искался только среди managed-форм
+// (pickManagedForm), поэтому ПриЧтенииНаСервере, объявленный в обычной
+// autogen-форме, молча игнорировался — footgun для RLS. runFormReadHook не
+// требует managed-формы, ему нужны лишь Handlers + ProgramAST, которые есть и у
+// autogen-формы (loader парсит .form.os в FormModule с Handlers/ProgramAST).
+//
+// Порядок выбора: сначала managed-форма объекта (она же используется при рендере,
+// renderEntityForm отдаёт managed при наличии), затем autogen — чтобы хук считался
+// с той же формы, которую увидит пользователь. Возвращаем только форму, реально
+// объявляющую обработчик; если ни одна не объявляет — nil (хук не запускается).
+func pickObjectFormWithReadHook(entity *metadata.Entity) *metadata.FormModule {
+	if entity == nil {
+		return nil
+	}
+	evt := string(metadata.FormEventOnReadAtServer)
+	declares := func(fm *metadata.FormModule) bool {
+		return fm != nil && strings.EqualFold(fm.Kind, "object") &&
+			resolveHandlerProc(fm, "", evt) != ""
+	}
+	// 1) managed-форма объекта (приоритет — она же рендерится).
+	for _, fm := range entity.Forms {
+		if fm != nil && fm.IsManaged() && declares(fm) {
+			return fm
+		}
+	}
+	// 2) autogen-форма объекта (src/<entity>.form.os).
+	for _, fm := range entity.Forms {
+		if fm != nil && !fm.IsManaged() && declares(fm) {
+			return fm
+		}
+	}
+	return nil
+}
+
 func (s *Server) formEdit(w http.ResponseWriter, r *http.Request) {
 	entity := s.getEntity(w, r)
 	if entity == nil {
@@ -573,8 +611,13 @@ func (s *Server) formEdit(w http.ResponseWriter, r *http.Request) {
 	// HTML. Если он бросает исключение — отдаём 403 и не раскрываем данные записи
 	// (row-level security на чтение). Без этого ПриОткрытии срабатывал лишь на
 	// клиенте, уже после отдачи формы со всеми полями.
-	if managed := pickManagedForm(entity, "object"); managed != nil {
-		if denied := s.runFormReadHook(r.Context(), entity, managed, id); denied != nil {
+	//
+	// Замечание #13: хук выполняется для формы объекта НЕЗАВИСИМО от её типа —
+	// managed (forms/<entity>/*.form.yaml) ИЛИ autogen (src/<entity>.form.os).
+	// runFormReadHook не требует managed-формы (нужны лишь Handlers + ProgramAST),
+	// поэтому RLS на чтение, объявленный в autogen-форме, тоже срабатывает.
+	if objForm := pickObjectFormWithReadHook(entity); objForm != nil {
+		if denied := s.runFormReadHook(r.Context(), entity, objForm, id); denied != nil {
 			s.renderForbidden(w, r)
 			return
 		}

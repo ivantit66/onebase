@@ -105,8 +105,13 @@ const tplAppShell = `{{define "page-app-shell"}}
 
   function tabByWindow(win){ for(var i=0;i<tabs.length;i++){ if(tabs[i].frame.contentWindow===win)return tabs[i]; } return null; }
   window.addEventListener('message',function(ev){
+    // Принимаем сообщения только от своего origin: иначе любой сторонний фрейм
+    // мог бы навязать src произвольной вкладке. d.url дополнительно валидируем
+    // той же openable()-проверкой, что и клик по ссылке (только /ui/, без
+    // admin/login/...), чтобы postMessage не открывал внешние схемы.
+    if(ev.origin!==location.origin)return;
     var d=ev.data; if(!d||typeof d!=='object')return;
-    if(d.source==='obOpenTab' && d.url){ openTab(String(d.url), d.title?String(d.title):'Форма', {allowDup:!!d.allowDup}); }
+    if(d.source==='obOpenTab' && d.url){ var ou=String(d.url); if(!openable(ou))return; openTab(ou, d.title?String(d.title):'Форма', {allowDup:!!d.allowDup}); }
     else if(d.source==='obSetTitle' && active && d.title){ active.title=String(d.title); active.label.textContent=active.title; active.btn.title=active.title; persist(); }
     else if(d.source==='obDirty'){ var dt=tabByWindow(ev.source); if(dt){ dt.dirty=!!d.dirty; dt.btn.classList.toggle('dirty',dt.dirty); } } // фаза 3
   });

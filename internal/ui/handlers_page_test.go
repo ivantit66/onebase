@@ -168,6 +168,79 @@ func TestPageAction_RunsProcAndRedirects(t *testing.T) {
 	}
 }
 
+// TestPageAction_ExportGate проверяет экспорт-гейт действий страниц (ревью #10):
+// POST на ВНУТРЕННЮЮ (не помеченную «Экспорт») процедуру модуля .page.os должен
+// отклоняться (404) — её побочные эффекты нельзя дёрнуть из обхода назначения, —
+// а на ЭКСПОРТНУЮ кнопку-действие проходить и исполняться.
+func TestPageAction_ExportGate(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.ConnectSQLite(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// ВнутрПересчёт — без «Экспорт» (внутренняя вспомогательная), ПубличноеДействие
+	// — экспортная кнопка-действие.
+	src := `Процедура ПриФормировании(Страница, Параметры) Экспорт
+  Страница.Заголовок("Тест");
+КонецПроцедуры
+
+Процедура ВнутрПересчёт(Страница, Параметры)
+  Сообщить("внутренняя процедура вызвана");
+КонецПроцедуры
+
+Процедура ПубличноеДействие(Страница, Параметры) Экспорт
+  Сообщить("публичное действие вызвано");
+КонецПроцедуры`
+	prog := mustParse(t, src)
+
+	registry := runtime.NewRegistry()
+	registry.LoadPages([]*page.Page{{Name: "Тест"}})
+	registry.Load(runtime.LoadOptions{
+		PagePrograms: map[string]*ast.Program{"Тест": prog},
+	})
+
+	interp := interpreter.New()
+	interp.LookupProc = registry.GetModuleProc
+
+	s := &Server{
+		store:    db,
+		reg:      registry,
+		interp:   interp,
+		lockMgr:  runtime.NewLockManager(),
+		messages: NewMessageStore(),
+	}
+
+	call := func(action string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/ui/page/Тест/action/"+action, nil)
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("name", "Тест")
+		rctx.URLParams.Add("action", action)
+		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+		rec := httptest.NewRecorder()
+		s.pageAction(rec, req)
+		return rec
+	}
+
+	// Внутренняя процедура — отказ (404), без исполнения.
+	if rec := call("ВнутрПересчёт"); rec.Code != http.StatusNotFound {
+		t.Fatalf("вызов внутренней процедуры: код %d, ожидался 404", rec.Code)
+	}
+	if msgs := s.messages.List("_anonymous"); len(msgs) != 0 {
+		t.Fatalf("внутренняя процедура НЕ должна исполняться: %+v", msgs)
+	}
+
+	// Экспортная кнопка-действие — проходит (303) и исполняется.
+	if rec := call("ПубличноеДействие"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("вызов экспортного действия: код %d, ожидался 303", rec.Code)
+	}
+	msgs := s.messages.List("_anonymous")
+	if len(msgs) != 1 || !strings.Contains(msgs[0].Text, "публичное действие вызвано") {
+		t.Errorf("экспортное действие не исполнено: %+v", msgs)
+	}
+}
+
 // TestLocalizePageBlocks_TranslatesLabelsNotData проверяет авто-i18n подписей
 // блоков страницы (план 66, доработка 3): статические подписи переводятся через
 // Bundle, а данные из запросов (значение показателя, ячейки таблицы, URL) —

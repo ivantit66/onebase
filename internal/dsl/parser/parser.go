@@ -116,9 +116,13 @@ func (p *Parser) parseProcedure() (*ast.ProcedureDecl, error) {
 	}
 	// Опциональный модификатор «Экспорт» после сигнатуры (как в 1С). Лексер
 	// токенизирует его как IDENT, поэтому распознаём по литералу и пропускаем —
-	// иначе он осел бы фиктивным выражением-без-эффекта в начале тела.
+	// иначе он осел бы фиктивным выражением-без-эффекта в начале тела. Флаг
+	// сохраняем в ProcedureDecl.Export — на нём строится экспорт-гейт внешних
+	// точек входа (действия страниц вызывают только экспортные процедуры).
+	exported := false
 	if p.cur.Type == token.IDENT {
 		if low := strings.ToLower(p.cur.Literal); low == "экспорт" || low == "export" {
+			exported = true
 			p.advance()
 		}
 	}
@@ -131,7 +135,7 @@ func (p *Parser) parseProcedure() (*ast.ProcedureDecl, error) {
 		return nil, err
 	}
 	p.advance() // consume EndProcedure/EndFunction
-	return &ast.ProcedureDecl{Name: nameTok, Params: params, Defaults: defaults, Body: body}, nil
+	return &ast.ProcedureDecl{Name: nameTok, Params: params, Defaults: defaults, Body: body, Export: exported}, nil
 }
 
 // isBlockEnd returns true for tokens that end a block from the outside.

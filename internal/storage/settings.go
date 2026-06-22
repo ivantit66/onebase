@@ -401,8 +401,14 @@ func (db *DB) SaveAuditSettings(ctx context.Context, s AuditSettings) error {
 // reportSettingsKey формирует ключ _settings для рантайм-настроек отчёта
 // конкретного пользователя (план 70). Для анонимной/однопользовательской
 // сессии user = "" — отдельный ключ, не пересекающийся с именованными.
+//
+// Имя отчёта и логин префиксуются их длиной ("<len>:<value>"), а не просто
+// склеиваются через точку (issue #22): при наивной склейке точка внутри имени
+// отчёта или логина давала бы коллизии — например (report="a.b",user="c") и
+// (report="a",user="b.c") дали бы один и тот же ключ "report.settings.a.b.c".
+// Длина-префикс делает кодировку однозначной: разобрать обратно нельзя спутать.
 func reportSettingsKey(report, user string) string {
-	return "report.settings." + report + "." + user
+	return fmt.Sprintf("report.settings.%d:%s.%d:%s", len(report), report, len(user), user)
 }
 
 // GetReportUserSettings возвращает сырой JSON рантайм-настроек отчёта для

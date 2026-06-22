@@ -102,3 +102,54 @@ func TestRunWithToolsOpenAI_StopFinishReason(t *testing.T) {
 		t.Fatalf("неожиданный текст: %q", resp.Text)
 	}
 }
+
+// TestRunWithToolsOpenAI_MalformedToolCall — регрессия #21: OpenAI требует ровно
+// один ответ role=tool на каждый tool_call, иначе следующий POST вернёт 400.
+// Раньше при битом tool_call (json.Unmarshal падал) делался continue → для него
+// tool-ответа не было, инвариант нарушался. Теперь добавляем tool-ответ с
+// текстом ошибки и для битого вызова: число tool-сообщений == числу tool_calls.
+func TestRunWithToolsOpenAI_MalformedToolCall(t *testing.T) {
+	var toolMsgCount int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(string(body), `"role":"tool"`) {
+			// Считаем tool-сообщения во втором запросе (по числу tool_call_id).
+			toolMsgCount = strings.Count(string(body), `"tool_call_id"`)
+			_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"Готово"}}],"usage":{}}`))
+			return
+		}
+		// Два tool_call: валидный c1 и битый элемент (JSON-строка, а не объект) —
+		// json.Unmarshal в структуру для него падает.
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"tool_calls","message":{"content":"","tool_calls":[` +
+			`{"id":"c1","type":"function","function":{"name":"остаток","arguments":"{\"товар\":\"гвозди\"}"}},` +
+			`"СЛОМАНО"` +
+			`]}}],"usage":{}}`))
+	}))
+	defer srv.Close()
+	cfg := Config{
+		Enabled:   true,
+		Endpoints: []Endpoint{{Name: "o", Kind: KindOpenAI, BaseURL: srv.URL, APIKey: "k"}},
+		Models:    []Model{{Name: "m", Endpoint: "o"}},
+		Profiles:  []Profile{{Task: "чат", Models: []string{"m"}}},
+	}
+	exec := func(ctx context.Context, call ToolCall) ToolResult {
+		return ToolResult{ID: call.ID, Content: "42"}
+	}
+	tools := []Tool{{Name: "остаток", Description: "остаток товара", Schema: map[string]any{
+		"type": "object", "properties": map[string]any{"товар": map[string]any{"type": "string"}},
+	}}}
+	r := New(cfg, nil)
+	resp, err := r.RunWithTools(context.Background(), "чат",
+		ChatRequest{Messages: []Message{UserText("сколько гвоздей?")}}, tools, exec)
+	if err != nil {
+		t.Fatalf("RunWithTools: %v", err)
+	}
+	if resp.Text != "Готово" {
+		t.Fatalf("неожиданный текст: %q", resp.Text)
+	}
+	// Инвариант: ответ role=tool на КАЖДЫЙ из 2 tool_call (включая битый).
+	if toolMsgCount != 2 {
+		t.Fatalf("ожидалось 2 tool-сообщения (по одному на каждый tool_call), получено %d", toolMsgCount)
+	}
+}

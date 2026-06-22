@@ -1,6 +1,10 @@
 package deviceagent
 
-import "net/http"
+import (
+	"net"
+	"net/http"
+	"net/url"
+)
 
 // page отдаёт встроенную HTML-страницу рабочего места кассира. Страница и API —
 // один origin (агент), поэтому fetch на /print, /drawer, /display, /weight идёт
@@ -11,11 +15,26 @@ func (a *Agent) page(w http.ResponseWriter, _ *http.Request) {
 }
 
 // cors разрешает вызовы агента и из стороннего origin (например, из основного UI
-// onebase на другом порту) и отвечает на preflight. Безопасность держится на
-// токене X-Agent-Token, а не на origin, поэтому "*" здесь допустим.
-func cors(next http.Handler) http.Handler {
+// onebase на другом порту) и отвечает на preflight.
+//
+// Когда задан токен — безопасность держится на X-Agent-Token, и кросс-origin
+// доступ разрешён ("*"): без верного токена команда железа всё равно отклоняется.
+// Когда токен НЕ задан (локальная отладка) — проверки нет, поэтому поверхность
+// сокращается: разрешаем только same-origin/локальные origin'ы, чтобы
+// произвольный сайт в браузере кассы не дёргал команды железа.
+func (a *Agent) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if a.token != "" {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		} else if origin == "" || isLocalOrigin(origin) {
+			// Отражаем только локальный origin (или его отсутствие — same-origin
+			// запросы Origin не шлют), чужие origin'ы CORS-заголовок не получают.
+			if origin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
+			}
+		}
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Agent-Token")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		if r.Method == http.MethodOptions {
@@ -24,6 +43,28 @@ func cors(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isLocalOrigin сообщает, указывает ли Origin на loopback/частный адрес
+// (localhost, 127.0.0.1, ::1, 192.168.x и т.п.). Используется для сужения CORS
+// при запуске агента без токена.
+func isLocalOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false // непустое доменное имя (не localhost) считаем чужим
+	}
+	return isLocalIP(ip)
 }
 
 const posPageHTML = `<!doctype html>

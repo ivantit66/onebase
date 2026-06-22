@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/microcosm-cc/bluemonday"
+	"github.com/shopspring/decimal"
 )
 
 // Объект-построитель «Страница» (план 66). Передаётся в обработчик страницы
@@ -299,11 +300,26 @@ func (r *DSLPageRow) CallMethod(name string, args []any) any {
 // script/iframe/object, on*-обработчики и javascript:/data:-URI. Это замена
 // прежнему блоклисту на регулярках, который обходился разделителем «/» перед
 // обработчиком (<img src=x/onerror=…>), табом в схеме (java&#9;script:) и
-// data:-iframe. class/style разрешаем, чтобы автор страницы сохранял вёрстку —
-// исполняемых векторов style в современных браузерах не несёт.
+// data:-iframe.
+//
+// class разрешаем глобально для вёрстки. Глобальный style — ТОЛЬКО через
+// whitelist безопасных свойств (AllowStyles): иначе значение style проходит
+// дословно и открывает CSS-инъекцию — position:fixed overlay для кликджекинга,
+// background:url(...) для утечки данных/трекинга. Каждое свойство валидируется
+// дефолтным CSS-handler'ом bluemonday (color/background-color — только
+// именованные/hex/rgb/hsl, url() отбрасывается; expression() не проходит).
+// Сознательно НЕ включены position (его handler допускает fixed) и shorthand
+// background (допускает url()).
 var pageHTMLPolicy = func() *bluemonday.Policy {
 	p := bluemonday.UGCPolicy()
-	p.AllowAttrs("class", "style").Globally()
+	p.AllowAttrs("class").Globally()
+	p.AllowStyles(
+		"color", "background-color",
+		"text-align", "vertical-align",
+		"font-weight", "font-style", "font-size", "font-family", "line-height",
+		"padding", "margin", "border",
+		"width", "height", "display",
+	).Globally()
 	return p
 }()
 
@@ -333,36 +349,50 @@ func pageValueString(v any) string {
 // pageKPIDisplay форматирует значение показателя по подсказке формата
 // (money/percent/number). Зеркалит поведение виджетов, но самодостаточно, чтобы
 // не тянуть в интерпретатор пакет widget.
+//
+// Деньги и числа форматируются ТОЧНО: для денежных сумм-decimal путь через
+// float64 (toFloat → InexactFloat64) терял младшие разряды на крупных суммах,
+// поэтому money/number группируем напрямую по строковому представлению decimal,
+// не конвертируя в float. Прочие числовые типы (float/int/строка) — как раньше.
 func pageKPIDisplay(v any, format string) string {
 	switch strings.ToLower(format) {
 	case "money":
-		if f, ok := toFloat(v); ok {
-			return pageGroupInt(f, 2) + " ₽"
+		if d, ok := toDecimal(v); ok {
+			return pageGroupDecimal(d, 2) + " ₽"
 		}
 	case "percent":
 		if f, ok := toFloat(v); ok {
 			return strconv.FormatFloat(f, 'f', 1, 64) + "%"
 		}
 	case "number":
-		if f, ok := toFloat(v); ok {
-			return pageGroupInt(f, 0)
+		if d, ok := toDecimal(v); ok {
+			return pageGroupDecimal(d, 0)
 		}
 	}
 	return pageValueString(v)
 }
 
-// pageGroupInt форматирует число с разделителем тысяч (узкий неразрывный пробел)
-// и frac знаками после запятой. Русская конвенция: десятичная запятая.
-func pageGroupInt(f float64, frac int) string {
-	neg := f < 0
+// pageGroupDecimal форматирует decimal.Decimal с разделителем тысяч и frac
+// знаками после запятой ТОЧНО — без округления через float64. Округляет
+// банковской математикой decimal до frac знаков (StringFixed), затем
+// группирует целую часть узким неразрывным пробелом между тройками и десятичной
+// запятой (русская конвенция).
+func pageGroupDecimal(d decimal.Decimal, frac int) string {
+	neg := d.IsNegative()
 	if neg {
-		f = -f
+		d = d.Neg()
 	}
-	s := strconv.FormatFloat(f, 'f', frac, 64)
+	s := d.StringFixed(int32(frac)) // округление по правилам decimal, без float
 	intPart, fracPart := s, ""
 	if dot := strings.IndexByte(s, '.'); dot >= 0 {
 		intPart, fracPart = s[:dot], s[dot+1:]
 	}
+	return pageGroupDigits(intPart, fracPart, neg)
+}
+
+// pageGroupDigits собирает из уже разобранных цифр целой/дробной части строку с
+// группировкой тройками (узкий неразрывный пробел) и десятичной запятой.
+func pageGroupDigits(intPart, fracPart string, neg bool) string {
 	var b strings.Builder
 	if neg {
 		b.WriteByte('-')

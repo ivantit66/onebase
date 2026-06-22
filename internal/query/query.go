@@ -434,12 +434,14 @@ const (
 )
 
 type refDimInfo struct {
-	fieldName string // lowercase dim name: "номенклатура"
-	idCol     string // DB column: "номенклатура_id"
-	joinAlias string // SQL alias for auto-JOIN: "ref_номенклатура"
-	joinTable string // referenced catalog table: "номенклатура"
-	isVT      bool   // true: VT outer query, JOIN ON uses fieldName instead of idCol
-	refIsDoc  bool   // true: referenced entity is a document → display "номер", not "наименование"
+	fieldName  string // lowercase dim name: "номенклатура"
+	idCol      string // DB column: "номенклатура_id"
+	joinAlias  string // SQL alias for auto-JOIN: "ref_номенклатура"
+	joinTable  string // referenced catalog table: "номенклатура"
+	isVT       bool   // true: VT outer query, JOIN ON uses fieldName instead of idCol
+	refIsDoc   bool   // true: referenced entity is a document → display "номер", not "наименование"
+	refEntity  string // original-case referenced entity name (для SourceRef.Name, RBAC план 54/#14)
+	refSrcType string // тип-ключевое слово источника для sourcePermKind: "ДОКУМЕНТ"/"СПРАВОЧНИК"
 }
 
 func (rd refDimInfo) displayCol() string {
@@ -470,7 +472,23 @@ type translator struct {
 
 // addSource фиксирует объект-источник запроса для последующей проверки прав.
 func (tr *translator) addSource(typeUpper, name string) {
-	tr.sources = append(tr.sources, SourceRef{Kind: sourcePermKind(typeUpper), Name: name})
+	kind := sourcePermKind(typeUpper)
+	for _, s := range tr.sources {
+		if s.Kind == kind && s.Name == name {
+			return // уже зафиксирован (напр. та же сущность и в FROM, и через ссылку)
+		}
+	}
+	tr.sources = append(tr.sources, SourceRef{Kind: kind, Name: name})
+}
+
+// addRefSource регистрирует связанную сущность авто-JOIN ссылочного поля как
+// источник запроса (#14): её наименование/номер попадает в результат, поэтому
+// RBAC должен проверить право чтения на неё, а не только на главную таблицу.
+func (tr *translator) addRefSource(rd refDimInfo) {
+	if rd.refEntity == "" {
+		return
+	}
+	tr.addSource(rd.refSrcType, rd.refEntity)
 }
 
 func (tr *translator) peek(offset int) tok {
@@ -1345,15 +1363,21 @@ func buildVTRefDimInfos(dims []metadata.Field, entities []*metadata.Entity) []re
 		if d.RefEntity != "" {
 			fn := strings.ToLower(d.Name)
 			rd := refDimInfo{
-				fieldName: fn,
-				idCol:     fn, // VT aliased from _id
-				joinAlias: "ref_" + fn,
-				joinTable: strings.ToLower(d.RefEntity),
-				isVT:      true,
+				fieldName:  fn,
+				idCol:      fn, // VT aliased from _id
+				joinAlias:  "ref_" + fn,
+				joinTable:  strings.ToLower(d.RefEntity),
+				isVT:       true,
+				refEntity:  d.RefEntity,
+				refSrcType: "СПРАВОЧНИК",
 			}
 			for _, e := range entities {
-				if strings.EqualFold(e.Name, d.RefEntity) && e.Kind == metadata.KindDocument {
-					rd.refIsDoc = true
+				if strings.EqualFold(e.Name, d.RefEntity) {
+					rd.refEntity = e.Name // оригинальный регистр имени из метаданных
+					if e.Kind == metadata.KindDocument {
+						rd.refIsDoc = true
+						rd.refSrcType = "ДОКУМЕНТ"
+					}
 					break
 				}
 			}
@@ -1372,14 +1396,20 @@ func buildRefDimInfosWithEntities(dims []metadata.Field, entities []*metadata.En
 	for _, d := range dims {
 		if d.RefEntity != "" {
 			rd := refDimInfo{
-				fieldName: strings.ToLower(d.Name),
-				idCol:     strings.ToLower(d.Name) + "_id",
-				joinAlias: "ref_" + strings.ToLower(d.Name),
-				joinTable: strings.ToLower(d.RefEntity),
+				fieldName:  strings.ToLower(d.Name),
+				idCol:      strings.ToLower(d.Name) + "_id",
+				joinAlias:  "ref_" + strings.ToLower(d.Name),
+				joinTable:  strings.ToLower(d.RefEntity),
+				refEntity:  d.RefEntity,
+				refSrcType: "СПРАВОЧНИК",
 			}
 			for _, e := range entities {
-				if strings.EqualFold(e.Name, d.RefEntity) && e.Kind == metadata.KindDocument {
-					rd.refIsDoc = true
+				if strings.EqualFold(e.Name, d.RefEntity) {
+					rd.refEntity = e.Name // оригинальный регистр имени из метаданных
+					if e.Kind == metadata.KindDocument {
+						rd.refIsDoc = true
+						rd.refSrcType = "ДОКУМЕНТ"
+					}
 					break
 				}
 			}
@@ -1420,6 +1450,8 @@ func (tr *translator) emitVTSubquery(subq, defaultAlias string) {
 			if rd.isVT {
 				tr.emit(fmt.Sprintf("LEFT JOIN %s %s ON %s.id = %s.%s",
 					rd.joinTable, rd.joinAlias, rd.joinAlias, alias, rd.fieldName))
+				// #14: связанная сущность ссылочного измерения VT — источник RBAC.
+				tr.addRefSource(rd)
 			}
 		}
 	}
@@ -1787,6 +1819,10 @@ func translate(tokens []tok, opts CompileOpts) (Result, error) {
 				for _, rd := range tr.refDims {
 					tr.emit(fmt.Sprintf("LEFT JOIN %s %s ON %s.id = %s.%s",
 						rd.joinTable, rd.joinAlias, rd.joinAlias, tr.mainTable, rd.idCol))
+					// #14: авто-JOIN ссылочного поля читает наименование/номер
+					// связанной сущности — регистрируем её как источник для RBAC,
+					// иначе чтение через ссылку обходит проверку прав.
+					tr.addRefSource(rd)
 				}
 			}
 			tr.mainEmitted = true

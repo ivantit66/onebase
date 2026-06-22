@@ -15,11 +15,23 @@ import (
 	"github.com/ivantit66/onebase/internal/report/compose"
 )
 
-func renderCrossTable(cr *compose.CrossResult, spec *report.Composition) template.HTML {
-	byField := make(map[string]report.Measure, len(spec.Measures))
-	for _, m := range spec.Measures {
-		byField[m.Field] = m
+// measureByIdx возвращает функцию выбора показателя колонки по CrossCol.MeasureIdx.
+// Два показателя с одинаковым Field — разные колонки (issue #17): сопоставление по
+// индексу не даёт им затирать подпись/формат/выравнивание друг друга. Общая для
+// HTML- (renderCrossTable) и Excel-рендера (crossSheetRows), чтобы логика не
+// разъезжалась — именно расхождение этих двух путей и было причиной #17.
+func measureByIdx(spec *report.Composition) func(compose.CrossCol) report.Measure {
+	byIdx := spec.Measures
+	return func(c compose.CrossCol) report.Measure {
+		if c.MeasureIdx >= 0 && c.MeasureIdx < len(byIdx) {
+			return byIdx[c.MeasureIdx]
+		}
+		return report.Measure{Field: c.Measure}
 	}
+}
+
+func renderCrossTable(cr *compose.CrossResult, spec *report.Composition) template.HTML {
+	measureAt := measureByIdx(spec)
 	multiMeasure := len(spec.Measures) > 1
 
 	var b strings.Builder
@@ -28,7 +40,7 @@ func renderCrossTable(cr *compose.CrossResult, spec *report.Composition) templat
 	// Шапка: первый столбец — строковые измерения; далее по колонке на CrossCol.
 	b.WriteString(`<thead><tr><th>` + html.EscapeString(strings.Join(spec.Groupings, " / ")) + `</th>`)
 	for _, c := range cr.Cols {
-		m := byField[c.Measure]
+		m := measureAt(c)
 		b.WriteString(`<th class="num" style="` + html.EscapeString(measureAlign(m)) + `">` +
 			html.EscapeString(crossColTitle(c, m, multiMeasure)) + `</th>`)
 	}
@@ -36,13 +48,13 @@ func renderCrossTable(cr *compose.CrossResult, spec *report.Composition) templat
 
 	// Тело: дерево строк.
 	for _, row := range cr.Rows {
-		writeCrossRow(&b, row, cr.Cols, byField, 0)
+		writeCrossRow(&b, row, cr.Cols, measureAt, 0)
 	}
 
 	// Нижняя строка ВСЕГО — итоги по колонкам.
 	b.WriteString(`<tr class="grand"><td>ВСЕГО</td>`)
 	for _, c := range cr.Cols {
-		m := byField[c.Measure]
+		m := measureAt(c)
 		b.WriteString(`<td class="num" style="` + html.EscapeString(measureAlign(m)) + `">` +
 			html.EscapeString(fmtMeasure(cr.RowTotal[c.Key()], m)) + `</td>`)
 	}
@@ -52,7 +64,7 @@ func renderCrossTable(cr *compose.CrossResult, spec *report.Composition) templat
 
 // writeCrossRow рисует строку дерева и рекурсивно её детей с нарастающим отступом.
 // Узлы с детьми (промежуточные группы) несут подытоги по колонкам.
-func writeCrossRow(b *strings.Builder, row *compose.CrossRow, cols []compose.CrossCol, byField map[string]report.Measure, level int) {
+func writeCrossRow(b *strings.Builder, row *compose.CrossRow, cols []compose.CrossCol, measureAt func(compose.CrossCol) report.Measure, level int) {
 	pad := fmt.Sprintf("padding-left:%dpx", 8+level*18)
 	cls := "rc-leaf"
 	if len(row.Children) > 0 {
@@ -60,14 +72,14 @@ func writeCrossRow(b *strings.Builder, row *compose.CrossRow, cols []compose.Cro
 	}
 	fmt.Fprintf(b, `<tr class="%s"><td style="%s">%s</td>`, cls, pad, html.EscapeString(fmtVal(row.Key)))
 	for _, c := range cols {
-		m := byField[c.Measure]
+		m := measureAt(c)
 		ck := c.Key()
 		cell := joinStyles(measureAlign(m), cssOf(row.Styles[ck]))
 		fmt.Fprintf(b, `<td class="num" style="%s">%s</td>`, html.EscapeString(cell), html.EscapeString(fmtMeasure(row.Cells[ck], m)))
 	}
 	b.WriteString(`</tr>`)
 	for _, ch := range row.Children {
-		writeCrossRow(b, ch, cols, byField, level+1)
+		writeCrossRow(b, ch, cols, measureAt, level+1)
 	}
 }
 

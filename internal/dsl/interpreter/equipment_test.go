@@ -1,6 +1,7 @@
 package interpreter_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -261,6 +262,59 @@ func TestEquipment_Fiscal_DSL(t *testing.T) {
 
 	result := runEqSrc(t, src, interpreter.NewEquipmentFunctions())
 	assert.Equal(t, "40", result)
+}
+
+// atolCapturedTask — минимальный слепок задания ФН: нужен лишь uuid, чтобы
+// проверить, что ключ идемпотентности из DSL стал uuid задания.
+type atolCapturedTask struct {
+	UUID string `json:"uuid"`
+}
+
+// atolEmulatorCapturingHTTP — как atolEmulatorHTTP, но сохраняет uuid принятого
+// задания для проверки проброса ключа идемпотентности из DSL.
+func atolEmulatorCapturingHTTP(t *testing.T) (string, *atolCapturedTask) {
+	t.Helper()
+	var got atolCapturedTask
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v2/requests", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Errorf("эмулятор: некорректное задание: %v", err)
+		}
+		w.Write([]byte(`{"isError":false}`))
+	})
+	mux.HandleFunc("/api/v2/requests/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"ready":true,"isError":false,"results":[{"result":` +
+			`{"fnNumber":"9999078900012345","fiscalDocumentNumber":40,"fiscalDocumentSign":"2143256432"}}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv.URL, &got
+}
+
+// Ключ идемпотентности (#24): поле Чек.КлючИдемпотентности из DSL должно
+// доходить до драйвера как uuid задания ФН, иначе повтор чека даст дубль.
+func TestEquipment_Fiscal_DSL_IdempotencyKey(t *testing.T) {
+	url, task := atolEmulatorCapturingHTTP(t)
+	const key = "11111111-2222-4333-8444-555555555555"
+
+	src := fmt.Sprintf(`Функция Тест()
+  ККТ = ПодключитьОборудование("atol_kkt", Новый Структура("Порт", "%s"));
+  Чек = Новый Структура;
+  Чек.Тип = "приход";
+  Чек.Налогообложение = "уснДоход";
+  Чек.КлючИдемпотентности = "%s";
+  Позиции = Новый Массив;
+  Позиции.Добавить(Новый Структура("Наименование,Количество,Цена,Сумма,НДС,Предмет", "Хлеб", 2, 30, 60, "ндс10", "товар"));
+  Чек.Позиции = Позиции;
+  Результат = ККТ.ЗарегистрироватьЧек(Чек);
+  ККТ.Отключить();
+  Возврат Результат.ФД;
+КонецФункции`, url, key)
+
+	result := runEqSrc(t, src, interpreter.NewEquipmentFunctions())
+	assert.Equal(t, "40", result)
+	assert.Equal(t, key, task.UUID, "ключ идемпотентности из DSL должен стать uuid задания ФН")
 }
 
 // Декларативный дисплей покупателя через DSL: протокол (hex-команды + {text})

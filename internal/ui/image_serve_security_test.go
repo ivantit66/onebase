@@ -53,4 +53,9 @@ func TestImageServe_SecurityHeaders(t *testing.T) {
 	if cd := rec.Header().Get("Content-Disposition"); cd != "inline" {
 		t.Errorf("ожидался Content-Disposition: inline, получено %q", cd)
 	}
+	// Замечание #19: imageServe обязан ставить nosniff сам (не полагаясь на
+	// глобальный middleware) — комментарии в коде на него опираются.
+	if xcto := rec.Header().Get("X-Content-Type-Options"); xcto != "nosniff" {
+		t.Errorf("ожидался X-Content-Type-Options: nosniff, получено %q", xcto)
+	}
 }

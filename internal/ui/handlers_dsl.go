@@ -146,7 +146,11 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 		}
 		// Без владельца: builtin вызывается из произвольного модуля и не знает
 		// целевую сущность. Отдача таких блобов требует лишь аутентификации.
-		blob, err := s.store.PutBlob(txState.Ctx(), mime, bytes.NewReader(data), s.maxFileSizeBytes, storage.BlobOwner{})
+		// DSLManaged=true исключает блоб из сборки мусора: его UUID мог быть сохранён
+		// прикладным кодом в строковое поле/константу/реквизит инфорегистра, которые
+		// GC не сканирует (он смотрит только image-поля), иначе sweep удалил бы
+		// используемую картинку (ревью #11).
+		blob, err := s.store.PutBlob(txState.Ctx(), mime, bytes.NewReader(data), s.maxFileSizeBytes, storage.BlobOwner{DSLManaged: true})
 		if err != nil {
 			return nil, fmt.Errorf("СохранитьКартинку: %w", err)
 		}

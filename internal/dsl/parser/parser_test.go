@@ -275,6 +275,30 @@ func TestParser_ExportModifier(t *testing.T) {
 	}
 }
 
+// Парсер должен выставлять ProcedureDecl.Export для процедур/функций с
+// модификатором «Экспорт» (англ. «Export») и оставлять его false для приватных
+// (внутренних) — на этом строится экспорт-гейт действий страниц (ревью #10).
+func TestParser_ExportFlag(t *testing.T) {
+	cases := []struct {
+		src        string
+		wantExport bool
+	}{
+		{"Процедура P() Экспорт\n  Возврат;\nКонецПроцедуры", true},
+		{"Функция F(С) Export\n  Возврат С;\nКонецФункции", true},
+		{"Процедура P()\n  Возврат;\nКонецПроцедуры", false},
+		{"Функция F()\n  Возврат 1;\nКонецФункции", false},
+	}
+	for _, c := range cases {
+		prog := parse(t, c.src)
+		if len(prog.Procedures) != 1 {
+			t.Fatalf("ожидалась 1 процедура (src=%q)", c.src)
+		}
+		if got := prog.Procedures[0].Export; got != c.wantExport {
+			t.Errorf("Export = %v, ожидалось %v (src=%q)", got, c.wantExport, c.src)
+		}
+	}
+}
+
 // issue #128: оператор вне процедуры/функции (попытка «тела модуля») должен
 // давать понятную ошибку с подсказкой, а не сырое и невнятное
 // «expected Procedure or Function, got "ф"».

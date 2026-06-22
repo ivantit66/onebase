@@ -63,12 +63,11 @@ func (d *scaleDevice) Weight() (float64, error) {
 	if _, err := d.conn.Write(scaleEnq); err != nil {
 		return 0, err
 	}
-	buf := make([]byte, 64)
-	n, err := d.conn.Read(buf)
+	raw, err := readFrame(d.conn)
 	if err != nil {
 		return 0, fmt.Errorf("весы: чтение ответа: %w", err)
 	}
-	return parseWeight(string(buf[:n]))
+	return parseWeight(string(raw))
 }
 
 var weightRe = regexp.MustCompile(`[-+]?[0-9]+(?:[.,][0-9]+)?`)

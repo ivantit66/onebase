@@ -174,9 +174,10 @@ func receiptFromArg(args []any, i int) equipment.Receipt {
 }
 
 // fiscalReceiptFromArg преобразует DSL-Структуру в equipment.FiscalReceipt.
-// Поля: Тип, Налогообложение/СНО, Email, Телефон; Позиции (Наименование,
-// Количество, Цена, Сумма, НДС/СтавкаНДС, ПризнакПредмета/Предмет,
-// СпособРасчёта/ПризнакСпособаРасчёта); Оплаты (Тип/ВидОплаты, Сумма).
+// Поля: Тип, Налогообложение/СНО, Email, Телефон, КлючИдемпотентности (необяз.);
+// Позиции (Наименование, Количество, Цена, Сумма, НДС/СтавкаНДС,
+// ПризнакПредмета/Предмет, СпособРасчёта/ПризнакСпособаРасчёта);
+// Оплаты (Тип/ВидОплаты, Сумма).
 func fiscalReceiptFromArg(args []any, i int) equipment.FiscalReceipt {
 	var r equipment.FiscalReceipt
 	if i >= len(args) {
@@ -190,6 +191,12 @@ func fiscalReceiptFromArg(args []any, i int) equipment.FiscalReceipt {
 	r.Taxation = pickStr(src, "налогообложение", "сно")
 	r.Email = pickStr(src, "email", "почта")
 	r.Phone = pickStr(src, "телефон", "phone")
+	// Необязательный ключ идемпотентности: если задан, драйвер использует его как
+	// uuid задания ФН (повтор того же чека с тем же ключом не пробьёт дубль).
+	// Имена-алиасы намеренно явные: алиас "uuid" не вводим — в DSL UUID это
+	// идентичность ссылки, и поле вроде GUID документа-основания молча стало бы
+	// ключом, заставив ФН вернуть старый чек вместо нового (см. #24).
+	r.IdempotencyKey = pickStr(src, "ключидемпотентности", "idempotencykey", "ключзадания")
 	for _, raw := range equipItems(src.Get("позиции")) {
 		row, ok := raw.(This)
 		if !ok {

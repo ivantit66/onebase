@@ -6,6 +6,7 @@ import (
 
 	"github.com/ivantit66/onebase/internal/dsl/lexer"
 	"github.com/ivantit66/onebase/internal/dsl/parser"
+	"github.com/shopspring/decimal"
 )
 
 // runPage исполняет процедуру с инжектированным построителем «Страница».
@@ -145,5 +146,74 @@ func TestSanitizePageHTML(t *testing.T) {
 	}
 	if !strings.Contains(got, "<b>ok</b>") {
 		t.Errorf("безопасный тег вырезан: %q", got)
+	}
+}
+
+// TestSanitizePageHTML_CSSWhitelist — улучшение #29: глобальный style без
+// валидации CSS открывал инъекцию (position:fixed overlay для кликджекинга,
+// background:url(...) для утечки). Теперь style проходит через whitelist
+// безопасных свойств: безопасное оформление (color) сохраняется, а опасные
+// свойства/значения вырезаются.
+func TestSanitizePageHTML_CSSWhitelist(t *testing.T) {
+	// Безопасное свойство и класс должны проходить.
+	safe := sanitizePageHTML(`<div class="card" style="color: red">x</div>`)
+	if !strings.Contains(safe, `class="card"`) {
+		t.Errorf("class вырезан: %q", safe)
+	}
+	if !strings.Contains(strings.ToLower(safe), "color") {
+		t.Errorf("безопасное свойство color вырезано: %q", safe)
+	}
+
+	// Опасные значения/свойства должны быть отсечены.
+	cases := []struct {
+		name string
+		html string
+		bad  string
+	}{
+		{"position:fixed overlay (кликджекинг)", `<div style="position: fixed; top: 0; left: 0; width: 100%; height: 100%">x</div>`, "fixed"},
+		{"background url() (утечка)", `<div style="background: url(https://evil.example/p.gif)">x</div>`, "url("},
+		{"background-color url() (утечка)", `<div style="background-color: url(https://evil.example/p.gif)">x</div>`, "url("},
+		{"expression() (legacy IE)", `<div style="width: expression(alert(1))">x</div>`, "expression"},
+	}
+	for _, c := range cases {
+		got := strings.ToLower(sanitizePageHTML(c.html))
+		if strings.Contains(got, c.bad) {
+			t.Errorf("%s: опасное значение %q не вырезано: %q", c.name, c.bad, got)
+		}
+	}
+}
+
+// TestPageKPIDisplay_MoneyPrecision — улучшение #28: денежная сумма-decimal
+// форматировалась через float64 (InexactFloat64), теряя младшие разряды на
+// крупных суммах. Теперь decimal форматируется напрямую.
+func TestPageKPIDisplay_MoneyPrecision(t *testing.T) {
+	// nbsp — узкий неразрывный пробел (U+00A0), разделитель тысяч из pageGroupDigits.
+	const nbsp = " "
+
+	d, err := decimal.NewFromString("1234567890.12")
+	if err != nil {
+		t.Fatalf("decimal: %v", err)
+	}
+	got := pageKPIDisplay(d, "money")
+	// Стиль группировки/разделителей сохранён (pageGroupDigits): nbsp —
+	// разделитель тысяч, запятая — десятичный.
+	want := "1" + nbsp + "234" + nbsp + "567" + nbsp + "890,12 ₽"
+	if got != want {
+		t.Errorf("money decimal: получено %q, ожидалось %q", got, want)
+	}
+
+	// Сумма, которую float64 представляет неточно, не должна терять копейки.
+	d2, _ := decimal.NewFromString("100000000000000.07")
+	got2 := pageKPIDisplay(d2, "money")
+	if !strings.HasSuffix(got2, ",07 ₽") {
+		t.Errorf("копейки потеряны при крупной сумме: %q", got2)
+	}
+
+	// number: целочисленная группировка decimal без потери порядка.
+	d3, _ := decimal.NewFromString("1234567890")
+	got3 := pageKPIDisplay(d3, "number")
+	want3 := "1" + nbsp + "234" + nbsp + "567" + nbsp + "890"
+	if got3 != want3 {
+		t.Errorf("number decimal: получено %q, ожидалось %q", got3, want3)
 	}
 }

@@ -850,7 +850,6 @@
   "Нельзя восстановить SQLite-бэкап в PostgreSQL-базу (%s). Создайте базу с типом БД SQLite.": "Cannot restore a SQLite backup into a PostgreSQL base (%s). Create a base with the SQLite DB type.",
   "Ошибка бэкапа": "Backup error",
   "Бэкап создан": "Backup created",
-  "Недопустимое имя файла": "Invalid file name",
   "Файл загружен": "File uploaded",
   "Ошибка восстановления": "Restore error",
   "База данных восстановлена из": "Database restored from",

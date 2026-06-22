@@ -72,6 +72,55 @@ func TestParsePayment(t *testing.T) {
 	}
 }
 
+// chunkedTerminalServer отдаёт ответ двумя записями с паузой между ними,
+// имитируя фрагментированный TCP-поток (один conn.Read вернул бы лишь "APPRO").
+func chunkedTerminalServer(t *testing.T, chunks ...string) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		defer ln.Close()
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		conn.SetReadDeadline(time.Now().Add(time.Second))
+		buf := make([]byte, 64)
+		conn.Read(buf)
+		for _, c := range chunks {
+			conn.Write([]byte(c))
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// Регрессия #6: ответ терминала приходит двумя кусками. Драйвер обязан дочитать
+// фрейм до терминатора '\r', иначе обрезанный "APPRO" дал бы ложный Approved=false
+// уже после реального списания.
+func TestAcquiring_Pay_ChunkedResponse(t *testing.T) {
+	addr := chunkedTerminalServer(t, "APPRO", "VED RRN=123\r")
+
+	dev, err := Open("acquiring_tcp", map[string]string{"порт": addr})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer dev.Disconnect()
+	res, err := dev.(PaymentTerminal).Pay(100)
+	if err != nil {
+		t.Fatalf("Pay: %v", err)
+	}
+	if !res.Approved {
+		t.Errorf("ожидалось Approved=true при дочитанном ответе, got %+v", res)
+	}
+	if res.RRN != "123" {
+		t.Errorf("RRN = %q, ожидался 123", res.RRN)
+	}
+}
+
 func TestAcquiring_Pay_ZeroAmount(t *testing.T) {
 	addr := terminalServer(t, "APPROVED\r\n")
 	dev, err := Open("acquiring_tcp", map[string]string{"порт": addr})

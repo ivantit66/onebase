@@ -119,6 +119,11 @@ func (s *Server) imageServe(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.FormatInt(b.Size, 10))
 	}
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	// nosniff ставим явно (идемпотентно с глобальным middleware): imageServe —
+	// единственная точка отдачи произвольного blob по UUID, и комментарии выше
+	// опираются именно на этот заголовок, поэтому он не должен зависеть от того,
+	// подключён ли middleware на конкретном маршруте.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	// Бинарник отдаётся inline и в режиме sandbox: даже если в хранилище есть
 	// SVG со скриптом (загруженный до ужесточения проверки типа), при прямом
 	// открытии /image/{id} он будет инертен. На отрисовку через <img> не влияет.

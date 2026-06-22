@@ -107,6 +107,19 @@ func completeOpenAITools(ctx context.Context, hc *http.Client, rm ResolvedModel,
 				} `json:"function"`
 			}
 			if err := json.Unmarshal(raw, &tc); err != nil {
+				// Инвариант OpenAI: ровно один ответ role=tool на каждый tool_call —
+				// иначе следующий POST вернёт 400. Раньше continue пропускал битый
+				// вызов, нарушая инвариант. Пытаемся достать id отдельно (структура
+				// могла сломаться лишь на function/arguments) и всё равно отвечаем
+				// сообщением об ошибке.
+				var idOnly struct {
+					ID string `json:"id"`
+				}
+				_ = json.Unmarshal(raw, &idOnly)
+				messages = append(messages, map[string]any{
+					"role": "tool", "tool_call_id": idOnly.ID,
+					"content": "ошибка разбора вызова инструмента: " + err.Error(),
+				})
 				continue
 			}
 			var input map[string]any

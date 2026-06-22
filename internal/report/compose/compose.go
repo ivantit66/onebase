@@ -4,7 +4,9 @@ package compose
 
 import (
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/shopspring/decimal"
@@ -343,6 +345,13 @@ func normalizeGroupKey(v any) any {
 	case int64:
 		return decimal.NewFromInt(x).String()
 	case float64:
+		// NaN/±Inf нельзя превратить в decimal — decimal.NewFromFloat паникует
+		// (issue #9). Такие значения приходят из REAL/float8 колонок; ключуем их
+		// строкой, чтобы группировка не падала. compareVals при сортировке вернёт
+		// их в строковую ветку (числом они не распарсятся).
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return strconv.FormatFloat(x, 'g', -1, 64)
+		}
 		return decimal.NewFromFloat(x).String()
 	}
 	return v
@@ -552,6 +561,12 @@ func toDecimal(v any) (decimal.Decimal, bool) {
 	case int64:
 		return decimal.NewFromInt(x), true
 	case float64:
+		// NaN/±Inf вне области decimal — decimal.NewFromFloat паникует (issue #9).
+		// Трактуем как «не число»: значение выпадает из сумм/средних/сортировки,
+		// а не валит весь отчёт паникой.
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return decimal.Zero, false
+		}
 		return decimal.NewFromFloat(x), true
 	case string:
 		d, err := decimal.NewFromString(x)

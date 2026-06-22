@@ -167,14 +167,15 @@ func (s *Server) runReport(w http.ResponseWriter, r *http.Request, rep *reportpk
 				return
 			}
 			s.render(w, r, "page-report", map[string]any{
-				"Report":        rep,
-				"ComposedHTML":  renderCrossTable(cr, comp),
-				"Capped":        cr.Capped,
-				"ParamValues":   paramValues,
-				"ReportParams":  reportParams,
-				"ActiveVariant": variant,
-				"UserSettings":  settings,
-				"ReportCols":    cols,
+				"Report":          rep,
+				"ComposedHTML":    renderCrossTable(cr, comp),
+				"Capped":          cr.Capped,
+				"ComposeWarnings": cr.Warnings,
+				"ParamValues":     paramValues,
+				"ReportParams":    reportParams,
+				"ActiveVariant":   variant,
+				"UserSettings":    settings,
+				"ReportCols":      cols,
 			})
 			return
 		}

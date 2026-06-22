@@ -100,6 +100,55 @@ func TestAIRunQueryEmpty(t *testing.T) {
 	}
 }
 
+// Регрессия #14: в режиме rbac запрос наименования связанной сущности через
+// ссылочное поле (Контрагент.Наименование) обязан проверять право чтения на
+// связанный справочник, а не только на главный документ. Раньше авто-JOIN
+// ссылки не регистрировал источник → утечка наименований в обход RBAC.
+func TestAIRunQuery_RBACRefDimLeak(t *testing.T) {
+	cp := &metadata.Entity{
+		Name: "Контрагент", Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{{Name: "Наименование", Type: metadata.FieldTypeString}},
+	}
+	order := &metadata.Entity{
+		Name: "Заказ", Kind: metadata.KindDocument,
+		Fields: []metadata.Field{
+			{Name: "Контрагент", Type: "reference:Контрагент", RefEntity: "Контрагент"},
+		},
+	}
+	s, _ := newSubmitTestServer(t, []*metadata.Entity{cp, order})
+	ctx := context.Background()
+	if err := s.store.SaveAIDataScope(ctx, storage.AIDataScopeRBAC); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(user *auth.User) llm.ToolResult {
+		uctx := auth.ContextWithUser(ctx, user)
+		return s.aiRunQuery(uctx, llm.ToolCall{
+			ID:    "ref",
+			Input: map[string]any{"запрос": "ВЫБРАТЬ Контрагент.Наименование ИЗ Документ.Заказ"},
+		})
+	}
+
+	// Право только на документ Заказ — наименования контрагентов читать нельзя.
+	docOnly := &auth.User{Login: "u", Roles: []*auth.Role{{
+		Permissions: auth.Permission{Documents: map[string][]string{"Заказ": {"read"}}},
+	}}}
+	if res := run(docOnly); !res.IsError {
+		t.Fatalf("без права на Контрагент ожидался отказ (утечка через ссылку), получено: %s", res.Content)
+	}
+
+	// С правом и на документ, и на связанный справочник — отказа быть не должно.
+	both := &auth.User{Login: "u2", Roles: []*auth.Role{{
+		Permissions: auth.Permission{
+			Documents: map[string][]string{"Заказ": {"read"}},
+			Catalogs:  map[string][]string{"Контрагент": {"read"}},
+		},
+	}}}
+	if res := run(both); res.IsError {
+		t.Fatalf("с правом на оба объекта отказа быть не должно: %s", res.Content)
+	}
+}
+
 // TestAITools_NonAdminGetsNoTools проверяет, что не-администратор не получает
 // инструменты ИИ-чата. Для этого создаётся реальный authRepo со схемой и одним
 // пользователем (HasUsers()==true), а запрос не несёт пользователя в контексте

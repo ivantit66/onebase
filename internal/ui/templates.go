@@ -1760,17 +1760,40 @@ const tplForm = `
         var list = document.getElementById('att-list');
         cnt.textContent = atts.length ? atts.length+' файл(ов)' : '';
         if(!atts.length){ list.innerHTML='<p style="color:#94a3b8;font-size:13px;margin:0">Нет вложений</p>'; return; }
-        list.innerHTML = atts.map(a=>
-          '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f1f5f9">'+
-          '<span style="flex:1;font-size:13px;word-break:break-all">'+a.filename+'</span>'+
-          '<span style="color:#94a3b8;font-size:12px;white-space:nowrap">'+fmtSize(a.size_bytes)+'</span>'+
-          '<a href="/ui/attachments/'+a.id+'/download" class="btn btn-sm btn-secondary" style="padding:3px 10px;font-size:12px">↓</a>'+
-          '<form method="POST" action="/ui/attachments/'+a.id+'/delete" style="margin:0"'+
-          ' onsubmit="return confirm(\'Удалить вложение?\')">'+
-          '<button type="submit" class="btn btn-sm btn-danger" style="padding:3px 8px;font-size:12px">×</button>'+
-          '</form>'+
-          '</div>'
-        ).join('');
+        // Имя файла (a.filename) приходит от пользователя и НЕ доверенное —
+        // строим DOM безопасно: имя кладём через textContent, чтобы исключить
+        // хранимый XSS (например имя «<img src=x onerror=...>.txt»). id —
+        // серверный UUID, подставляем только в кодированном виде.
+        list.innerHTML='';
+        atts.forEach(function(a){
+          var row=document.createElement('div');
+          row.style.cssText='display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f1f5f9';
+          var nameEl=document.createElement('span');
+          nameEl.style.cssText='flex:1;font-size:13px;word-break:break-all';
+          nameEl.textContent=String(a.filename==null?'':a.filename);
+          var sizeEl=document.createElement('span');
+          sizeEl.style.cssText='color:#94a3b8;font-size:12px;white-space:nowrap';
+          sizeEl.textContent=fmtSize(a.size_bytes);
+          var aid=encodeURIComponent(String(a.id));
+          var dl=document.createElement('a');
+          dl.href='/ui/attachments/'+aid+'/download';
+          dl.className='btn btn-sm btn-secondary';
+          dl.style.cssText='padding:3px 10px;font-size:12px';
+          dl.textContent='↓';
+          var delForm=document.createElement('form');
+          delForm.method='POST';
+          delForm.action='/ui/attachments/'+aid+'/delete';
+          delForm.style.margin='0';
+          delForm.addEventListener('submit',function(e){ if(!confirm('Удалить вложение?')) e.preventDefault(); });
+          var delBtn=document.createElement('button');
+          delBtn.type='submit';
+          delBtn.className='btn btn-sm btn-danger';
+          delBtn.style.cssText='padding:3px 8px;font-size:12px';
+          delBtn.textContent='×';
+          delForm.appendChild(delBtn);
+          row.appendChild(nameEl); row.appendChild(sizeEl); row.appendChild(dl); row.appendChild(delForm);
+          list.appendChild(row);
+        });
       }).catch(function(){});
   }
   loadAtts();

@@ -64,8 +64,13 @@ func (s *Server) loadRuntimeObject(ctx context.Context, entity *metadata.Entity,
 // (если он объявлен) с «Объект», загруженным из БД. Возвращает ошибку обработчика
 // (если он бросил исключение) — тогда вызывающий код обязан отказать в рендере.
 //
-// Если формы/обработчика/AST нет — возвращает nil (no-op). Ошибку загрузки
-// объекта тоже глотает в nil: пусть обычный путь formEdit отрисует ошибку 404.
+// Если формы/обработчика/AST нет — возвращает nil (no-op): RLS-хук не объявлен,
+// доступ разрешён обычным путём.
+//
+// ВАЖНО (fail-closed): когда обработчик ОБЪЯВЛЕН, но загрузить объект из БД не
+// удалось, возвращаем саму ошибку, а не nil. Иначе formEdit отрисовал бы форму,
+// ни разу не выполнив RLS-хук — fail-open (обход контроля доступа на чтение).
+// nil допустим только пока обработчик ещё не объявлен (ранние return выше).
 func (s *Server) runFormReadHook(ctx context.Context, entity *metadata.Entity, form *metadata.FormModule, id uuid.UUID) error {
 	if form == nil || s.interp == nil {
 		return nil
@@ -89,9 +94,11 @@ func (s *Server) runFormReadHook(ctx context.Context, entity *metadata.Entity, f
 		return nil
 	}
 
+	// Обработчик объявлен — RLS-хук ОБЯЗАН отработать. Если объект не загрузился,
+	// отказываем в доступе (fail-closed), а не отдаём форму без проверки.
 	obj, err := s.loadRuntimeObject(ctx, entity, id)
 	if err != nil {
-		return nil
+		return fmt.Errorf("ПриЧтенииНаСервере: не удалось загрузить объект: %w", err)
 	}
 
 	mc := runtime.NewMovementsCollector(entity.Name, obj.ID)

@@ -71,9 +71,9 @@ func TestSweepOrphanBlobs(t *testing.T) {
 	}
 
 	owner := BlobOwner{Kind: "catalog", Entity: "Img"}
-	referenced := putRef(t, db, owner)              // на него ссылается одна строка
-	shared := putRef(t, db, owner)                  // на него ссылаются ДВЕ строки
-	orphan := putRef(t, db, owner)                  // ни одной ссылки → удалить
+	referenced := putRef(t, db, owner) // на него ссылается одна строка
+	shared := putRef(t, db, owner)     // на него ссылаются ДВЕ строки
+	orphan := putRef(t, db, owner)     // ни одной ссылки → удалить
 	for _, ref := range []string{referenced, shared, shared} {
 		if _, err := db.Exec(ctx, "INSERT INTO img (pic) VALUES (?)", ref); err != nil {
 			t.Fatalf("insert ref: %v", err)
@@ -119,6 +119,82 @@ func TestSweepOrphanBlobs(t *testing.T) {
 	}
 	if err := openClosed(t, db, mustUUID(t, shared)); err != nil {
 		t.Fatalf("shared (две ссылки) не должен удаляться: %v", err)
+	}
+}
+
+// TestSweepOrphanBlobs_DSLManaged: блоб, созданный через DSL (СохранитьКартинку,
+// owner-less, помечен DSLManaged), НЕ попадает в кандидаты на удаление — даже без
+// ссылки из image-поля и вне grace-окна. Прикладной код мог сохранить его UUID в
+// строковое поле/константу/реквизит инфорегистра, которые GC не сканирует (ревью
+// #11).
+func TestSweepOrphanBlobs_DSLManaged(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := ConnectSQLite(ctx, filepath.Join(dir, "t.db"))
+	if err != nil {
+		t.Fatalf("ConnectSQLite: %v", err)
+	}
+	defer db.Close()
+	db.filesDir = filepath.Join(dir, "files")
+	if err := db.EnsureBlobTable(ctx); err != nil {
+		t.Fatalf("EnsureBlobTable: %v", err)
+	}
+
+	managed := putRef(t, db, BlobOwner{DSLManaged: true}) // создан из DSL
+	orphan := putRef(t, db, BlobOwner{})                  // owner-less, НЕ managed
+
+	// grace=0: orphan удаляется, managed-блоб защищён несмотря на отсутствие ссылок.
+	st, err := db.SweepOrphanBlobs(ctx, nil, 0, false)
+	if err != nil {
+		t.Fatalf("SweepOrphanBlobs: %v", err)
+	}
+	if st.Deleted != 1 {
+		t.Fatalf("удалено %d, ожидался 1 (только не-managed orphan)", st.Deleted)
+	}
+	if err := openClosed(t, db, mustUUID(t, managed)); err != nil {
+		t.Fatalf("DSL-managed блоб не должен удаляться: %v", err)
+	}
+	if err := openClosed(t, db, mustUUID(t, orphan)); err == nil {
+		t.Fatal("не-managed orphan должен быть удалён")
+	}
+}
+
+// TestSweepOrphanBlobs_LegacyZeroCreatedAt: легаси-блоб с created_at=0 (неизвестное
+// время создания, до появления колонки) трактуется как ЗАЩИЩЁННЫЙ, а не «старый» —
+// иначе 0 > cutoff ложно при положительном grace и блоб бы удалялся. Минимальная
+// защита от TOCTOU/легаси (ревью #18).
+func TestSweepOrphanBlobs_LegacyZeroCreatedAt(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := ConnectSQLite(ctx, filepath.Join(dir, "t.db"))
+	if err != nil {
+		t.Fatalf("ConnectSQLite: %v", err)
+	}
+	defer db.Close()
+	db.filesDir = filepath.Join(dir, "files")
+	if err := db.EnsureBlobTable(ctx); err != nil {
+		t.Fatalf("EnsureBlobTable: %v", err)
+	}
+
+	legacy := putRef(t, db, BlobOwner{})
+	// Эмулируем легаси-блоб без известного времени создания.
+	if _, err := db.Exec(ctx, "UPDATE _blobs SET created_at=0 WHERE id=?", legacy); err != nil {
+		t.Fatalf("set created_at=0: %v", err)
+	}
+
+	// grace=0 (cutoff = now): обычный orphan удалился бы, но created_at=0 защищён.
+	st, err := db.SweepOrphanBlobs(ctx, nil, 0, false)
+	if err != nil {
+		t.Fatalf("SweepOrphanBlobs: %v", err)
+	}
+	if st.Deleted != 0 {
+		t.Fatalf("удалено %d, ожидалось 0 (created_at=0 защищён)", st.Deleted)
+	}
+	if st.Protected != 1 {
+		t.Fatalf("protected=%d, ожидалось 1", st.Protected)
+	}
+	if err := openClosed(t, db, mustUUID(t, legacy)); err != nil {
+		t.Fatalf("легаси-блоб (created_at=0) не должен удаляться: %v", err)
 	}
 }
 

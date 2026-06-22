@@ -63,12 +63,11 @@ func (d *acquiringDevice) Pay(amount float64) (PaymentResult, error) {
 	if _, err := d.conn.Write([]byte(cmd)); err != nil {
 		return PaymentResult{}, err
 	}
-	buf := make([]byte, 256)
-	n, err := d.conn.Read(buf)
+	raw, err := readFrame(d.conn)
 	if err != nil {
 		return PaymentResult{}, fmt.Errorf("эквайринг: чтение ответа: %w", err)
 	}
-	return parsePayment(string(buf[:n]))
+	return parsePayment(string(raw))
 }
 
 // parsePayment разбирает ответ терминала: одобрение (APPROVED/ОДОБРЕНО) и поля

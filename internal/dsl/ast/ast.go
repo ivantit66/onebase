@@ -28,6 +28,11 @@ type ProcedureDecl struct {
 	// передан (см.
 	Defaults []Expr
 	Body     []Stmt
+	// Export отражает модификатор «Экспорт» после сигнатуры (Процедура Имя()
+	// Экспорт). Значим для экспорт-гейта внешних точек входа: действия страниц
+	// (pageAction) вызывают ТОЛЬКО экспортные процедуры, чтобы внутренние
+	// вспомогательные с побочными эффектами нельзя было дёрнуть POST-запросом.
+	Export bool
 }
 
 type IfStmt struct {
@@ -157,35 +162,35 @@ type BreakStmt struct{ Tok token.Token }
 // ContinueStmt — Продолжить / Continue (skip to next iteration)
 type ContinueStmt struct{ Tok token.Token }
 
-func (*Program) nodeType() string       { return "Program" }
-func (*ProcedureDecl) nodeType() string { return "ProcedureDecl" }
-func (*IfStmt) nodeType() string        { return "IfStmt" }
-func (*ExprStmt) nodeType() string      { return "ExprStmt" }
-func (*AssignStmt) nodeType() string    { return "AssignStmt" }
-func (*VarDecl) nodeType() string       { return "VarDecl" }
+func (*Program) nodeType() string        { return "Program" }
+func (*ProcedureDecl) nodeType() string  { return "ProcedureDecl" }
+func (*IfStmt) nodeType() string         { return "IfStmt" }
+func (*ExprStmt) nodeType() string       { return "ExprStmt" }
+func (*AssignStmt) nodeType() string     { return "AssignStmt" }
+func (*VarDecl) nodeType() string        { return "VarDecl" }
 func (*ForEachStmt) nodeType() string    { return "ForEachStmt" }
 func (*NumericForStmt) nodeType() string { return "NumericForStmt" }
 func (*WhileStmt) nodeType() string      { return "WhileStmt" }
 func (*ReturnStmt) nodeType() string     { return "ReturnStmt" }
-func (*CallExpr) nodeType() string      { return "CallExpr" }
-func (*MemberExpr) nodeType() string    { return "MemberExpr" }
-func (*Ident) nodeType() string         { return "Ident" }
-func (*StringLit) nodeType() string     { return "StringLit" }
-func (*NumberLit) nodeType() string     { return "NumberLit" }
-func (*BinaryExpr) nodeType() string    { return "BinaryExpr" }
-func (*NewExpr) nodeType() string       { return "NewExpr" }
-func (*IndexExpr) nodeType() string     { return "IndexExpr" }
-func (*BoolLit) nodeType() string       { return "BoolLit" }
-func (*UnaryExpr) nodeType() string     { return "UnaryExpr" }
-func (*TernaryExpr) nodeType() string { return "TernaryExpr" }
-func (*TryStmt) nodeType() string       { return "TryStmt" }
-func (*BreakStmt) nodeType() string     { return "BreakStmt" }
-func (*ContinueStmt) nodeType() string  { return "ContinueStmt" }
+func (*CallExpr) nodeType() string       { return "CallExpr" }
+func (*MemberExpr) nodeType() string     { return "MemberExpr" }
+func (*Ident) nodeType() string          { return "Ident" }
+func (*StringLit) nodeType() string      { return "StringLit" }
+func (*NumberLit) nodeType() string      { return "NumberLit" }
+func (*BinaryExpr) nodeType() string     { return "BinaryExpr" }
+func (*NewExpr) nodeType() string        { return "NewExpr" }
+func (*IndexExpr) nodeType() string      { return "IndexExpr" }
+func (*BoolLit) nodeType() string        { return "BoolLit" }
+func (*UnaryExpr) nodeType() string      { return "UnaryExpr" }
+func (*TernaryExpr) nodeType() string    { return "TernaryExpr" }
+func (*TryStmt) nodeType() string        { return "TryStmt" }
+func (*BreakStmt) nodeType() string      { return "BreakStmt" }
+func (*ContinueStmt) nodeType() string   { return "ContinueStmt" }
 
-func (*IfStmt) stmtNode()      {}
-func (*ExprStmt) stmtNode()    {}
-func (*AssignStmt) stmtNode()  {}
-func (*VarDecl) stmtNode()     {}
+func (*IfStmt) stmtNode()         {}
+func (*ExprStmt) stmtNode()       {}
+func (*AssignStmt) stmtNode()     {}
+func (*VarDecl) stmtNode()        {}
 func (*ForEachStmt) stmtNode()    {}
 func (*NumericForStmt) stmtNode() {}
 func (*WhileStmt) stmtNode()      {}
@@ -194,14 +199,14 @@ func (*TryStmt) stmtNode()        {}
 func (*BreakStmt) stmtNode()      {}
 func (*ContinueStmt) stmtNode()   {}
 
-func (*CallExpr) exprNode()   {}
-func (*MemberExpr) exprNode() {}
-func (*Ident) exprNode()      {}
-func (*StringLit) exprNode()  {}
-func (*NumberLit) exprNode()  {}
-func (*BinaryExpr) exprNode() {}
-func (*NewExpr) exprNode()    {}
-func (*IndexExpr) exprNode()  {}
-func (*BoolLit) exprNode()    {}
-func (*UnaryExpr) exprNode()  {}
+func (*CallExpr) exprNode()    {}
+func (*MemberExpr) exprNode()  {}
+func (*Ident) exprNode()       {}
+func (*StringLit) exprNode()   {}
+func (*NumberLit) exprNode()   {}
+func (*BinaryExpr) exprNode()  {}
+func (*NewExpr) exprNode()     {}
+func (*IndexExpr) exprNode()   {}
+func (*BoolLit) exprNode()     {}
+func (*UnaryExpr) exprNode()   {}
 func (*TernaryExpr) exprNode() {}

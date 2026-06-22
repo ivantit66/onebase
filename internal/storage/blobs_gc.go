@@ -66,13 +66,14 @@ func (db *DB) CollectImageRefs(ctx context.Context, entities []*metadata.Entity)
 
 // blobRef — минимальные метаданные блоба для сборки мусора.
 type blobRef struct {
-	id        uuid.UUID
-	createdAt int64 // unix-секунды; 0 = легаси (создан до появления колонки)
+	id         uuid.UUID
+	createdAt  int64 // unix-секунды; 0 = легаси/неизвестное время → защищён
+	dslManaged bool  // создан из DSL (СохранитьКартинку) → исключён из sweep (ревью #11)
 }
 
-// listBlobsForGC возвращает все блобы с временем создания.
+// listBlobsForGC возвращает все блобы с временем создания и признаком DSL-managed.
 func (db *DB) listBlobsForGC(ctx context.Context) ([]blobRef, error) {
-	rows, err := db.Query(ctx, `SELECT id, created_at FROM _blobs`)
+	rows, err := db.Query(ctx, `SELECT id, created_at, dsl_managed FROM _blobs`)
 	if err != nil {
 		return nil, err
 	}
@@ -81,14 +82,15 @@ func (db *DB) listBlobsForGC(ctx context.Context) ([]blobRef, error) {
 	for rows.Next() {
 		var idStr string
 		var createdAt int64
-		if err := rows.Scan(&idStr, &createdAt); err != nil {
+		var dslManaged int64
+		if err := rows.Scan(&idStr, &createdAt, &dslManaged); err != nil {
 			return nil, err
 		}
 		id, err := uuid.Parse(idStr)
 		if err != nil {
 			continue // некорректный id в _blobs пропускаем
 		}
-		out = append(out, blobRef{id: id, createdAt: createdAt})
+		out = append(out, blobRef{id: id, createdAt: createdAt, dslManaged: dslManaged != 0})
 	}
 	return out, rows.Err()
 }
@@ -112,8 +114,20 @@ func (db *DB) SweepOrphanBlobs(ctx context.Context, entities []*metadata.Entity,
 		if live[b.id] {
 			continue
 		}
-		// Защищаем недавно созданные блобы: created_at строго новее cutoff.
-		if b.createdAt > cutoff {
+		// DSL-managed блобы (СохранитьКартинку, owner-less) исключаем из sweep: их
+		// UUID мог попасть в строковое поле/константу/реквизит инфорегистра, которые
+		// CollectImageRefs не сканирует, поэтому отсутствие image-ссылки ≠ сирота
+		// (ревью #11).
+		if b.dslManaged {
+			st.Protected++
+			continue
+		}
+		// Защищаем недавно созданные блобы (created_at строго новее cutoff) И блобы
+		// с created_at=0 — это легаси/неизвестное время создания: при положительном
+		// grace «0 > cutoff» ложно, поэтому считать их «старыми» нельзя, иначе
+		// удалили бы блоб с неопределённым возрастом (ревью #18). Консервативно —
+		// защищаем.
+		if b.createdAt == 0 || b.createdAt > cutoff {
 			st.Protected++
 			continue
 		}

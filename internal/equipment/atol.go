@@ -7,11 +7,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// round2 округляет денежную величину до копеек. Все суммы чека (цена, сумма
+// позиции, оплаты, итог) обязаны округляться одинаково: иначе шум float64
+// (например, 12.45*7 = 87.14999…) переживёт json.Marshal и уйдёт в ФН на копейку
+// ниже, тогда как QR-строка считается через %.2f — и реквизиты ФН разойдутся с QR.
+func round2(x float64) float64 { return math.Round(x*100) / 100 }
 
 func init() {
 	Register("atol_kkt", func() Device {
@@ -108,7 +115,20 @@ func (d *atolDevice) RegisterReceipt(r FiscalReceipt) (FiscalResult, error) {
 			return FiscalResult{}, fmt.Errorf("ккт: отрицательная сумма оплаты (%s)", p.Type)
 		}
 	}
-	uuid := newUUID()
+	// Сверка чека ДО обращения к ФН: сумма позиций, сумма оплат и итог обязаны
+	// совпадать до копейки. Расхождение (опечатка/частичная оплата/неразнесённая
+	// скидка) иначе ушло бы в ФН и всплыло уже как FiscalStateUnknownError.
+	// Оплаты сверяем только если они заданы явно: пустой список автодополняется
+	// до итога наличными (atolTaskFromReceipt), то есть сходится по построению.
+	if err := reconcileReceipt(r); err != nil {
+		return FiscalResult{}, err
+	}
+	// Идемпотентность ATOL v10: при повторе того же чека внешний код может задать
+	// IdempotencyKey, чтобы задание ушло с тем же uuid и ФН не пробил дубль.
+	uuid := r.IdempotencyKey
+	if uuid == "" {
+		uuid = newUUID()
+	}
 	body, err := json.Marshal(atolTaskFromReceipt(uuid, r))
 	if err != nil {
 		return FiscalResult{}, err
@@ -117,6 +137,40 @@ func (d *atolDevice) RegisterReceipt(r FiscalReceipt) (FiscalResult, error) {
 		return FiscalResult{}, err
 	}
 	return d.await(uuid, r)
+}
+
+// reconcileReceipt сверяет, что Σ сумм позиций == Σ оплат == итог чека с точностью
+// до копейки. Если оплаты не заданы явно, сверяется только итог с позициями
+// (оплаты будут автодополнены до итога при сборке задания).
+func reconcileReceipt(r FiscalReceipt) error {
+	items := itemsTotal(r)
+	total := receiptTotal(r)
+	if len(r.Payments) > 0 {
+		pays := paymentsTotal(r)
+		if pays != items {
+			return fmt.Errorf("ккт: сумма оплат (%.2f) не совпадает с суммой позиций (%.2f) — чек не сбалансирован", pays, items)
+		}
+		if pays != total {
+			return fmt.Errorf("ккт: сумма оплат (%.2f) не совпадает с итогом чека (%.2f)", pays, total)
+		}
+	}
+	if total != items {
+		return fmt.Errorf("ккт: итог чека (%.2f) не совпадает с суммой позиций (%.2f)", total, items)
+	}
+	return nil
+}
+
+// ResolveByUUID безопасно дозапрашивает фискальный результат задания по ранее
+// сохранённому uuid (например, после FiscalStateUnknownError): переиспользует
+// тот же опрос статуса, что и RegisterReceipt, не пробивая новый чек.
+func (d *atolDevice) ResolveByUUID(uuid string) (FiscalResult, error) {
+	if d.client == nil {
+		return FiscalResult{}, fmt.Errorf("устройство не подключено")
+	}
+	if strings.TrimSpace(uuid) == "" {
+		return FiscalResult{}, fmt.Errorf("ккт: пустой uuid для дозапроса результата")
+	}
+	return d.await(uuid, FiscalReceipt{})
 }
 
 // post отправляет задание и проверяет, что сервис принял его в очередь.
@@ -184,8 +238,8 @@ type atolTask struct {
 }
 
 type atolDocument struct {
-	Type           string        `json:"type"`           // sell | sellReturn | buy | buyReturn
-	TaxationType   string        `json:"taxationType"`   // osn | usnIncome | ...
+	Type           string        `json:"type"`         // sell | sellReturn | buy | buyReturn
+	TaxationType   string        `json:"taxationType"` // osn | usnIncome | ...
 	Items          []atolItem    `json:"items"`
 	Payments       []atolPayment `json:"payments"`
 	Total          float64       `json:"total"`
@@ -194,14 +248,14 @@ type atolDocument struct {
 }
 
 type atolItem struct {
-	Type          string   `json:"type"`          // всегда "position"
-	Name          string   `json:"name"`
-	Price         float64  `json:"price"`
-	Quantity      float64  `json:"quantity"`
-	Amount        float64  `json:"amount"`
-	Tax           atolTax  `json:"tax"`
-	PaymentObject string   `json:"paymentObject"` // признак предмета расчёта, тег 1212
-	PaymentMethod string   `json:"paymentMethod"` // признак способа расчёта, тег 1214
+	Type          string  `json:"type"` // всегда "position"
+	Name          string  `json:"name"`
+	Price         float64 `json:"price"`
+	Quantity      float64 `json:"quantity"`
+	Amount        float64 `json:"amount"`
+	Tax           atolTax `json:"tax"`
+	PaymentObject string  `json:"paymentObject"` // признак предмета расчёта, тег 1212
+	PaymentMethod string  `json:"paymentMethod"` // признак способа расчёта, тег 1214
 }
 
 type atolTax struct {
@@ -262,6 +316,9 @@ func (f atolFiscal) toFiscalResult(r FiscalReceipt) FiscalResult {
 	if total == 0 {
 		total = receiptTotal(r)
 	}
+	// QR считаем из округлённой суммы, чтобы s=… в QR совпадало с Total задания,
+	// ушедшим в ФН (оба проходят round2 — иначе шум float64 даст расхождение).
+	total = round2(total)
 	if f.FNNumber != "" && f.FiscalDocumentSign != "" {
 		t := strings.NewReplacer("-", "", ":", "", "+", "T", " ", "T").Replace(f.ReceiptDatetime)
 		if i := strings.IndexByte(t, 'T'); i >= 0 && len(t) > i+5 {
@@ -281,23 +338,21 @@ func atolTaskFromReceipt(uuid string, r FiscalReceipt) atolTask {
 		Total:        receiptTotal(r),
 	}
 	for _, it := range r.Items {
-		sum := it.Sum
-		if sum == 0 {
-			sum = it.Qty * it.Price
-		}
+		// Все денежные величины округляем до копеек: иначе шум float64
+		// (12.45*7 = 87.14999…) уйдёт в ФН и разойдётся с QR (см. round2).
 		doc.Items = append(doc.Items, atolItem{
 			Type:          "position",
 			Name:          it.Name,
-			Price:         it.Price,
+			Price:         round2(it.Price),
 			Quantity:      it.Qty,
-			Amount:        sum,
+			Amount:        itemAmount(it),
 			Tax:           atolTax{Type: atolVAT(it.VAT)},
 			PaymentObject: atolPaymentObject(it.ItemType),
 			PaymentMethod: atolPaymentMethod(it.PaymentType),
 		})
 	}
 	for _, p := range r.Payments {
-		doc.Payments = append(doc.Payments, atolPayment{Type: atolPaymentMode(p.Type), Sum: p.Sum})
+		doc.Payments = append(doc.Payments, atolPayment{Type: atolPaymentMode(p.Type), Sum: round2(p.Sum)})
 	}
 	// Чек без явных оплат считаем оплаченным наличными на сумму итога.
 	if len(doc.Payments) == 0 {
@@ -310,23 +365,40 @@ func atolTaskFromReceipt(uuid string, r FiscalReceipt) atolTask {
 	return atolTask{UUID: uuid, Request: []atolDocument{doc}}
 }
 
-// receiptTotal — итог чека: сумма оплат, иначе сумма позиций.
-func receiptTotal(r FiscalReceipt) float64 {
+// itemAmount — сумма позиции в копейках: явная Sum, иначе Qty*Price; всегда
+// округляется до копеек, чтобы совпадать с тем, что уходит в ФН и в QR.
+func itemAmount(it FiscalItem) float64 {
+	if it.Sum != 0 {
+		return round2(it.Sum)
+	}
+	return round2(it.Qty * it.Price)
+}
+
+// itemsTotal — сумма позиций чека (округлённая до копеек).
+func itemsTotal(r FiscalReceipt) float64 {
+	var total float64
+	for _, it := range r.Items {
+		total += itemAmount(it)
+	}
+	return round2(total)
+}
+
+// paymentsTotal — сумма оплат чека (округлённая до копеек).
+func paymentsTotal(r FiscalReceipt) float64 {
 	var total float64
 	for _, p := range r.Payments {
-		total += p.Sum
+		total += round2(p.Sum)
 	}
-	if total > 0 {
-		return total
+	return round2(total)
+}
+
+// receiptTotal — итог чека: сумма оплат, иначе сумма позиций. Округляется до
+// копеек, чтобы Total в задании ФН совпадал с QR (оба считаются из round2).
+func receiptTotal(r FiscalReceipt) float64 {
+	if t := paymentsTotal(r); t > 0 {
+		return t
 	}
-	for _, it := range r.Items {
-		if it.Sum != 0 {
-			total += it.Sum
-		} else {
-			total += it.Qty * it.Price
-		}
-	}
-	return total
+	return itemsTotal(r)
 }
 
 func atolOperationType(t string) string {

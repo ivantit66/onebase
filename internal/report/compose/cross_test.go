@@ -38,11 +38,11 @@ func TestCrossBasic(t *testing.T) {
 	if rowA == nil {
 		t.Fatal("строка «А» не найдена")
 	}
-	decEq(t, rowA.Cells[colKey([]any{"Янв"}, "Сумма")], "100")
-	decEq(t, rowA.Cells[colKey([]any{"Фев"}, "Сумма")], "200")
+	decEq(t, rowA.Cells[colKey([]any{"Янв"}, 0)], "100")
+	decEq(t, rowA.Cells[colKey([]any{"Фев"}, 0)], "200")
 	// Нижняя строка ВСЕГО: итог по колонке = сумма по всем строкам.
-	decEq(t, cr.RowTotal[colKey([]any{"Янв"}, "Сумма")], "130")
-	decEq(t, cr.RowTotal[colKey([]any{"Фев"}, "Сумма")], "240")
+	decEq(t, cr.RowTotal[colKey([]any{"Янв"}, 0)], "130")
+	decEq(t, cr.RowTotal[colKey([]any{"Фев"}, 0)], "240")
 }
 
 func TestCrossCap(t *testing.T) {
@@ -89,11 +89,11 @@ func TestCrossCellStyles(t *testing.T) {
 		t.Fatal(err)
 	}
 	rowA := cr.Rows[0]
-	st := rowA.Styles[colKey([]any{"Янв"}, "Сумма")]
+	st := rowA.Styles[colKey([]any{"Янв"}, 0)]
 	if st.Color != "#c00" || !st.Bold {
 		t.Fatalf("ячейка Янв (убыток) должна быть стилизована: %+v", st)
 	}
-	if _, ok := rowA.Styles[colKey([]any{"Фев"}, "Сумма")]; ok {
+	if _, ok := rowA.Styles[colKey([]any{"Фев"}, 0)]; ok {
 		t.Fatalf("ячейка Фев (прибыль) не должна иметь стиль")
 	}
 }
@@ -160,13 +160,13 @@ func TestCrossNestedRows(t *testing.T) {
 		t.Fatal("не найдены группы Север/Юг")
 	}
 	// Подытог Севера по Янв = 100+30, по Фев = 200.
-	decEq(t, sever.Cells[colKey([]any{"Янв"}, "Сумма")], "130")
-	decEq(t, sever.Cells[colKey([]any{"Фев"}, "Сумма")], "200")
+	decEq(t, sever.Cells[colKey([]any{"Янв"}, 0)], "130")
+	decEq(t, sever.Cells[colKey([]any{"Фев"}, 0)], "200")
 	if len(sever.Children) != 2 {
 		t.Fatalf("ожидали 2 дочерние строки у Севера, получили %d", len(sever.Children))
 	}
 	// У Юга нет февральских строк → ячейка Фев отсутствует.
-	if _, ok := yug.Cells[colKey([]any{"Фев"}, "Сумма")]; ok {
+	if _, ok := yug.Cells[colKey([]any{"Фев"}, 0)]; ok {
 		t.Fatal("у Юга не должно быть ячейки за Фев")
 	}
 }
@@ -195,7 +195,83 @@ func TestCrossExprMeasure(t *testing.T) {
 		t.Fatalf("ожидали 4 колонки (2 мес × 2 показателя), получили %d", len(cr.Cols))
 	}
 	rowA := cr.Rows[0]
-	decEq(t, rowA.Cells[colKey([]any{"Янв"}, "Сумма")], "100")
-	decEq(t, rowA.Cells[colKey([]any{"Янв"}, "Рент")], "200") // 100*2
-	decEq(t, rowA.Cells[colKey([]any{"Фев"}, "Рент")], "100") // 50*2
+	decEq(t, rowA.Cells[colKey([]any{"Янв"}, 0)], "100")
+	decEq(t, rowA.Cells[colKey([]any{"Янв"}, 1)], "200") // 100*2
+	decEq(t, rowA.Cells[colKey([]any{"Фев"}, 1)], "100") // 50*2
+}
+
+// TestCrossDistinctMeasureSameField: два показателя с одним Field, но разным Agg
+// (sum/avg) дают РАЗНЫЕ колонки и не схлопываются (issue #17).
+func TestCrossDistinctMeasureSameField(t *testing.T) {
+	rows := []Row{
+		{"Товар": "А", "Месяц": "Янв", "Сумма": "100"},
+		{"Товар": "А", "Месяц": "Янв", "Сумма": "200"},
+	}
+	spec := report.Composition{
+		Groupings: []string{"Товар"},
+		Columns:   []string{"Месяц"},
+		Measures: []report.Measure{
+			{Field: "Сумма", Agg: "sum"}, // индекс 0
+			{Field: "Сумма", Agg: "avg"}, // индекс 1 — тот же Field
+		},
+	}
+	cr, err := ComposeCross(rows, spec, noEval{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 1 путь × 2 показателя = 2 колонки (раньше схлопывались в одну).
+	if len(cr.Cols) != 2 {
+		t.Fatalf("ожидали 2 колонки для sum/avg одного поля, получили %d", len(cr.Cols))
+	}
+	rowA := cr.Rows[0]
+	decEq(t, rowA.Cells[colKey([]any{"Янв"}, 0)], "300") // sum = 100+200
+	decEq(t, rowA.Cells[colKey([]any{"Янв"}, 1)], "150") // avg = (100+200)/2
+}
+
+// TestCrossWarnings: runtime-ошибка вычисляемого показателя в кросс-режиме
+// попадает в CrossResult.Warnings, а не теряется молча (issue #26).
+func TestCrossWarnings(t *testing.T) {
+	rows := []Row{{"Товар": "А", "Месяц": "Янв", "Сумма": "10"}}
+	spec := report.Composition{
+		Groupings: []string{"Товар"},
+		Columns:   []string{"Месяц"},
+		Measures: []report.Measure{
+			{Field: "Сумма", Agg: "sum"},
+			{Field: "Вычисл", Expr: "что-то"},
+		},
+	}
+	cr, err := ComposeCross(rows, spec, errEval{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cr.Warnings) == 0 {
+		t.Fatal("ожидалось предупреждение об ошибке вычисляемого показателя в кросс-режиме")
+	}
+}
+
+// TestCrossRowsSorted: spec.Sort применяется к строкам кросс-таблицы по ключу
+// группировки (issue #27) — раньше строки шли строго в порядке выборки.
+func TestCrossRowsSorted(t *testing.T) {
+	rows := []Row{
+		{"Товар": "В", "Месяц": "Янв", "Сумма": "30"},
+		{"Товар": "А", "Месяц": "Янв", "Сумма": "10"},
+		{"Товар": "Б", "Месяц": "Янв", "Сумма": "20"},
+	}
+	spec := report.Composition{
+		Groupings: []string{"Товар"},
+		Columns:   []string{"Месяц"},
+		Measures:  []report.Measure{{Field: "Сумма", Agg: "sum"}},
+		Sort:      []report.SortKey{{Field: "Товар", Dir: "asc"}},
+	}
+	cr, err := ComposeCross(rows, spec, noEval{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []any{"А", "Б", "В"}
+	for i, r := range cr.Rows {
+		if r.Key != want[i] {
+			t.Fatalf("строка %d: ожидали %v, получили %v (порядок %v)", i, want[i], r.Key,
+				[]any{cr.Rows[0].Key, cr.Rows[1].Key, cr.Rows[2].Key})
+		}
+	}
 }

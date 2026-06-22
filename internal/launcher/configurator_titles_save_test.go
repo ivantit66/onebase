@@ -189,6 +189,52 @@ func TestSaveProcessor_PersistsTitlesAndParamLabels(t *testing.T) {
 	assertFileContainsRv(t, procPath, "titles:", "en: Import", "labels:", "en: File")
 }
 
+// Регрессия #3: при сохранении обработки из конфигуратора (правка заголовка/
+// параметров) round-trip node-edit обязан сохранить ключи, которых нет в форме —
+// table_parts обработки и default/options параметров. Усечённый yaml.Marshal
+// типизированной структуры молча их стирал (потеря данных).
+func TestSaveProcessor_PreservesTablePartsAndParamDefaults(t *testing.T) {
+	h, cfgDir := newFileBaseHandler(t)
+	h.runner = NewRunner()
+	procPath := writeCfgFileRv(t, cfgDir, "processors", nameToFilename("Загрузка")+".yaml", `name: Загрузка
+title: Загрузка
+params:
+  - name: Режим
+    type: choice
+    default: Быстрый
+    options:
+      - Быстрый
+      - Полный
+table_parts:
+  - name: Строки
+    fields:
+      - name: Колонка
+        type: string
+`)
+	form := url.Values{}
+	form.Set("processor_name", "Загрузка")
+	form.Set("title", "Загрузка данных") // правим только заголовок
+	form.Set("source", "Процедура Старт() КонецПроцедуры")
+	form.Set("param.0.name", "Режим")
+	form.Set("param.0.type", "choice")
+
+	rec := postCfgRv(t, "test", "/bases/test/configurator/processor", form, h.configuratorSaveProcessor)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код %d: %s", rec.Code, rec.Body.String())
+	}
+	// Заголовок обновился, а table_parts и default/options параметра сохранились.
+	assertFileContainsRv(t, procPath,
+		"title: Загрузка данных",
+		"table_parts:",
+		"name: Строки",
+		"name: Колонка",
+		"default: Быстрый",
+		"options:",
+		"- Быстрый",
+		"- Полный",
+	)
+}
+
 func TestSaveSubsystem_PersistsTitles(t *testing.T) {
 	h, cfgDir := newFileBaseHandler(t)
 	h.runner = NewRunner()

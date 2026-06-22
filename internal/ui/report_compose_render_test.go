@@ -29,6 +29,40 @@ func TestRenderGroupConditional(t *testing.T) {
 	}
 }
 
+// TestCssOfColorValidation: cssOf пропускает только валидные цвета (hex/rgb/имя),
+// а вредоносное значение (CSS-инъекция) отбрасывает (issue #16). Источник цвета
+// теперь пользовательский (__settings → Conditional[].Style).
+func TestCssOfColorValidation(t *testing.T) {
+	// Валидные значения проходят.
+	if got := cssOf(report.CellStyle{Color: "#c00", Background: "rgb(255,0,0)"}); !strings.Contains(got, "color:#c00") || !strings.Contains(got, "background:rgb(255,0,0)") {
+		t.Fatalf("валидные цвета должны пройти: %q", got)
+	}
+	if got := cssOf(report.CellStyle{Color: "red"}); got != "color:red" {
+		t.Fatalf("известное имя цвета должно пройти: %q", got)
+	}
+	// Вредоносные/невалидные значения отбрасываются (в строке стиля их нет).
+	evil := []string{
+		`red;background:url(javascript:alert(1))`,
+		`expression(alert(1))`,
+		`#c00;}/**/body{display:none`,
+		`url('x')`,
+		`нечто`,
+	}
+	for _, c := range evil {
+		got := cssOf(report.CellStyle{Color: c})
+		if strings.Contains(got, c) {
+			t.Fatalf("вредоносный цвет %q не должен попадать в style, got %q", c, got)
+		}
+		if got != "" {
+			t.Fatalf("ожидали пустой стиль для невалидного цвета %q, got %q", c, got)
+		}
+	}
+	// Невалидный цвет отбрасывается, но валидные части (bold) сохраняются.
+	if got := cssOf(report.CellStyle{Color: "javascript:alert(1)", Bold: true}); got != "font-weight:bold" {
+		t.Fatalf("невалидный цвет должен отброситься, bold — остаться: %q", got)
+	}
+}
+
 func TestBuildComposedChart(t *testing.T) {
 	rows := []compose.Row{{"М": "Иванов", "Сумма": "150"}, {"М": "Петров", "Сумма": "30"}}
 	spec := report.Composition{

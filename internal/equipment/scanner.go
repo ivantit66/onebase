@@ -49,8 +49,13 @@ func (d *scannerDevice) Stream(ctx context.Context, fn func(string)) error {
 		return fmt.Errorf("устройство не подключено")
 	}
 	conn := d.conn // захватываем: Disconnect может обнулить d.conn параллельно
+	// Производный контекст с cancel: при выходе из Stream по EOF сканера (а не по
+	// отмене внешнего ctx) defer cancel() разблокирует горутину-«сторожа», иначе
+	// при неотменяемом ctx (context.Background) она зависла бы навсегда на ctx.Done().
+	ctx2, cancel := context.WithCancel(ctx)
+	defer cancel()
 	go func() {
-		<-ctx.Done()
+		<-ctx2.Done()
 		conn.Close()
 	}()
 	sc := bufio.NewScanner(conn)
@@ -59,6 +64,8 @@ func (d *scannerDevice) Stream(ctx context.Context, fn func(string)) error {
 			fn(code)
 		}
 	}
+	// Различаем штатную отмену ИЗВНЕ от выхода по EOF: ctx.Err() (не ctx2) ≠ nil
+	// только если отменили внешний контекст или разорвали клиента SSE.
 	if ctx.Err() != nil {
 		return nil // штатное завершение по отмене/разрыву клиента
 	}

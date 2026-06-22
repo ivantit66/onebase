@@ -99,12 +99,11 @@ func (d *scriptedDevice) Weight() (float64, error) {
 			return 0, err
 		}
 	}
-	buf := make([]byte, 128)
-	n, err := d.conn.Read(buf)
+	raw, err := readFrame(d.conn)
 	if err != nil {
 		return 0, fmt.Errorf("scripted: чтение ответа: %w", err)
 	}
-	resp := string(buf[:n])
+	resp := string(raw)
 	m := d.pattern.FindString(resp)
 	if m == "" {
 		return 0, fmt.Errorf("scripted: значение не найдено в %q", strings.TrimSpace(resp))

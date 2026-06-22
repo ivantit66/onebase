@@ -1,6 +1,7 @@
 package equipment
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net"
@@ -78,6 +79,40 @@ func (t tcpTransport) SetReadTimeout(d time.Duration) error {
 // serialTransport: serial.Port уже реализует Read/Write/Close и SetReadTimeout,
 // то есть удовлетворяет rwTransport как есть.
 type serialTransport struct{ serial.Port }
+
+// readFrame дочитывает ответ устройства до полного фрейма: один conn.Read для
+// TCP/serial не гарантирует, что пришёл весь ответ (фрейм может прийти кусками),
+// поэтому накапливаем буфер, пока не встретим терминатор (CR '\r' или ETX 0x03)
+// либо пока чтение не завершится (EOF/тишина по read-timeout). Иначе обрезанный
+// ответ даёт ложный результат разбора — критично для эквайринга, где это
+// означало бы Approved=false уже после реального списания.
+//
+// Команды драйверов шлются с терминатором '\r', поэтому он и служит признаком
+// конца ответа; для устройств без терминатора (некоторые весы) фрейм собирается
+// до короткой паузы/EOF, после чего возвращается накопленное.
+func readFrame(r io.Reader) ([]byte, error) {
+	var out []byte
+	chunk := make([]byte, 256)
+	for {
+		n, err := r.Read(chunk)
+		if n > 0 {
+			fresh := chunk[:n]
+			out = append(out, fresh...)
+			// Терминатор фрейма получен — ответ полон, дочитывать не нужно.
+			if bytes.IndexByte(fresh, '\r') >= 0 || bytes.IndexByte(fresh, 0x03) >= 0 {
+				return out, nil
+			}
+		}
+		if err != nil {
+			// Тишина по read-timeout или EOF: то, что накоплено, и есть ответ.
+			// Ошибку отдаём только если не получили вообще ничего.
+			if len(out) > 0 {
+				return out, nil
+			}
+			return nil, err
+		}
+	}
+}
 
 // openRWTransport открывает read-write транспорт по параметру "Порт":
 // TCP (host:port) или serial (COM3, /dev/tty*).

@@ -183,6 +183,16 @@ func (s *Server) pageAction(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// Экспорт-гейт (ревью #10): через действие страницы разрешаем вызывать ТОЛЬКО
+	// процедуры, помеченные «Экспорт» — это публичные точки входа (кнопки-действия).
+	// Внутренние вспомогательные процедуры модуля .page.os (без модификатора) —
+	// часть реализации страницы; их побочные эффекты нельзя дёргать POST-запросом.
+	// Lifecycle-процедура ПриФормировании работает на рендере (s.page) этим путём
+	// не ходит и здесь уже отсечена выше.
+	if !proc.Export {
+		http.NotFound(w, r)
+		return
+	}
 
 	var msgs []string
 	builder, paramsObj, dslVars := s.pageProcEnv(r, &msgs)

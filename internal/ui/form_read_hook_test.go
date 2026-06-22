@@ -65,6 +65,70 @@ func TestFormEdit_OnReadAtServerDeniesRead(t *testing.T) {
 	}
 }
 
+// Замечание #13: RLS-хук ПриЧтенииНаСервере, объявленный в обычной (autogen)
+// форме объекта, тоже обязан выполняться. Раньше он искался лишь среди managed-
+// форм и для autogen молча игнорировался (footgun для RLS на чтение).
+func TestFormEdit_OnReadAtServerDeniesRead_AutogenForm(t *testing.T) {
+	srv, ent := setupManagedEventsServer(t, `
+Процедура ПроверитьДоступ()
+	ВызватьИсключение("Нет доступа к чужому документу");
+КонецПроцедуры
+`, map[metadata.FormEventType]string{
+		metadata.FormEventType("ПриЧтенииНаСервере"): "ПроверитьДоступ",
+	}, []*metadata.FormElement{
+		{Kind: metadata.FormElementField, Name: "Наименование", DataPath: "Объект.Наименование"},
+	})
+
+	// Делаем форму AUTOGEN (а не managed): pickManagedForm её бы не нашёл, и до
+	// фикса хук не запустился бы. pickObjectFormWithReadHook обязан её подхватить.
+	if len(ent.Forms) != 1 {
+		t.Fatalf("ожидалась 1 форма у сущности, получено %d", len(ent.Forms))
+	}
+	ent.Forms[0].LayoutKind = metadata.FormLayoutAutogen
+	if ent.Forms[0].IsManaged() {
+		t.Fatal("форма должна стать autogen для этого теста")
+	}
+
+	id := insertContragent(t, srv, ent, "СЕКРЕТНЫЙ-АВТОГЕН")
+	rec := executeFormEditGET(t, srv, ent, id)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("ожидался 403 (RLS-хук в autogen-форме бросил исключение), получен %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "СЕКРЕТНЫЙ-АВТОГЕН") {
+		t.Errorf("при отказе RLS-хука autogen-форма не должна раскрывать данные записи")
+	}
+}
+
+// Замечание #12: при ОБЪЯВЛЕННОМ обработчике ПриЧтенииНаСервере и ошибке загрузки
+// объекта runFormReadHook обязан вернуть ошибку (fail-closed), а не nil — иначе
+// форма отрисовалась бы, ни разу не выполнив RLS-хук (обход контроля доступа).
+func TestRunFormReadHook_FailClosedOnLoadError(t *testing.T) {
+	srv, ent := setupManagedEventsServer(t, `
+Процедура ПроверитьДоступ()
+КонецПроцедуры
+`, map[metadata.FormEventType]string{
+		metadata.FormEventType("ПриЧтенииНаСервере"): "ПроверитьДоступ",
+	}, []*metadata.FormElement{
+		{Kind: metadata.FormElementField, Name: "Наименование", DataPath: "Объект.Наименование"},
+	})
+
+	id := insertContragent(t, srv, ent, "ОБЫЧНЫЙ")
+
+	// Добавляем сущности табличную часть ПОСЛЕ миграции — её таблицы в БД нет,
+	// поэтому loadRuntimeObject упадёт на GetTablePartRows ещё ДО запуска хука.
+	ent.TableParts = []metadata.TablePart{{
+		Name:   "Строки",
+		Fields: []metadata.Field{{Name: "Сумма", Type: metadata.FieldTypeNumber}},
+	}}
+
+	form := ent.Forms[0]
+	err := srv.runFormReadHook(context.Background(), ent, form, id)
+	if err == nil {
+		t.Fatal("fail-open: при объявленном хуке и ошибке загрузки объекта ожидалась НЕ-nil ошибка (доступ запрещён)")
+	}
+}
+
 func TestFormEdit_OnReadAtServerAllowsRead(t *testing.T) {
 	srv, ent := setupManagedEventsServer(t, `
 Процедура ПроверитьДоступ()

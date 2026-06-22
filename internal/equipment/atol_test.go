@@ -201,6 +201,128 @@ func TestAtol_StateUnknownOnPollFailure(t *testing.T) {
 	}
 }
 
+// Регрессия #4: денежные величины округляются до копеек. Позиция 12.45 × 7 даёт
+// 87.14999… в float64 — без round2 это переживает json.Marshal (уйдёт в ФН на
+// копейку ниже), а QR считается через %.2f и даёт 87.15 → ФН и QR расходятся.
+// Проверяем: Amount/Total сериализуются как "87.15" И совпадают со значением в QR.
+func TestAtol_RoundsMoneyToKopecks(t *testing.T) {
+	url, got := atolEmulator(t, `{"fnNumber":"9999078900012345","fiscalDocumentNumber":7,"fiscalDocumentSign":"111","receiptDatetime":"2026-06-19T10:00:00+03:00","total":87.15}`)
+	dev, _ := Open("atol_kkt", map[string]string{"порт": url})
+	defer dev.Disconnect()
+
+	r := FiscalReceipt{
+		Type:     "приход",
+		Taxation: "осн",
+		Items:    []FiscalItem{{Name: "Товар", Qty: 7, Price: 12.45, VAT: "ндс20"}},
+		Payments: []FiscalPayment{{Type: "наличные", Sum: 87.15}},
+	}
+	res, err := dev.(FiscalRegistrar).RegisterReceipt(r)
+	if err != nil {
+		t.Fatalf("RegisterReceipt: %v", err)
+	}
+
+	// Сериализованное задание (то, что реально уходит в ФН) не должно нести шум.
+	body, _ := json.Marshal(*got)
+	js := string(body)
+	if !strings.Contains(js, `"amount":87.15`) {
+		t.Errorf("amount позиции сериализован с шумом, ожидался 87.15 в:\n%s", js)
+	}
+	if !strings.Contains(js, `"total":87.15`) {
+		t.Errorf("total сериализован с шумом, ожидался 87.15 в:\n%s", js)
+	}
+	if got.Request[0].Items[0].Amount != 87.15 {
+		t.Errorf("Amount = %v, ожидался 87.15", got.Request[0].Items[0].Amount)
+	}
+	if got.Request[0].Total != 87.15 {
+		t.Errorf("Total = %v, ожидался 87.15", got.Request[0].Total)
+	}
+	// QR должен нести ту же сумму, что и Total задания ФН.
+	if !strings.Contains(res.QR, "s=87.15&") {
+		t.Errorf("QR не совпадает с суммой ФН (ожидалось s=87.15): %q", res.QR)
+	}
+}
+
+// Регрессия #5: сумма позиций не сходится с суммой оплат → чек не сбалансирован,
+// ошибка ДО обращения к устройству (POST не выполняется).
+func TestAtol_RejectsUnbalancedReceipt(t *testing.T) {
+	posted := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v2/requests", func(w http.ResponseWriter, r *http.Request) {
+		posted = true
+		w.Write([]byte(`{"isError":false}`))
+	})
+	mux.HandleFunc("/api/v2/requests/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"ready":true,"isError":false,"results":[{"result":{}}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	dev, _ := Open("atol_kkt", map[string]string{"порт": srv.URL})
+	defer dev.Disconnect()
+
+	// Позиции на 100, оплата на 90 — расхождение должно отсекаться валидацией.
+	r := FiscalReceipt{
+		Type:     "приход",
+		Taxation: "осн",
+		Items:    []FiscalItem{{Name: "Товар", Qty: 1, Price: 100, Sum: 100}},
+		Payments: []FiscalPayment{{Type: "наличные", Sum: 90}},
+	}
+	if _, err := dev.(FiscalRegistrar).RegisterReceipt(r); err == nil {
+		t.Error("ожидалась ошибка для несбалансированного чека")
+	}
+	if posted {
+		t.Error("POST не должен выполняться при несбалансированном чеке")
+	}
+}
+
+// Регрессия #24: два RegisterReceipt с одинаковым IdempotencyKey формируют
+// задание с одинаковым uuid (ФН не пробьёт дубль при повторе).
+func TestAtol_IdempotencyKeyReusesUUID(t *testing.T) {
+	url, got := atolEmulator(t, `{"fnNumber":"1","fiscalDocumentNumber":1,"fiscalDocumentSign":"1"}`)
+	dev, _ := Open("atol_kkt", map[string]string{"порт": url})
+	defer dev.Disconnect()
+	kkt := dev.(FiscalRegistrar)
+
+	r := sampleFiscalReceipt()
+	r.IdempotencyKey = "11111111-2222-4333-8444-555555555555"
+
+	if _, err := kkt.RegisterReceipt(r); err != nil {
+		t.Fatalf("RegisterReceipt #1: %v", err)
+	}
+	first := got.UUID
+	if first != r.IdempotencyKey {
+		t.Errorf("uuid задания = %q, ожидался ключ %q", first, r.IdempotencyKey)
+	}
+	if _, err := kkt.RegisterReceipt(r); err != nil {
+		t.Fatalf("RegisterReceipt #2: %v", err)
+	}
+	if got.UUID != first {
+		t.Errorf("повтор с тем же ключом дал другой uuid: %q != %q", got.UUID, first)
+	}
+}
+
+// ResolveByUUID дозапрашивает результат по сохранённому uuid, не пробивая чек.
+// Вызывается через интерфейс FiscalRegistrar (контракт #24): метод восстановления
+// после FiscalStateUnknownError должен быть доступен любому фискальному драйверу,
+// а не только конкретному *atolDevice.
+func TestAtol_ResolveByUUID(t *testing.T) {
+	url, _ := atolEmulator(t, `{"fnNumber":"9999078900012345","fiscalDocumentNumber":42,"fiscalDocumentSign":"222","receiptDatetime":"2026-06-19T10:00:00+03:00","total":60}`)
+	dev, _ := Open("atol_kkt", map[string]string{"порт": url})
+	defer dev.Disconnect()
+	kkt := dev.(FiscalRegistrar)
+
+	res, err := kkt.ResolveByUUID("some-saved-uuid")
+	if err != nil {
+		t.Fatalf("ResolveByUUID: %v", err)
+	}
+	if res.FD != "42" {
+		t.Errorf("FD = %q, ожидался 42", res.FD)
+	}
+	if _, err := kkt.ResolveByUUID("  "); err == nil {
+		t.Error("ожидалась ошибка для пустого uuid")
+	}
+}
+
 // Валидация ДО обращения к ФН: некорректный чек (нулевой итог, отрицательные
 // значения) должен отсекаться драйвером, а не уходить на фискализацию.
 func TestAtol_RejectsInvalidReceipt(t *testing.T) {

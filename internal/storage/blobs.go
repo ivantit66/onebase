@@ -38,6 +38,12 @@ type Blob struct {
 type BlobOwner struct {
 	Kind   string // "catalog"|"document"|... (как в auth.User.Has)
 	Entity string // имя сущности
+	// DSLManaged помечает блоб, созданный из DSL (СохранитьКартинку) — у него нет
+	// владельца, а UUID мог быть сохранён прикладным кодом в строковое поле,
+	// константу или реквизит инфорегистра, которые сборщик мусора НЕ сканирует
+	// (он смотрит только image-поля сущностей). Такие блобы исключаются из sweep,
+	// чтобы Gc не удалил используемую картинку (ревью #11).
+	DSLManaged bool
 }
 
 // blobsDirName — подкаталог filesDir для дискового режима хранения.
@@ -67,9 +73,18 @@ func (db *DB) EnsureBlobTable(ctx context.Context) error {
 	}
 	// Время создания (unix-секунды) — для grace-окна сборки мусора: GC не трогает
 	// недавно загруженные блобы (могут быть ещё не привязаны к записи). 0 = легаси
-	// (создан до появления колонки) → считается «старым», подлежит сборке.
+	// (создан до появления колонки) → теперь трактуется КОНСЕРВАТИВНО как защищённый
+	// (см. SweepOrphanBlobs, ревью #18), чтобы не удалить блоб с неизвестным временем.
 	if err := db.AddColumnIfMissing(ctx, "_blobs", "created_at", "BIGINT NOT NULL DEFAULT 0"); err != nil {
 		return fmt.Errorf("blobs: created_at: %w", err)
+	}
+	// Признак «создан из DSL» (СохранитьКартинку, без владельца). Такие блобы
+	// исключаются из sweep — их UUID мог быть сохранён в строковое поле/константу/
+	// реквизит инфорегистра, которые GC не сканирует (ревью #11). Легаси-блобы без
+	// колонки получают 0 (НЕ managed) — это безопасно: они либо живы по image-ссылке,
+	// либо защищены grace/created_at=0.
+	if err := db.AddColumnIfMissing(ctx, "_blobs", "dsl_managed", "BIGINT NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("blobs: dsl_managed: %w", err)
 	}
 	return nil
 }
@@ -84,6 +99,11 @@ func (db *DB) PutBlob(ctx context.Context, mime string, r io.Reader, maxSizeByte
 	id := uuid.New()
 	d := db.dialect
 	createdAt := time.Now().Unix()
+	// dsl_managed хранится как 0/1 (BIGINT) — единый тип на SQLite и PostgreSQL.
+	dslManaged := int64(0)
+	if owner.DSLManaged {
+		dslManaged = 1
+	}
 	limited := io.LimitReader(r, maxSizeBytes+1)
 
 	if db.GetFileStorageMode(ctx) == FileStorageDB {
@@ -94,9 +114,9 @@ func (db *DB) PutBlob(ctx context.Context, mime string, r io.Reader, maxSizeByte
 		if int64(len(data)) > maxSizeBytes {
 			return Blob{}, i18nerr.Errorf("файл превышает максимальный размер %d МБ", maxSizeBytes/(1024*1024))
 		}
-		q := fmt.Sprintf(`INSERT INTO _blobs (id, mime, size, data, owner_kind, owner_entity, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)`,
-			d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4), d.Placeholder(5), d.Placeholder(6), d.Placeholder(7))
-		if _, err := db.Exec(ctx, q, id.String(), mime, int64(len(data)), data, owner.Kind, owner.Entity, createdAt); err != nil {
+		q := fmt.Sprintf(`INSERT INTO _blobs (id, mime, size, data, owner_kind, owner_entity, created_at, dsl_managed) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)`,
+			d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4), d.Placeholder(5), d.Placeholder(6), d.Placeholder(7), d.Placeholder(8))
+		if _, err := db.Exec(ctx, q, id.String(), mime, int64(len(data)), data, owner.Kind, owner.Entity, createdAt, dslManaged); err != nil {
 			return Blob{}, err
 		}
 		return Blob{ID: id, Mime: mime, Size: int64(len(data)), OwnerKind: owner.Kind, OwnerEntity: owner.Entity}, nil
@@ -122,9 +142,9 @@ func (db *DB) PutBlob(ctx context.Context, mime string, r io.Reader, maxSizeByte
 		os.Remove(fp)
 		return Blob{}, i18nerr.Errorf("файл превышает максимальный размер %d МБ", maxSizeBytes/(1024*1024))
 	}
-	q := fmt.Sprintf(`INSERT INTO _blobs (id, mime, size, owner_kind, owner_entity, created_at) VALUES (%s,%s,%s,%s,%s,%s)`,
-		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4), d.Placeholder(5), d.Placeholder(6))
-	if _, err := db.Exec(ctx, q, id.String(), mime, n, owner.Kind, owner.Entity, createdAt); err != nil {
+	q := fmt.Sprintf(`INSERT INTO _blobs (id, mime, size, owner_kind, owner_entity, created_at, dsl_managed) VALUES (%s,%s,%s,%s,%s,%s,%s)`,
+		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4), d.Placeholder(5), d.Placeholder(6), d.Placeholder(7))
+	if _, err := db.Exec(ctx, q, id.String(), mime, n, owner.Kind, owner.Entity, createdAt, dslManaged); err != nil {
 		os.Remove(fp)
 		return Blob{}, err
 	}

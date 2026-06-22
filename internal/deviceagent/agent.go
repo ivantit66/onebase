@@ -10,9 +10,13 @@
 package deviceagent
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"log"
+	"net"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ivantit66/onebase/internal/equipment"
@@ -32,7 +36,7 @@ func New(token string) *Agent { return &Agent{token: token} }
 // команды /print, /drawer, /display, /weight и /pay требуют заголовок X-Agent-Token.
 func (a *Agent) Handler() http.Handler {
 	r := chi.NewRouter()
-	r.Use(cors)
+	r.Use(a.cors)
 	r.Get("/", a.page)
 	r.Get("/health", a.health)
 	r.Get("/events", a.events) // SSE; токен через query (EventSource не шлёт заголовки)
@@ -176,7 +180,11 @@ func (a *Agent) print(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	defer dev.Disconnect()
+	defer func() {
+		if err := dev.Disconnect(); err != nil {
+			log.Printf("deviceagent: disconnect: %v", err)
+		}
+	}()
 	printer, ok := dev.(equipment.ReceiptPrinter)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "устройство «"+dev.Kind()+"» не печатает чеки")
@@ -200,7 +208,11 @@ func (a *Agent) drawer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	defer dev.Disconnect()
+	defer func() {
+		if err := dev.Disconnect(); err != nil {
+			log.Printf("deviceagent: disconnect: %v", err)
+		}
+	}()
 	printer, ok := dev.(equipment.ReceiptPrinter)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "устройство «"+dev.Kind()+"» не поддерживает денежный ящик")
@@ -224,7 +236,11 @@ func (a *Agent) display(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	defer dev.Disconnect()
+	defer func() {
+		if err := dev.Disconnect(); err != nil {
+			log.Printf("deviceagent: disconnect: %v", err)
+		}
+	}()
 	disp, ok := dev.(equipment.CustomerDisplay)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "устройство «"+dev.Kind()+"» не является дисплеем")
@@ -248,7 +264,11 @@ func (a *Agent) weight(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	defer dev.Disconnect()
+	defer func() {
+		if err := dev.Disconnect(); err != nil {
+			log.Printf("deviceagent: disconnect: %v", err)
+		}
+	}()
 	scale, ok := dev.(equipment.Scale)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "устройство «"+dev.Kind()+"» не является весами")
@@ -287,7 +307,11 @@ func (a *Agent) pay(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	defer dev.Disconnect()
+	defer func() {
+		if err := dev.Disconnect(); err != nil {
+			log.Printf("deviceagent: disconnect: %v", err)
+		}
+	}()
 	terminal, ok := dev.(equipment.PaymentTerminal)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "устройство «"+dev.Kind()+"» не является терминалом эквайринга")
@@ -317,7 +341,11 @@ func (a *Agent) fiscal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	defer dev.Disconnect()
+	defer func() {
+		if err := dev.Disconnect(); err != nil {
+			log.Printf("deviceagent: disconnect: %v", err)
+		}
+	}()
 	kkt, ok := dev.(equipment.FiscalRegistrar)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "устройство «"+dev.Kind()+"» не является фискальным регистратором")
@@ -337,7 +365,7 @@ func (a *Agent) fiscal(w http.ResponseWriter, r *http.Request) {
 // умеет слать заголовки, поэтому токен и параметры устройства идут через query.
 func (a *Agent) events(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if a.token != "" && q.Get("token") != a.token {
+	if !a.tokenOK(q.Get("token")) {
 		writeErr(w, http.StatusUnauthorized, "неверный или отсутствующий token")
 		return
 	}
@@ -349,12 +377,26 @@ func (a *Agent) events(w http.ResponseWriter, r *http.Request) {
 			params[k] = q.Get(k)
 		}
 	}
+	// Анти-SSRF: когда агент запущен без токена (локальная отладка), любой
+	// кросс-origin сайт мог бы заставить /events открыть TCP-соединение на
+	// произвольный host:port и так зондировать внутреннюю сеть. Поэтому при
+	// пустом токене ограничиваем цель dial loopback/приватными адресами.
+	if a.token == "" {
+		if err := assertDialTargetLocal(params["порт"], params["port"]); err != nil {
+			writeErr(w, http.StatusForbidden, err.Error())
+			return
+		}
+	}
 	dev, err := equipment.Open(q.Get("driver"), params)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	defer dev.Disconnect()
+	defer func() {
+		if err := dev.Disconnect(); err != nil {
+			log.Printf("deviceagent: disconnect: %v", err)
+		}
+	}()
 	src, ok := dev.(equipment.EventSource)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "устройство «"+dev.Kind()+"» не выдаёт события")
@@ -381,7 +423,7 @@ func (a *Agent) events(w http.ResponseWriter, r *http.Request) {
 // означает «проверка отключена».
 func (a *Agent) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.token != "" && r.Header.Get("X-Agent-Token") != a.token {
+		if !a.tokenOK(r.Header.Get("X-Agent-Token")) {
 			writeErr(w, http.StatusUnauthorized, "неверный или отсутствующий X-Agent-Token")
 			return
 		}
@@ -389,10 +431,63 @@ func (a *Agent) auth(next http.Handler) http.Handler {
 	})
 }
 
+// tokenOK сравнивает предъявленный токен с токеном агента в constant-time
+// (защита от timing-атаки — токен единственная авторизация команд к железу).
+// Пустой токен агента означает «проверка отключена» (как и раньше).
+func (a *Agent) tokenOK(provided string) bool {
+	if a.token == "" {
+		return true
+	}
+	return subtle.ConstantTimeCompare([]byte(provided), []byte(a.token)) == 1
+}
+
+// assertDialTargetLocal разрешает исходящее TCP-соединение /events только на
+// loopback/приватные адреса. Serial-адреса (COM3, /dev/tty*) — без двоеточия —
+// исходящего dial по сети не делают, поэтому пропускаются. Публичные адреса
+// отклоняются: иначе агент без токена становится SSRF-зондом внутренней сети.
+func assertDialTargetLocal(addrs ...string) error {
+	addr := ""
+	for _, c := range addrs {
+		if c != "" {
+			addr = c
+			break
+		}
+	}
+	if addr == "" {
+		return nil // отсутствие порта обработает драйвер своей ошибкой
+	}
+	if !strings.Contains(addr, ":") {
+		return nil // serial-порт, не сетевой dial
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("некорректный адрес устройства: %v", err)
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return fmt.Errorf("не удалось разрешить адрес устройства %q: %v", host, err)
+	}
+	for _, ip := range ips {
+		if !isLocalIP(ip) {
+			return fmt.Errorf("адрес устройства %q запрещён без токена (разрешены только loopback/частные сети)", host)
+		}
+	}
+	return nil
+}
+
+// isLocalIP — адрес считается локальным, если это loopback, link-local или
+// частная сеть (RFC1918 / fc00::/7). Только такие цели допустимы для /events
+// при запуске агента без токена.
+func isLocalIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("deviceagent: encode response: %v", err)
+	}
 }
 
 func writeErr(w http.ResponseWriter, code int, msg string) {

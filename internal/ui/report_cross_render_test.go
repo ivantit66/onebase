@@ -69,6 +69,43 @@ func TestRenderCrossMultiMeasureTitle(t *testing.T) {
 	}
 }
 
+func TestCrossSheetRowsDuplicateField(t *testing.T) {
+	// Регрессия #17 (Excel): два показателя на одном Field не должны затирать
+	// друг друга. У каждой колонки своя подпись (Title) и свой формат — как уже
+	// сделано в HTML-рендере (renderCrossTable берёт показатель по MeasureIdx).
+	rows := []compose.Row{
+		{"Товар": "А", "Месяц": "01", "Сумма": "100"},
+	}
+	spec := &report.Composition{
+		Groupings: []string{"Товар"},
+		Columns:   []string{"Месяц"},
+		Measures: []report.Measure{
+			{Field: "Сумма", Agg: "sum", Title: "Сумма"},                          // без формата → float64
+			{Field: "Сумма", Agg: "sum", Title: "Сумма с НДС", Format: "#,##0.00"}, // с форматом → строка
+		},
+	}
+	cr, _ := compose.ComposeCross(rows, *spec, nil)
+	headers, sheet := crossSheetRows(cr, spec)
+	if len(headers) != 3 {
+		t.Fatalf("ожидали 3 заголовка (измерение + 2 показателя), получили %v", headers)
+	}
+	// Подписи колонок различаются — каждая несёт свой Title показателя.
+	if headers[1] == headers[2] {
+		t.Fatalf("подписи колонок совпали (показатель затёрт по Field): %q == %q", headers[1], headers[2])
+	}
+	if !strings.Contains(headers[2], "НДС") {
+		t.Fatalf("во второй колонке ожидали Title «Сумма с НДС», получили %q", headers[2])
+	}
+	// Формат берётся из своего показателя: 1-я без формата → float64, 2-я с форматом → строка.
+	last := sheet[len(sheet)-1] // строка ВСЕГО
+	if _, ok := last[1].(float64); !ok {
+		t.Fatalf("колонка без формата должна быть числом (float64), получили %v (%T)", last[1], last[1])
+	}
+	if _, ok := last[2].(string); !ok {
+		t.Fatalf("колонка с форматом должна быть отформатированной строкой, получили %v (%T)", last[2], last[2])
+	}
+}
+
 func TestCrossSheetRows(t *testing.T) {
 	// Excel-выгрузка кросс-таблицы: шапка = строковые измерения + колонки;
 	// строки данных + нижняя строка ВСЕГО; значения — float64.
