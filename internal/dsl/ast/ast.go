@@ -18,6 +18,11 @@ type Program struct {
 	// из выгрузок 1С часто начинаются с него (issue #115).
 	ModuleVars []*VarDecl
 	Procedures []*ProcedureDecl
+	// Body — исполняемый раздел модуля (операторы вне процедур, «тело модуля»).
+	// Парсер собирает сюда любые операторы верхнего уровня; допустимость тела
+	// определяет загрузчик по типу модуля (issue #171): у обработки оно
+	// исполняется как точка входа Выполнить, у прочих модулей — ошибка.
+	Body []Stmt
 }
 
 type ProcedureDecl struct {
@@ -33,6 +38,22 @@ type ProcedureDecl struct {
 	// (pageAction) вызывают ТОЛЬКО экспортные процедуры, чтобы внутренние
 	// вспомогательные с побочными эффектами нельзя было дёрнуть POST-запросом.
 	Export bool
+}
+
+// NewProcedureFromBody собирает процедуру entryName из исполняемого раздела
+// модуля: переменные модуля (Перем …) объявляются в начале её тела, затем идут
+// операторы тела (issue #171). Используется загрузчиком, чтобы тело модуля
+// обработки исполнялось как точка входа Выполнить.
+func NewProcedureFromBody(entryName, file string, moduleVars []*VarDecl, body []Stmt) *ProcedureDecl {
+	stmts := make([]Stmt, 0, len(moduleVars)+len(body))
+	for _, v := range moduleVars {
+		stmts = append(stmts, v)
+	}
+	stmts = append(stmts, body...)
+	return &ProcedureDecl{
+		Name: token.Token{Type: token.IDENT, Literal: entryName, File: file, Line: 1, Col: 1},
+		Body: stmts,
+	}
 }
 
 type IfStmt struct {

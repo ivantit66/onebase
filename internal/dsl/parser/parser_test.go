@@ -1,7 +1,6 @@
 package parser_test
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/ivantit66/onebase/internal/dsl/ast"
@@ -299,27 +298,53 @@ func TestParser_ExportFlag(t *testing.T) {
 	}
 }
 
-// issue #128: оператор вне процедуры/функции (попытка «тела модуля») должен
-// давать понятную ошибку с подсказкой, а не сырое и невнятное
-// «expected Procedure or Function, got "ф"».
+// issue #128 → #171: оператор вне процедуры (исполняемый раздел модуля) раньше
+// давал жёсткую ошибку «тело модуля не поддерживается». Теперь парсер его
+// принимает и кладёт в Program.Body (а решение о допустимости тела по типу
+// модуля принимает загрузчик). Регрессия: старая ошибка #128 больше не возникает.
 func TestParser_StatementOutsideProcedure_Issue128(t *testing.T) {
 	src := "Процедура Выполнить()\n  Сообщить(\"Привет!\")\nКонецПроцедуры\nф=6;\n"
-	_, err := parser.New(lexer.New(src, "test.os")).ParseProgram()
-	if err == nil {
-		t.Fatal("ожидалась ошибка на операторе вне процедуры, получили nil")
+	prog, err := parser.New(lexer.New(src, "test.os")).ParseProgram()
+	if err != nil {
+		t.Fatalf("оператор вне процедуры больше не должен быть ошибкой парсера, получили: %v", err)
 	}
-	msg := err.Error()
-	if strings.Contains(msg, "expected Procedure or Function") {
-		t.Errorf("сообщение осталось невнятным англоязычным: %q", msg)
+	if len(prog.Procedures) != 1 {
+		t.Fatalf("ожидали 1 процедуру, получили %d", len(prog.Procedures))
 	}
-	for _, want := range []string{"вне процедуры или функции", "«ф»", "Процедуру или Функцию"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("в сообщении нет %q: %q", want, msg)
-		}
+	if len(prog.Body) != 1 {
+		t.Fatalf("ожидали 1 оператор в теле модуля (ф=6), получили %d", len(prog.Body))
 	}
-	// Координаты должны сохраниться как префикс file:line:col: — иначе сломается
-	// кликабельный переход к ошибке в конфигураторе (configcheck.parseErrLocRe).
-	if !strings.Contains(msg, "test.os:4:1:") {
-		t.Errorf("потеряны координаты file:line:col в сообщении: %q", msg)
+}
+
+// issue #171: операторы вне процедур (исполняемый раздел / тело модуля) больше
+// НЕ отвергаются парсером — они собираются в Program.Body. Допустимость тела
+// (только в обработках) проверяет загрузчик по типу модуля, а не парсер.
+func TestParser_ModuleBody_Issue171(t *testing.T) {
+	src := "Перем Итог;\nИтог = 2 + 3;\nСообщить(Итог);\n"
+	prog := parse(t, src)
+	if len(prog.ModuleVars) != 1 {
+		t.Fatalf("ожидали 1 переменную модуля, получили %d", len(prog.ModuleVars))
+	}
+	if len(prog.Body) != 2 {
+		t.Fatalf("ожидали 2 оператора в теле модуля, получили %d", len(prog.Body))
+	}
+	if _, ok := prog.Body[0].(*ast.AssignStmt); !ok {
+		t.Fatalf("body[0]: ожидали AssignStmt, получили %T", prog.Body[0])
+	}
+	if len(prog.Procedures) != 0 {
+		t.Fatalf("ожидали 0 процедур, получили %d", len(prog.Procedures))
+	}
+}
+
+// Тело модуля может идти и после процедур (как «раздел основной программы» 1С):
+// процедуры → в Procedures, операторы → в Body.
+func TestParser_ModuleBodyAfterProcedures_Issue171(t *testing.T) {
+	src := "Процедура Готово()\nКонецПроцедуры\nЗапустить();\n"
+	prog := parse(t, src)
+	if len(prog.Procedures) != 1 {
+		t.Fatalf("ожидали 1 процедуру, получили %d", len(prog.Procedures))
+	}
+	if len(prog.Body) != 1 {
+		t.Fatalf("ожидали 1 оператор тела, получили %d", len(prog.Body))
 	}
 }

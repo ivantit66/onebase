@@ -60,20 +60,23 @@ func (p *Parser) ParseProgram() (*ast.Program, error) {
 		prog.ModuleVars = append(prog.ModuleVars, vd)
 	}
 	for p.cur.Type != token.EOF {
-		if p.cur.Type != token.PROCEDURE && p.cur.Type != token.FUNCTION {
-			// На верхнем уровне модуля допустимы только объявления переменных
-			// (Перем …) и Процедуры/Функции — тела модуля (операторов вне
-			// процедур) в onebase нет, как и в модуле объекта 1С. Вместо
-			// невнятного «expected Procedure or Function, got "ф"» сообщаем
-			// причину и подсказываем, что делать (issue #128).
-			return nil, fmt.Errorf("%s:%d:%d: оператор «%s» вне процедуры или функции — поместите код в Процедуру или Функцию (тело модуля не поддерживается)",
-				p.cur.File, p.cur.Line, p.cur.Col, p.cur.Literal)
+		if p.cur.Type == token.PROCEDURE || p.cur.Type == token.FUNCTION {
+			proc, err := p.parseProcedure()
+			if err != nil {
+				return nil, err
+			}
+			prog.Procedures = append(prog.Procedures, proc)
+			continue
 		}
-		proc, err := p.parseProcedure()
+		// Прочие операторы верхнего уровня — исполняемый раздел модуля
+		// («тело модуля»). Парсер их принимает (issue #171); допустимость
+		// тела по типу модуля (только обработки) проверяет загрузчик. Раньше
+		// здесь была жёсткая ошибка «тело модуля не поддерживается» (issue #128).
+		stmt, err := p.parseStmt()
 		if err != nil {
 			return nil, err
 		}
-		prog.Procedures = append(prog.Procedures, proc)
+		prog.Body = append(prog.Body, stmt)
 	}
 	return prog, nil
 }

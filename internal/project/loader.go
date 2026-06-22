@@ -548,6 +548,24 @@ func (p *Project) loadDSL() error {
 			return err
 		}
 
+		// Исполняемый раздел модуля (тело модуля, issue #171). Парсер собирает
+		// операторы вне процедур в prog.Body; допустимость решаем по типу:
+		// у обработки тело становится точкой входа Выполнить, у остальных
+		// модулей (объект/менеджер/общий/сервис/страница/отчёт) — ошибка, как
+		// в 1С, где исполняемого раздела у этих модулей нет.
+		if len(prog.Body) > 0 {
+			if !isProc {
+				return fmt.Errorf("%s: тело модуля (операторы вне процедур) допустимо только в обработках (.proc.os) — поместите код в процедуру", name)
+			}
+			for _, p := range prog.Procedures {
+				if strings.EqualFold(p.Name.Literal, "Выполнить") {
+					return fmt.Errorf("%s: в обработке есть и тело модуля, и процедура Выполнить — оставьте что-то одно", name)
+				}
+			}
+			prog.Procedures = append(prog.Procedures, ast.NewProcedureFromBody("Выполнить", fullPath, prog.ModuleVars, prog.Body))
+			prog.Body = nil
+		}
+
 		if isModule {
 			base := strings.TrimSuffix(name, ".module.os")
 			moduleName := fileNameToEntityBase(base)

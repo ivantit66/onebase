@@ -210,6 +210,14 @@ func CheckDir(dir string) (issues, warnings []Issue) {
 			issues = append(issues, Issue{File: label, Message: perr.Error()})
 			continue
 		}
+		// Тело модуля обработки (#171) сворачиваем в Выполнить, чтобы вызовы в нём
+		// проверялись на неизвестные функции наравне с процедурами. У прочих
+		// модулей тело недопустимо, но эту ошибку даёт project.Load (cli/check.go) —
+		// здесь не дублируем.
+		if len(prog.Body) > 0 && strings.HasSuffix(strings.ToLower(e.Name()), ".proc.os") {
+			prog.Procedures = append(prog.Procedures, ast.NewProcedureFromBody("Выполнить", label, prog.ModuleVars, prog.Body))
+			prog.Body = nil
+		}
 		for _, pr := range prog.Procedures {
 			projProcs[strings.ToLower(pr.Name.Literal)] = struct{}{}
 		}
