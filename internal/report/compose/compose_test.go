@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"math"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -11,8 +12,8 @@ import (
 // noEval — заглушка Evaluator: оформление не применяется (для тестов без условий).
 type noEval struct{}
 
-func (noEval) EvalBool(string, Row) (bool, error)                        { return false, nil }
-func (noEval) EvalNum(string, Row) (decimal.Decimal, bool, error)        { return decimal.Zero, false, nil }
+func (noEval) EvalBool(string, Row) (bool, error)                 { return false, nil }
+func (noEval) EvalNum(string, Row) (decimal.Decimal, bool, error) { return decimal.Zero, false, nil }
 
 func decEq(t *testing.T, got any, want string) {
 	t.Helper()
@@ -457,4 +458,44 @@ func TestComposeFieldsCaseInsensitive(t *testing.T) {
 	}
 	decEq(t, res.Groups[0].Subtotals["Выручка"], "150")
 	decEq(t, res.Grand["ВаловаяПрибыль"], "60")
+}
+
+// TestComposeNaNInfNoPanic: значения NaN/±Inf из REAL/float8 колонок не валят
+// компоновку паникой decimal.NewFromFloat (issue #9). NaN/Inf выпадают из сумм
+// (как «не число»), а группировка по такому ключу не падает.
+func TestComposeNaNInfNoPanic(t *testing.T) {
+	rows := []Row{
+		{"Товар": "А", "Сумма": math.Inf(1)},
+		{"Товар": "А", "Сумма": math.NaN()},
+		{"Товар": "Б", "Сумма": 100.0},
+		{"Товар": math.Inf(-1), "Сумма": math.NaN()}, // NaN/Inf и в ключе группировки
+	}
+	spec := report.Composition{
+		Groupings: []string{"Товар"},
+		Measures:  []report.Measure{{Field: "Сумма", Agg: "sum"}},
+		Totals:    report.Totals{Grand: true},
+	}
+	// Главное — отсутствие паники.
+	res, err := Compose(rows, spec, noEval{})
+	if err != nil {
+		t.Fatalf("Compose вернул ошибку: %v", err)
+	}
+	// NaN/Inf выпали из суммы → grand = 100 (только валидная строка Б).
+	decEq(t, res.Grand["Сумма"], "100")
+}
+
+// TestComposeCrossNaNInfNoPanic: то же для кросс-режима (crossAgg/normalizeGroupKey).
+func TestComposeCrossNaNInfNoPanic(t *testing.T) {
+	rows := []Row{
+		{"Товар": "А", "Месяц": "Янв", "Сумма": math.Inf(1)},
+		{"Товар": "А", "Месяц": "Фев", "Сумма": 50.0},
+	}
+	spec := report.Composition{
+		Groupings: []string{"Товар"},
+		Columns:   []string{"Месяц"},
+		Measures:  []report.Measure{{Field: "Сумма", Agg: "sum"}},
+	}
+	if _, err := ComposeCross(rows, spec, noEval{}); err != nil {
+		t.Fatalf("ComposeCross вернул ошибку: %v", err)
+	}
 }
