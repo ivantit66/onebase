@@ -2091,17 +2091,23 @@ function openRefPicker(selOrId) {
   inner += '<div id="_rp-list" style="overflow-y:auto;flex:1;border:1px solid #e2e8f0;border-radius:7px">';
   if (opts.length === 0) {
     inner += '<div style="padding:16px;color:#94a3b8;font-size:13px;text-align:center">Список пуст</div>';
-  } else {
-    for (var i = 0; i < opts.length; i++) {
-      var idAttr = opts[i].id.replace(/"/g,'&quot;');
-      inner += '<div data-id="' + idAttr + '" class="_rp-item" style="padding:9px 14px;cursor:pointer;border-bottom:1px solid #f1f5f9;font-size:14px;color:#1e293b">' + opts[i].label + '</div>';
-    }
   }
   inner += '</div>';
   inner += '<div style="margin-top:12px;text-align:right"><button type="button" id="_rp-cancel" style="padding:6px 18px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px">Отмена</button></div>';
   inner += '</div>';
   modal.innerHTML = inner;
   document.body.appendChild(modal);
+  var list = document.getElementById('_rp-list');
+  if (opts.length > 0 && list) {
+    for (var i = 0; i < opts.length; i++) {
+      var item = document.createElement('div');
+      item.className = '_rp-item';
+      item.setAttribute('data-id', opts[i].id);
+      item.style.cssText = 'padding:9px 14px;cursor:pointer;border-bottom:1px solid #f1f5f9;font-size:14px;color:#1e293b';
+      item.textContent = opts[i].label;
+      list.appendChild(item);
+    }
+  }
   window._rpTarget = sel;
   var search = document.getElementById('_rp-search');
   search.focus();
@@ -3272,7 +3278,56 @@ const tplInfoReg = `
 </form>
 </div>
 <script>
-function openRefPicker(selOrId){var sel=(typeof selOrId==='string')?document.getElementById(selOrId):selOrId;if(!sel)return;var opts=[];for(var i=0;i<sel.options.length;i++){var o=sel.options[i];if(o.value)opts.push({id:o.value,label:o.text});}var old=document.getElementById('_ref-picker-modal');if(old)old.remove();var modal=document.createElement('div');modal.id='_ref-picker-modal';modal.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:9999;display:flex;align-items:center;justify-content:center';var inner='<div style="background:#fff;border-radius:10px;padding:20px;width:480px;max-width:95vw;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.18)">';inner+='<div style="font-weight:600;font-size:15px;margin-bottom:12px;color:#1e293b">Выбор из списка</div>';inner+='<input id="_rp-search" type="text" placeholder="Поиск..." autocomplete="off" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;font-size:14px;margin-bottom:10px;outline:none">';inner+='<div id="_rp-list" style="overflow-y:auto;flex:1;border:1px solid #e2e8f0;border-radius:7px">';if(opts.length===0){inner+='<div style="padding:16px;color:#94a3b8;font-size:13px;text-align:center">Список пуст</div>';}else{for(var i=0;i<opts.length;i++){inner+='<div data-id="'+opts[i].id.replace(/"/g,"&quot;")+'" class="_rp-item" style="padding:9px 14px;cursor:pointer;border-bottom:1px solid #f1f5f9;font-size:14px;color:#1e293b">'+opts[i].label+'</div>';}}inner+='</div>';inner+='<div style="margin-top:12px;text-align:right"><button type="button" id="_rp-cancel" style="padding:6px 18px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px">Отмена</button></div>';inner+='</div>';modal.innerHTML=inner;document.body.appendChild(modal);window._rpTarget=sel;var search=document.getElementById('_rp-search');search.focus();search.addEventListener('input',function(){var q=this.value.toLowerCase();document.querySelectorAll('._rp-item').forEach(function(el){el.style.display=el.textContent.toLowerCase().indexOf(q)>=0?'':'none';});});document.getElementById('_rp-list').addEventListener('click',function(e){var item=e.target.closest('._rp-item');if(!item)return;if(window._rpTarget)window._rpTarget.value=item.getAttribute('data-id');modal.remove();});document.getElementById('_rp-cancel').addEventListener('click',function(){modal.remove();});modal.addEventListener('click',function(e){if(e.target===modal)modal.remove();});}
+	function openRefPicker(selOrId){
+	  var sel=(typeof selOrId==='string')?document.getElementById(selOrId):selOrId;
+	  if(!sel)return;
+	  var opts=[];
+	  for(var i=0;i<sel.options.length;i++){
+	    var o=sel.options[i];
+	    if(o.value)opts.push({id:o.value,label:o.text});
+	  }
+	  var old=document.getElementById('_ref-picker-modal');
+	  if(old)old.remove();
+	  var modal=document.createElement('div');
+	  modal.id='_ref-picker-modal';
+	  modal.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:9999;display:flex;align-items:center;justify-content:center';
+	  var inner='<div style="background:#fff;border-radius:10px;padding:20px;width:480px;max-width:95vw;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.18)">';
+	  inner+='<div style="font-weight:600;font-size:15px;margin-bottom:12px;color:#1e293b">Выбор из списка</div>';
+	  inner+='<input id="_rp-search" type="text" placeholder="Поиск..." autocomplete="off" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;font-size:14px;margin-bottom:10px;outline:none">';
+	  inner+='<div id="_rp-list" style="overflow-y:auto;flex:1;border:1px solid #e2e8f0;border-radius:7px">';
+	  if(opts.length===0){inner+='<div style="padding:16px;color:#94a3b8;font-size:13px;text-align:center">Список пуст</div>';}
+	  inner+='</div>';
+	  inner+='<div style="margin-top:12px;text-align:right"><button type="button" id="_rp-cancel" style="padding:6px 18px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px">Отмена</button></div>';
+	  inner+='</div>';
+	  modal.innerHTML=inner;
+	  document.body.appendChild(modal);
+	  var list=document.getElementById('_rp-list');
+	  if(opts.length>0&&list){
+	    for(var j=0;j<opts.length;j++){
+	      var item=document.createElement('div');
+	      item.className='_rp-item';
+	      item.setAttribute('data-id',opts[j].id);
+	      item.style.cssText='padding:9px 14px;cursor:pointer;border-bottom:1px solid #f1f5f9;font-size:14px;color:#1e293b';
+	      item.textContent=opts[j].label;
+	      list.appendChild(item);
+	    }
+	  }
+	  window._rpTarget=sel;
+	  var search=document.getElementById('_rp-search');
+	  search.focus();
+	  search.addEventListener('input',function(){
+	    var q=this.value.toLowerCase();
+	    document.querySelectorAll('._rp-item').forEach(function(el){el.style.display=el.textContent.toLowerCase().indexOf(q)>=0?'':'none';});
+	  });
+	  document.getElementById('_rp-list').addEventListener('click',function(e){
+	    var item=e.target.closest('._rp-item');
+	    if(!item)return;
+	    if(window._rpTarget)window._rpTarget.value=item.getAttribute('data-id');
+	    modal.remove();
+	  });
+	  document.getElementById('_rp-cancel').addEventListener('click',function(){modal.remove();});
+	  modal.addEventListener('click',function(e){if(e.target===modal)modal.remove();});
+	}
 </script>
 </main></div></body></html>
 {{end}}
