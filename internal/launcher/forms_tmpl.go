@@ -204,6 +204,45 @@ const tplFormsEditor = `
 .attr-chip:active{cursor:grabbing}
 .attr-chip.dragging{opacity:.4}
 #yaml-editor.attr-drop-target{outline:2px dashed #1a4a80;outline-offset:-2px}
+/* Визуальный конструктор форм (#164): холст, drop-зоны, панель свойств */
+.rp-tabs{display:flex;gap:2px}
+.rp-tab{padding:4px 10px;font-size:12px;color:#64748b;cursor:pointer;border-radius:5px}
+.rp-tab.active{color:#1a4a80;background:#eef4ff;font-weight:600}
+#design-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#canvas-host{flex:1;overflow:auto;padding:12px;background:#fff}
+.fc-canvas{font-size:13px;color:#334}
+.fc-children{display:flex;flex-direction:column;gap:1px;min-height:6px}
+.fc-drop{height:6px;border-radius:4px;transition:background .1s,height .1s}
+.fc-drop.fc-drop-over{background:#1a4a80;height:14px}
+.fc-el{border:1px solid transparent;border-radius:6px;padding:3px 5px;cursor:pointer}
+.fc-el.fc-selected{outline:2px solid #1a4a80;background:#eef4ff}
+.fc-pick:hover{background:#f5f8ff}
+.fc-group{border:1px solid #e2e8f0;padding:5px 9px;margin:1px 0}
+.fc-group>legend{font-weight:600;color:#475569;padding:0 5px;font-size:12px}
+.fc-pages{border:1px dashed #c7d8f5;border-radius:6px;padding:4px}
+.fc-page{border:1px solid #eef0f5;border-radius:6px;margin:3px 0;padding:4px 6px}
+.fc-tab{font-size:11px;color:#1a4a80;font-weight:600;margin-bottom:3px}
+.fc-field label{display:block;color:#475569;font-size:12px;margin-bottom:2px}
+.fc-field input{width:100%;padding:5px 8px;border:1px solid #d0d7e3;border-radius:5px;background:#f8fafc;pointer-events:none}
+.fc-req{color:#dc2626}
+.fc-check{display:flex;align-items:center;gap:6px}
+.fc-label{color:#475569}
+.fc-btn button{padding:5px 10px;border:1px solid #d0d7e3;border-radius:5px;background:#f8fafc;pointer-events:none}
+.fc-table .fc-tp{background:#fef9c3;color:#92400e;padding:6px 8px;border-radius:6px;font-size:12px}
+.fc-unknown{background:#fef2f2;color:#991b1b;font-size:12px}
+.fc-kind{color:#94a3b8;font-size:11px}
+#canvas-host.fc-canvas-disabled{opacity:.5;pointer-events:none}
+.fc-banner{background:#fee2e2;color:#dc2626;padding:6px 10px;border-radius:6px;font-size:12px;margin-bottom:8px;display:none}
+.fc-banner.active{display:block}
+.prop-panel{border-top:1px solid #eef0f5;background:#fafbff;max-height:44%;overflow:auto;padding:10px 12px;font-size:12px}
+.prop-panel .prop-empty{color:#94a3b8}
+.prop-panel h4{margin:0 0 8px;font-size:12px;color:#1a4a80}
+.prop-panel h4 .prop-kind{color:#94a3b8;font-weight:400;margin-left:6px}
+.prop-row{margin-bottom:8px}
+.prop-row>label{display:block;color:#64748b;margin-bottom:2px}
+.prop-row input[type=text]{width:100%;padding:5px 8px;border:1px solid #d0d7e3;border-radius:5px;font-size:12px}
+.prop-row.prop-check{display:flex;align-items:center;gap:6px}
+.prop-row.prop-check>label{margin:0}
 </style>
 <body>
 {{template "forms-header" .}}
@@ -261,10 +300,24 @@ const tplFormsEditor = `
   </div>
   <div class="editor-pane">
     <div class="editor-pane-hd">
-      Просмотр (упрощённый)
-      <button class="btn" onclick="refreshPreview()" style="padding:3px 8px;font-size:11px">Обновить</button>
+      <div class="rp-tabs">
+        <span class="rp-tab active" data-rp="design" onclick="switchRightPane('design')">Конструктор</span>
+        <span class="rp-tab" data-rp="preview" onclick="switchRightPane('preview')">Просмотр</span>
+      </div>
+      <button class="btn" onclick="reloadCanvas()" style="padding:3px 8px;font-size:11px">Обновить</button>
     </div>
-    <iframe id="preview-frame" sandbox="allow-same-origin allow-scripts"></iframe>
+    <div class="editor-pane-body">
+      <div id="design-wrap">
+        <div id="canvas-host">
+          <div class="fc-banner" id="fc-banner"></div>
+          <div class="empty" style="padding:18px">Загрузка холста…</div>
+        </div>
+        <div class="prop-panel" id="prop-panel">
+          <div class="prop-empty">Выберите элемент на холсте, чтобы изменить его свойства. Перетащите реквизит из палитры на холст, чтобы добавить поле.</div>
+        </div>
+      </div>
+      <iframe id="preview-frame" sandbox="allow-same-origin allow-scripts" style="display:none;flex:1;border:none"></iframe>
+    </div>
   </div>
 </div>
 
@@ -316,6 +369,8 @@ if (typeof require === 'undefined') {
       language: 'plaintext', theme: 'vs-light', automaticLayout: true, minimap: { enabled: false }, fontSize: 12
     });
     refreshPreview();
+    hookYamlChange();
+    reloadCanvas();
   });
 }
 
@@ -515,6 +570,187 @@ function validateForm() {
       panel.classList.add('active');
       document.getElementById('warn-items').innerHTML = '<div class="warn-item error">Ошибка проверки: ' + e + '</div>';
     });
+}
+
+// ── Визуальный конструктор формы (#164) ──────────────────────────────────────
+// Холст серверо-центричен: правка превращается в команду на /forms/edit-op,
+// сервер хирургически правит дерево yaml.Node и возвращает {yaml, canvasHtml,
+// selectedId, model}. Monaco и холст синхронизируются от одного ответа.
+var _editOpURL = '/bases/{{.Base.ID}}/configurator/forms/edit-op';
+var _entity = {{jsString .EditingForm.Entity}};
+var _selected = '';   // node-id выбранного элемента
+var _model = {};      // node-id → свойства (для панели свойств)
+var _rightPane = 'design';
+var _syncing = false; // защита от рекурсии setYAML → reloadCanvas
+
+function switchRightPane(which) {
+  _rightPane = which;
+  document.querySelectorAll('.rp-tab').forEach(function (t) { t.classList.toggle('active', t.dataset.rp === which); });
+  document.getElementById('design-wrap').style.display = which === 'design' ? 'flex' : 'none';
+  document.getElementById('preview-frame').style.display = which === 'preview' ? 'block' : 'none';
+  if (which === 'design') reloadCanvas(); else refreshPreview();
+}
+
+// editOp — единая точка общения с сервером. mutating=true → результат пишем
+// обратно в YAML (направление холст→YAML).
+function editOp(params, mutating) {
+  var body = new URLSearchParams();
+  body.append('yaml', getYAML());
+  body.append('entity', _entity);
+  Object.keys(params).forEach(function (k) { if (params[k] != null) body.append(k, params[k]); });
+  return fetch(_editOpURL, { method: 'POST', body: body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' }})
+    .then(function (r) { return r.json(); })
+    .then(function (resp) {
+      var banner = document.getElementById('fc-banner');
+      var host = document.getElementById('canvas-host');
+      if (!resp.ok) {
+        banner.textContent = 'YAML не разобран — визуальные правки заблокированы: ' + (resp.errors || []).join('; ');
+        banner.classList.add('active');
+        host.classList.add('fc-canvas-disabled');
+        return resp;
+      }
+      banner.classList.remove('active');
+      host.classList.remove('fc-canvas-disabled');
+      _model = resp.model || {};
+      _selected = resp.selectedId || '';
+      renderCanvasHTML(resp.canvasHtml || '');
+      if (mutating && typeof resp.yaml === 'string') {
+        _syncing = true; setYAML(resp.yaml); _syncing = false;
+      }
+      renderProps();
+      return resp;
+    })
+    .catch(function (e) {
+      var banner = document.getElementById('fc-banner');
+      banner.textContent = 'Ошибка конструктора: ' + e;
+      banner.classList.add('active');
+    });
+}
+
+// reloadCanvas — перерисовать холст из текущего YAML (направление YAML→холст).
+function reloadCanvas() {
+  if (_rightPane !== 'design') return Promise.resolve();
+  return editOp({ op: 'render', node: _selected }, false);
+}
+
+function renderCanvasHTML(html) {
+  var host = document.getElementById('canvas-host');
+  var banner = document.getElementById('fc-banner');
+  host.innerHTML = '';
+  host.appendChild(banner);
+  var wrap = document.createElement('div');
+  wrap.innerHTML = html;
+  while (wrap.firstChild) host.appendChild(wrap.firstChild);
+}
+
+// Делегирование на холсте: клик — выбор элемента; drop реквизита на зону — вставка.
+(function () {
+  var host = document.getElementById('canvas-host');
+  if (!host) return;
+  host.addEventListener('click', function (e) {
+    var el = e.target.closest ? e.target.closest('[data-node-id]') : null;
+    if (!el || !host.contains(el)) return;
+    e.stopPropagation();
+    selectNode(el.getAttribute('data-node-id'));
+  });
+  host.addEventListener('dragover', function (e) {
+    var dz = e.target.closest ? e.target.closest('.fc-drop') : null;
+    if (!dz || (e.dataTransfer.types || []).indexOf('text/onebase-attr') < 0) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+    dz.classList.add('fc-drop-over');
+  });
+  host.addEventListener('dragleave', function (e) {
+    var dz = e.target.closest ? e.target.closest('.fc-drop') : null;
+    if (dz) dz.classList.remove('fc-drop-over');
+  });
+  host.addEventListener('drop', function (e) {
+    var dz = e.target.closest ? e.target.closest('.fc-drop') : null;
+    if (!dz) return;
+    dz.classList.remove('fc-drop-over');
+    var raw = e.dataTransfer.getData('text/onebase-attr');
+    if (!raw) return;
+    e.preventDefault();
+    var d; try { d = JSON.parse(raw); } catch (_) { return; }
+    editOp({
+      op: 'insert', parent: dz.getAttribute('data-parent'), index: dz.getAttribute('data-index'),
+      kind: 'ПолеВвода', name: 'Поле' + d.attr, data_path: 'Объект.' + d.attr, title_ru: d.title || d.attr
+    }, true);
+  });
+})();
+
+function selectNode(nodeId) {
+  _selected = nodeId;
+  document.querySelectorAll('#canvas-host .fc-selected').forEach(function (el) { el.classList.remove('fc-selected'); });
+  var el = document.querySelector('#canvas-host [data-node-id="' + nodeId + '"]');
+  if (el) el.classList.add('fc-selected');
+  renderProps();
+}
+
+// renderProps строит панель свойств выбранного элемента из _model. Обработчики
+// вешаются через addEventListener (без inline-onchange — без проблем экранирования).
+function renderProps() {
+  var panel = document.getElementById('prop-panel');
+  panel.innerHTML = '';
+  var info = _model[_selected];
+  if (!info) {
+    var em = document.createElement('div'); em.className = 'prop-empty';
+    em.textContent = 'Выберите элемент на холсте, чтобы изменить его свойства. Перетащите реквизит из палитры на холст, чтобы добавить поле.';
+    panel.appendChild(em); return;
+  }
+  var h = document.createElement('h4');
+  h.textContent = info.name || info.kind;
+  var sk = document.createElement('span'); sk.className = 'prop-kind'; sk.textContent = info.kind;
+  h.appendChild(sk); panel.appendChild(h);
+  addTextProp(panel, 'Заголовок (ru)', 'title.ru', info.titleRu || '');
+  addTextProp(panel, 'Имя', 'name', info.name || '');
+  if (!info.container) {
+    addTextProp(panel, 'Поле данных (data_path)', 'data_path', info.dataPath || '');
+    addTextProp(panel, 'Подсказка', 'hint', info.hint || '');
+    addCheckProp(panel, 'Обязательное', 'required', info.required);
+    addCheckProp(panel, 'Только чтение', 'readonly', info.readonly);
+  }
+}
+function addTextProp(panel, label, key, val) {
+  var row = document.createElement('div'); row.className = 'prop-row';
+  var l = document.createElement('label'); l.textContent = label; row.appendChild(l);
+  var inp = document.createElement('input'); inp.type = 'text'; inp.value = val;
+  inp.addEventListener('change', function () { setProp(key, inp.value); });
+  row.appendChild(inp); panel.appendChild(row);
+}
+function addCheckProp(panel, label, key, checked) {
+  var row = document.createElement('div'); row.className = 'prop-row prop-check';
+  var inp = document.createElement('input'); inp.type = 'checkbox'; inp.checked = !!checked;
+  inp.addEventListener('change', function () { setProp(key, inp.checked ? 'true' : ''); });
+  var l = document.createElement('label'); l.textContent = label;
+  row.appendChild(inp); row.appendChild(l); panel.appendChild(row);
+}
+function setProp(key, value) {
+  if (!_selected) return;
+  editOp({ op: 'setProp', node: _selected, key: key, value: value }, true);
+}
+
+// hookYamlChange — живая синхронизация YAML→холст (debounce), с защитой от
+// рекурсии при программном setYAML из ответа edit-op.
+var _yamlChangeTimer = null;
+function hookYamlChange() {
+  if (!window.yamlEditor || window._yamlHooked) return;
+  window._yamlHooked = true;
+  window.yamlEditor.onDidChangeModelContent(function () {
+    if (_syncing) return;
+    clearTimeout(_yamlChangeTimer);
+    _yamlChangeTimer = setTimeout(reloadCanvas, 400);
+  });
+}
+
+// Инициализация для textarea-fallback (Monaco инициализирует холст в своём
+// callback). При вводе в textarea — тот же debounced reload.
+if (window._yamlTA) {
+  window._yamlTA.addEventListener('input', function () {
+    if (_syncing) return;
+    clearTimeout(_yamlChangeTimer);
+    _yamlChangeTimer = setTimeout(reloadCanvas, 400);
+  });
+  reloadCanvas();
 }
 </script>
 
