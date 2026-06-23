@@ -7,7 +7,7 @@
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
-import { u, CATALOG_COUNTERPARTY, createCounterparty } from '../lib/common.js';
+import { u, CATALOG_COUNTERPARTY, GET_HEADERS, createCounterparty } from '../lib/common.js';
 
 export const options = {
   scenarios: {
@@ -27,7 +27,7 @@ export default function () {
   // 70% чтений, 30% записей — типичный профиль справочника.
   if (Math.random() < 0.7) {
     // Список возвращает полный набор (REST-список не пагинируется), с сортировкой.
-    const res = http.get(u(`/catalogs/${CATALOG_COUNTERPARTY}?sort=${encodeURIComponent('Наименование')}&dir=asc`));
+    const res = http.get(u(`/catalogs/${CATALOG_COUNTERPARTY}?sort=${encodeURIComponent('Наименование')}&dir=asc`), GET_HEADERS);
     check(res, { 'список 200': (r) => r.status === 200 });
   } else {
     createCounterparty(`${__VU}-${__ITER}`);

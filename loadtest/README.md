@@ -19,14 +19,14 @@ loadtest/
 ├── prometheus.yml        # scrape-конфиг (/metrics закрыт токеном — шлём ?token=)
 ├── seed/main.go          # Go-сидер: наполняет базу через REST, пишет id в JSON
 └── k6/
-    ├── lib/common.js                 # BASE_URL, токен, хелперы (createCounterparty, postReceipt)
+    ├── lib/common.js                 # BASE_URL, cookie, хелперы (createCounterparty, postReceipt)
     └── scenarios/
         ├── post_document.js          # ГЛАВНЫЙ: создание+проведение документа (OnPost + движения)
         ├── catalog_crud.js           # лёгкий путь: список + создание справочника
         └── list_query.js             # read-heavy: списки с сортировкой
 ```
 
-Эталонная конфигурация — `examples/simple-erp` (сущности **Контрагент** и
+Эталонная конфигурация — `examples/minimal` (сущности **Контрагент** и
 **Поступление**). Под другой конфиг поменяйте имена сущностей/полей в
 `k6/lib/common.js` и `seed/main.go`.
 
@@ -40,10 +40,17 @@ docker compose -f loadtest/docker-compose.yml up -d --build
 go run ./loadtest/seed -url http://localhost:8080 -counterparties 200 -documents 500 \
   -out loadtest/seed/counterparties.json
 
-# 3. Прогнать главный сценарий (проведение документов)
-docker compose -f loadtest/docker-compose.yml run --rm k6 run /scripts/scenarios/post_document.js
+# 3. Прогнать главный сценарий (проведение документов) с web dashboard и HTML-отчётом
+mkdir -p loadtest/reports
+docker compose -f loadtest/docker-compose.yml run --rm --service-ports \
+  -e K6_WEB_DASHBOARD=true \
+  -e K6_WEB_DASHBOARD_HOST=0.0.0.0 \
+  -e K6_WEB_DASHBOARD_EXPORT=/reports/post_document.html \
+  k6 run /scripts/scenarios/post_document.js
 
-# Метрики: Prometheus http://localhost:9090 · Grafana http://localhost:3000 (admin/admin)
+# Во время прогона: k6 dashboard http://localhost:5665
+# После прогона:   loadtest/reports/post_document.html
+# Метрики onebase: Prometheus http://localhost:9090 · Grafana http://localhost:3000 (admin/admin)
 ```
 
 Остановить и удалить: `docker compose -f loadtest/docker-compose.yml down -v`.
@@ -54,8 +61,8 @@ docker compose -f loadtest/docker-compose.yml run --rm k6 run /scripts/scenarios
 метриками/pprof:
 
 ```bash
-ONEBASE_DEBUG_TOKEN=loadtest onebase migrate --project examples/simple-erp --db "$DATABASE_URL"
-ONEBASE_DEBUG_TOKEN=loadtest onebase run     --project examples/simple-erp --db "$DATABASE_URL" --port 8080
+ONEBASE_DEBUG_TOKEN=loadtest onebase migrate --project examples/minimal --db "$DATABASE_URL"
+ONEBASE_DEBUG_TOKEN=loadtest onebase run     --project examples/minimal --db "$DATABASE_URL" --port 8080
 
 go run ./loadtest/seed -url http://localhost:8080 -out loadtest/seed/counterparties.json
 
@@ -67,9 +74,50 @@ k6 run -e BASE_URL=http://localhost:8080 \
 ## Аутентификация
 
 Проще всего гонять нагрузку по базе **без пользователей** — onebase пускает
-анонимно. Если в базе есть юзеры, получите сессионный токен и передайте его k6
-через `-e OB_TK=<token>` (добавляется к каждому запросу как `?_tk=…`). Сидер
-умеет логиниться флагами `-login/-password`.
+анонимно. Если в базе есть пользователи, получите cookie `onebase_session` и
+передайте его k6 через `-e OB_SESSION_COOKIE=<value>`. Сессионный токен в query
+`?_tk=...` больше не принимается.
+
+```bash
+curl -sS -c /tmp/onebase.cookies \
+  -H 'Content-Type: application/json' \
+  -d '{"login":"admin","password":"secret"}' \
+  http://localhost:8080/auth/login
+
+export OB_SESSION_COOKIE="$(awk '$6=="onebase_session"{print $7}' /tmp/onebase.cookies)"
+```
+
+Сидер умеет логиниться флагами `-login/-password`, но k6-сценариям cookie нужно
+передать отдельно. У onebase одна активная сессия на логин: повторный вход тем же
+пользователем инвалидирует предыдущую сессию.
+
+## Красивый результат
+
+Встроенный k6 dashboard включается переменной `K6_WEB_DASHBOARD=true`. В Docker
+нужно также пробросить сервисные порты через `--service-ports` и слушать
+`0.0.0.0`, чтобы открыть dashboard с хоста:
+
+```bash
+docker compose -f loadtest/docker-compose.yml run --rm --service-ports \
+  -e K6_WEB_DASHBOARD=true \
+  -e K6_WEB_DASHBOARD_HOST=0.0.0.0 \
+  -e K6_WEB_DASHBOARD_EXPORT=/reports/post_document.html \
+  k6 run /scripts/scenarios/post_document.js
+```
+
+Открыть во время прогона: http://localhost:5665.
+
+HTML-отчёт после завершения: `loadtest/reports/post_document.html`.
+
+Если нужно отправлять метрики k6 в Prometheus, запускайте сценарий с output:
+
+```bash
+docker compose -f loadtest/docker-compose.yml run --rm \
+  k6 run -o experimental-prometheus-rw /scripts/scenarios/post_document.js
+```
+
+Prometheus в `docker-compose.yml` уже запущен с
+`--web.enable-remote-write-receiver`.
 
 ## Профили нагрузки и пороги
 

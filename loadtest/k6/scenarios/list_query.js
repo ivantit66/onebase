@@ -7,7 +7,7 @@
 
 import http from 'k6/http';
 import { check } from 'k6';
-import { u, CATALOG_COUNTERPARTY, DOCUMENT_POSTING } from '../lib/common.js';
+import { u, CATALOG_COUNTERPARTY, DOCUMENT_POSTING, GET_HEADERS } from '../lib/common.js';
 
 export const options = {
   scenarios: {
@@ -36,9 +36,9 @@ export default function () {
   const dir = Math.random() < 0.5 ? 'asc' : 'desc';
   let res;
   if (Math.random() < 0.5) {
-    res = http.get(u(`/catalogs/${CATALOG_COUNTERPARTY}?sort=${encodeURIComponent('Наименование')}&dir=${dir}`));
+    res = http.get(u(`/catalogs/${CATALOG_COUNTERPARTY}?sort=${encodeURIComponent('Наименование')}&dir=${dir}`), GET_HEADERS);
   } else {
-    res = http.get(u(`/documents/${DOCUMENT_POSTING}?sort=${encodeURIComponent('Дата')}&dir=${dir}`));
+    res = http.get(u(`/documents/${DOCUMENT_POSTING}?sort=${encodeURIComponent('Дата')}&dir=${dir}`), GET_HEADERS);
   }
   check(res, { 'список 200': (r) => r.status === 200 });
 }

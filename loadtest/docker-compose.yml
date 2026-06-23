@@ -3,8 +3,12 @@
 #
 # Поднять стенд:        docker compose -f loadtest/docker-compose.yml up -d --build
 # Засеять данные:       go run ./loadtest/seed -url http://localhost:8080 -out loadtest/seed/counterparties.json
-# Прогнать сценарий:    docker compose -f loadtest/docker-compose.yml run --rm k6 run /scripts/scenarios/post_document.js
-# Метрики:              http://localhost:9090 (Prometheus), http://localhost:3000 (Grafana, admin/admin)
+# Прогнать сценарий:    docker compose -f loadtest/docker-compose.yml run --rm --service-ports \
+#                         -e K6_WEB_DASHBOARD=true -e K6_WEB_DASHBOARD_HOST=0.0.0.0 \
+#                         -e K6_WEB_DASHBOARD_EXPORT=/reports/post_document.html \
+#                         k6 run /scripts/scenarios/post_document.js
+# Отчёт:                http://localhost:5665 во время прогона, затем loadtest/reports/post_document.html
+# Метрики onebase:      http://localhost:9090 (Prometheus), http://localhost:3000 (Grafana, admin/admin)
 
 services:
   postgres:
@@ -39,8 +43,8 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >
-        onebase migrate --project /app/examples/simple-erp --db "$$DATABASE_URL" &&
-        onebase run --project /app/examples/simple-erp --db "$$DATABASE_URL" --host 0.0.0.0 --port 8080
+        onebase migrate --project /app/examples/minimal --db "$$DATABASE_URL" &&
+        onebase run --project /app/examples/minimal --db "$$DATABASE_URL" --host 0.0.0.0 --port 8080
     ports:
       - "8080:8080"
     healthcheck:
@@ -53,6 +57,9 @@ services:
     image: prom/prometheus:latest
     depends_on:
       - onebase
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-remote-write-receiver
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
@@ -80,7 +87,11 @@ services:
       SEED_FILE: /seed/counterparties.json
       # k6 умеет слать метрики прогона в тот же Prometheus (remote write).
       K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+    ports:
+      # Публикуется при `docker compose run --service-ports k6 ...`.
+      - "5665:5665"
     volumes:
       - ./k6:/scripts:ro
       - ./seed:/seed:ro
+      - ./reports:/reports
     working_dir: /scripts

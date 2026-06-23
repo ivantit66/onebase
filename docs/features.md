@@ -732,6 +732,37 @@ DSL-модулей в нескольких вкладках.
 
 **Как попробовать.** Меню **Система → Инструменты разработчика** (только admin).
 
+## Нагрузочное тестирование HTTP/API
+<!-- status: testing -->
+<!-- date: 2026-06-24 -->
+
+В репозитории есть готовый стенд для проверки производительности onebase под
+HTTP-нагрузкой: PostgreSQL + onebase + Prometheus + Grafana + k6-сценарии.
+Сценарии покрывают чтение списков, CRUD справочника и создание/проведение документа
+через REST. k6 умеет показывать live dashboard и сохранять HTML-отчёт с графиками,
+чтобы удобно сравнивать p95/p99, ошибки, RPS и деградацию при росте данных.
+
+**Как настроить.** Стенд лежит в `loadtest/`; эталонная конфигурация —
+`examples/minimal`. По умолчанию тест проще запускать на базе без пользователей.
+Если пользователи есть, передайте k6 cookie `onebase_session` через
+`OB_SESSION_COOKIE`. Подробности — [`loadtest/README.md`](../loadtest/README.md).
+
+**Как попробовать.**
+
+```bash
+docker compose -f loadtest/docker-compose.yml up -d --build
+go run ./loadtest/seed -url http://localhost:8080 -out loadtest/seed/counterparties.json
+mkdir -p loadtest/reports
+docker compose -f loadtest/docker-compose.yml run --rm --service-ports \
+  -e K6_WEB_DASHBOARD=true \
+  -e K6_WEB_DASHBOARD_HOST=0.0.0.0 \
+  -e K6_WEB_DASHBOARD_EXPORT=/reports/post_document.html \
+  k6 run /scripts/scenarios/post_document.js
+```
+
+Во время прогона откройте `http://localhost:5665`; после завершения смотрите
+`loadtest/reports/post_document.html`.
+
 ## Hot-reload конфигурации
 <!-- status: stable -->
 

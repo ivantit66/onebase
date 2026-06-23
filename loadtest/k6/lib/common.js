@@ -1,29 +1,36 @@
 // Общие хелперы k6-сценариев onebase.
 //
 // Аутентификация: проще всего гонять нагрузку по базе БЕЗ пользователей —
-// тогда onebase пускает анонимно и токен не нужен. Если в базе есть юзеры,
-// передайте сессионный токен через переменную окружения OB_TK — он будет
-// добавляться к каждому запросу как ?_tk=… (см. internal/auth/middleware.go).
+// тогда onebase пускает анонимно и cookie не нужен. Если в базе есть юзеры,
+// передайте значение cookie onebase_session через OB_SESSION_COOKIE.
 
 import http from 'k6/http';
 import { check } from 'k6';
 
 export const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
-const TOKEN = __ENV.OB_TK || '';
+const SESSION_COOKIE = __ENV.OB_SESSION_COOKIE || '';
 
-// u строит абсолютный URL и при необходимости дописывает токен сессии.
+// u строит абсолютный URL. Сессионный токен в query (?_tk=) больше не
+// принимается приложением; auth передается только cookie onebase_session.
 export function u(path) {
-  const full = `${BASE_URL}${path}`;
-  if (!TOKEN) return full;
-  return full + (path.includes('?') ? '&' : '?') + '_tk=' + encodeURIComponent(TOKEN);
+  return `${BASE_URL}${path}`;
 }
 
-// Имена сущностей эталонной конфигурации examples/simple-erp. Под другой конфиг
+function requestOptions(headers = {}) {
+  const h = Object.assign({}, headers);
+  if (SESSION_COOKIE) {
+    h.Cookie = `onebase_session=${SESSION_COOKIE}`;
+  }
+  return { headers: h };
+}
+
+// Имена сущностей эталонной конфигурации examples/minimal. Под другой конфиг
 // поменяйте здесь — в URL пойдёт encodeURIComponent (кириллица допустима).
 export const CATALOG_COUNTERPARTY = encodeURIComponent('Контрагент');
 export const DOCUMENT_POSTING = encodeURIComponent('Поступление');
 
-export const JSON_HEADERS = { headers: { 'Content-Type': 'application/json' } };
+export const JSON_HEADERS = requestOptions({ 'Content-Type': 'application/json' });
+export const GET_HEADERS = requestOptions();
 
 // createCounterparty создаёт контрагента, возвращает id или null.
 export function createCounterparty(suffix) {
