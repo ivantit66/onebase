@@ -39,6 +39,7 @@ type editOpResult struct {
 	YAML       string
 	CanvasHTML string
 	SelectedID string
+	Model      map[string]canvasElementInfo
 }
 
 // boolProps — свойства элемента, значение которых интерпретируется как bool
@@ -77,6 +78,11 @@ func applyEditOp(yamlSrc []byte, req editOpRequest) (editOpResult, error) {
 
 	var selected string
 	switch req.Op {
+	case "render":
+		// Перезагрузка холста из текущего YAML без мутаций (направление
+		// YAML→холст). Выделение сохраняется по присланному node-id.
+		selected = req.Node
+
 	case "setProp":
 		if req.Key == "" {
 			return editOpResult{}, fmt.Errorf("setProp: пустой key")
@@ -125,16 +131,21 @@ func applyEditOp(yamlSrc []byte, req editOpRequest) (editOpResult, error) {
 	if err != nil {
 		return editOpResult{}, err
 	}
-	return editOpResult{YAML: string(out), CanvasHTML: canvas, SelectedID: selected}, nil
+	model, err := canvasModel(doc)
+	if err != nil {
+		return editOpResult{}, err
+	}
+	return editOpResult{YAML: string(out), CanvasHTML: canvas, SelectedID: selected, Model: model}, nil
 }
 
 // editOpResponse — JSON-ответ эндпоинта.
 type editOpResponse struct {
-	OK         bool     `json:"ok"`
-	YAML       string   `json:"yaml,omitempty"`
-	CanvasHTML string   `json:"canvasHtml,omitempty"`
-	SelectedID string   `json:"selectedId,omitempty"`
-	Errors     []string `json:"errors,omitempty"`
+	OK         bool                         `json:"ok"`
+	YAML       string                       `json:"yaml,omitempty"`
+	CanvasHTML string                       `json:"canvasHtml,omitempty"`
+	SelectedID string                       `json:"selectedId,omitempty"`
+	Model      map[string]canvasElementInfo `json:"model,omitempty"`
+	Errors     []string                     `json:"errors,omitempty"`
 }
 
 // configuratorFormsEditOp — POST: применяет визуальную команду к YAML формы и
@@ -172,5 +183,6 @@ func (h *handler) configuratorFormsEditOp(w http.ResponseWriter, r *http.Request
 		YAML:       res.YAML,
 		CanvasHTML: res.CanvasHTML,
 		SelectedID: res.SelectedID,
+		Model:      res.Model,
 	})
 }

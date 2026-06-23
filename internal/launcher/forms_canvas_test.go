@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -103,6 +104,39 @@ func TestRenderFormCanvas_Selection(t *testing.T) {
 	tagEnd := strings.Index(out[tagStart:], ">") + tagStart
 	if !strings.Contains(out[tagStart:tagEnd], "fc-selected") {
 		t.Errorf("fc-selected не на узле children.1:\n%s", out[tagStart:tagEnd])
+	}
+}
+
+// Страница редактора должна разворачивать клиент конструктора: вкладку
+// «Конструктор», холст, панель свойств и проводку к /forms/edit-op (#164).
+func TestFormsEditor_RendersDesignerScaffold(t *testing.T) {
+	data := &configuratorData{
+		Base: &Base{ID: "test-base"},
+		EditingForm: &cfgManagedForm{
+			Entity: "Контрагент",
+			Name:   "ФормаОбъекта",
+			Kind:   "object",
+			YAML:   "schema: onebase.form/v1\nform:\n  name: ФормаОбъекта\n  kind: object\n  entity: Контрагент\n",
+		},
+	}
+	var buf bytes.Buffer
+	if err := formsTmpl.ExecuteTemplate(&buf, "forms-editor", data); err != nil {
+		t.Fatalf("ExecuteTemplate: %v", err)
+	}
+	page := buf.String()
+	for _, want := range []string{
+		`id="canvas-host"`,
+		`id="prop-panel"`,
+		`data-rp="design"`,
+		`switchRightPane(`,
+		`/configurator/forms/edit-op`,
+		`function reloadCanvas`,
+		`op: 'insert'`,
+		`var _entity = "Контрагент"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("в странице редактора нет %q", want)
+		}
 	}
 }
 

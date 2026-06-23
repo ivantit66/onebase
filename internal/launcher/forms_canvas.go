@@ -131,6 +131,54 @@ func renderCanvasElement(buf *bytes.Buffer, en *formdoc.ElementNode, selectedID 
 	}
 }
 
+// canvasElementInfo — редактируемые поля элемента для панели свойств клиента.
+// Плоская карта node-id → info отдаётся вместе с холстом, чтобы клик по элементу
+// открывал панель без повторного парсинга YAML в браузере.
+type canvasElementInfo struct {
+	NodeID    string `json:"nodeId"`
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	TitleRU   string `json:"titleRu"`
+	DataPath  string `json:"dataPath"`
+	Required  bool   `json:"required"`
+	ReadOnly  bool   `json:"readonly"`
+	Hint      string `json:"hint"`
+	Container bool   `json:"container"`
+}
+
+// canvasModel разворачивает дерево формы в плоскую карту node-id → редактируемые
+// поля — источник данных для панели свойств визуального конструктора (#164).
+func canvasModel(doc *formdoc.Doc) (map[string]canvasElementInfo, error) {
+	els, err := doc.Elements()
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]canvasElementInfo)
+	var walk func(ens []*formdoc.ElementNode)
+	walk = func(ens []*formdoc.ElementNode) {
+		for _, en := range ens {
+			el := en.El
+			info := canvasElementInfo{
+				NodeID:    en.NodeID,
+				Kind:      string(el.Kind),
+				Name:      el.Name,
+				DataPath:  el.DataPath,
+				Required:  el.Required,
+				ReadOnly:  el.ReadOnly,
+				Hint:      el.Hint,
+				Container: el.IsContainer(),
+			}
+			if el.TitleMap != nil {
+				info.TitleRU = el.TitleMap["ru"]
+			}
+			m[en.NodeID] = info
+			walk(en.Children)
+		}
+	}
+	walk(els)
+	return m, nil
+}
+
 // canvasTitle выбирает отображаемый заголовок элемента: ru-локаль → legacy
 // Title → имя. Совпадает с приоритетом read-only предпросмотра.
 func canvasTitle(name string, titleMap map[string]string, legacy string) string {

@@ -94,6 +94,28 @@ func TestApplyEditOp_Errors(t *testing.T) {
 	}
 }
 
+// render — перезагрузка холста из YAML без мутаций: YAML не меняется, холст и
+// модель свойств отдаются, выделение сохраняется по присланному node-id.
+func TestApplyEditOp_Render(t *testing.T) {
+	res, err := applyEditOp([]byte(canvasSample), editOpRequest{Op: "render", Node: "elements.0.children.0"})
+	if err != nil {
+		t.Fatalf("applyEditOp render: %v", err)
+	}
+	if res.SelectedID != "elements.0.children.0" {
+		t.Errorf("render не сохранил выделение: %q", res.SelectedID)
+	}
+	info, ok := res.Model["elements.0.children.0"]
+	if !ok {
+		t.Fatalf("в модели нет элемента: %v", res.Model)
+	}
+	if info.DataPath != "Объект.Номер" || !info.Required {
+		t.Errorf("модель свойств неверна: %+v", info)
+	}
+	if g := res.Model["elements.0"]; !g.Container {
+		t.Errorf("группа должна быть container: %+v", g)
+	}
+}
+
 // Round-trip эндпоинта сохраняет ручной комментарий пользователя — ключевое
 // требование #164 (правка свойства не затирает аннотации).
 func TestApplyEditOp_PreservesComments(t *testing.T) {
