@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ivantit66/onebase/internal/i18n"
 	"github.com/ivantit66/onebase/internal/metadata"
 )
 
@@ -142,7 +143,11 @@ func renderCfgMain(t *testing.T, data *configuratorData) string {
 // вкладках. Раннее восстановление состояния (класс cfg-titles-on из localStorage)
 // присутствует в head, чтобы поля не «прыгали» при загрузке.
 func TestTitlesToggle_TopbarButton(t *testing.T) {
-	tree := renderCfgMain(t, richCfgData("tree"))
+	// Кнопка есть на «Дерево», когда в конфигурации настроены языки интерфейса
+	// (только тогда есть что переводить).
+	withLangs := richCfgData("tree")
+	withLangs.AvailableLangs = []i18n.Lang{{Code: "en", Native: "English"}}
+	tree := renderCfgMain(t, withLangs)
 	if !strings.Contains(tree, `id="cfg-titles-toggle"`) {
 		t.Error("на вкладке «Дерево» нет кнопки режима переводов")
 	}
@@ -152,7 +157,16 @@ func TestTitlesToggle_TopbarButton(t *testing.T) {
 	if !strings.Contains(tree, "cfg-titles-on") || !strings.Contains(tree, "cfgTitlesOn") {
 		t.Error("в head нет раннего восстановления режима переводов из localStorage")
 	}
-	if files := renderCfgMain(t, richCfgData("files")); strings.Contains(files, `id="cfg-titles-toggle"`) {
+
+	// Нет языков интерфейса → переводить нечего, кнопки быть не должно.
+	if noLangs := renderCfgMain(t, richCfgData("tree")); strings.Contains(noLangs, `id="cfg-titles-toggle"`) {
+		t.Error("кнопка режима переводов не должна показываться без языков интерфейса")
+	}
+
+	// Вне «Дерево» кнопки нет даже при наличии языков.
+	files := richCfgData("files")
+	files.AvailableLangs = []i18n.Lang{{Code: "en", Native: "English"}}
+	if out := renderCfgMain(t, files); strings.Contains(out, `id="cfg-titles-toggle"`) {
 		t.Error("кнопка режима переводов не должна показываться вне «Дерева»")
 	}
 }

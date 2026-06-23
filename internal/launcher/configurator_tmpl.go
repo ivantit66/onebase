@@ -181,7 +181,7 @@ try{if(localStorage.getItem('cfgTitlesOn')==='1')document.documentElement.classL
   <span style="font-size:11px;color:#7aa8d8">{{.DSNMasked}} · :{{.Base.Port}} · {{t $.Lang "платформа"}} {{.PlatformVer}}</span>
   <button id="cfg-save-topbar" onclick="cfgSaveActive()" title="{{t $.Lang "Сохранить (Ctrl+S)"}}" class="cfg-save-topbar">&#128190; {{t $.Lang "Сохранить"}}</button>
   <button onclick="launchEnterprise()" title="{{t $.Lang "Запустить предприятие"}}" class="run-enterprise-btn"><svg viewBox="0 0 24 24" fill="#333"><polygon points="6,3 20,12 6,21"/></svg></button>
-  {{if eq .Tab "tree"}}<button id="cfg-titles-toggle" class="dbg-topbar-btn" onclick="cfgTitlesToggle()" title="{{t $.Lang "Показать/скрыть поля переводов у всех объектов"}}">&#127760; {{t $.Lang "Переводы"}}</button>{{end}}
+  {{if and (eq .Tab "tree") $.AvailableLangs}}<button id="cfg-titles-toggle" class="dbg-topbar-btn" onclick="cfgTitlesToggle()" title="{{t $.Lang "Показать/скрыть поля переводов у всех объектов"}}">&#127760; {{t $.Lang "Переводы"}}</button>{{end}}
   <button id="dbg-toggle" class="dbg-topbar-btn" onclick="dbgToggle()">&#128027; {{t $.Lang "Отладка: ВЫКЛ"}}</button>
   <button onclick="toggleSyntaxRef()" title="{{t $.Lang "Синтакс-помощник"}} (F1)" class="dbg-topbar-btn">&#10067; {{t $.Lang "Справка"}}</button>
   <span id="monaco-status" style="font-size:9px;color:#94a3b8">Monaco:...</span>
