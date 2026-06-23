@@ -144,6 +144,204 @@ func TestMove_ChildToTopLevel(t *testing.T) {
 	}
 }
 
+// DeleteElement вырезает узел из родительского контейнера; сосед и его
+// inline-комментарий сохраняются, round-trip остаётся валидным (follow-up #164).
+func TestDeleteElement_RemovesNodeKeepsSiblings(t *testing.T) {
+	doc, err := Load([]byte(elemSample))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := doc.DeleteElement("elements.0.children.0"); err != nil {
+		t.Fatalf("DeleteElement: %v", err)
+	}
+	els, _ := doc.Elements()
+	if len(els[0].Children) != 1 {
+		t.Fatalf("ожидался 1 ребёнок после удаления, получено %d", len(els[0].Children))
+	}
+	if els[0].Children[0].El.DataPath != "Объект.Дата" {
+		t.Errorf("остался не тот ребёнок: %+v", els[0].Children[0].El)
+	}
+	out, err := doc.Bytes()
+	if err != nil {
+		t.Fatalf("Bytes: %v", err)
+	}
+	got := string(out)
+	if strings.Contains(got, "Объект.Номер") {
+		t.Errorf("удалённый элемент остался в YAML:\n%s", got)
+	}
+	if !strings.Contains(got, "# дата звонка") {
+		t.Errorf("потерян inline-комментарий соседа:\n%s", got)
+	}
+}
+
+// DeleteElement контейнера удаляет его целиком вместе с детьми.
+func TestDeleteElement_ContainerWithChildren(t *testing.T) {
+	doc, _ := Load([]byte(elemSample))
+	if err := doc.DeleteElement("elements.0"); err != nil {
+		t.Fatalf("DeleteElement: %v", err)
+	}
+	els, _ := doc.Elements()
+	if len(els) != 0 {
+		t.Fatalf("ожидалось 0 верхних элементов, получено %d", len(els))
+	}
+	out, _ := doc.Bytes()
+	if strings.Contains(string(out), "ПолеНомер") || strings.Contains(string(out), "Группа1") {
+		t.Errorf("дети удалённого контейнера остались в YAML:\n%s", out)
+	}
+}
+
+// DeleteElement по индексу вне диапазона и по node-id без родителя — ошибка.
+func TestDeleteElement_Errors(t *testing.T) {
+	doc, _ := Load([]byte(elemSample))
+	if err := doc.DeleteElement("elements.5"); err == nil {
+		t.Error("ожидалась ошибка для индекса вне диапазона")
+	}
+	if err := doc.DeleteElement("elements"); err == nil {
+		t.Error("ожидалась ошибка для node-id без родителя")
+	}
+}
+
+// DeleteProp удаляет вложенный ключ (events.Нажатие), не трогая соседние ключи
+// и комментарии (привязка событий конструктора, follow-up #164 batch B1).
+func TestDeleteProp_NestedEventKeepsSiblings(t *testing.T) {
+	src := `schema: onebase.form/v1
+form:
+  name: ФормаОбъекта
+  kind: object
+  entity: Звонок
+elements:
+  - kind: Кнопка
+    name: КнопкаОК   # основная кнопка
+    events:
+      Нажатие: Обработать
+      ПриИзменении: Другое
+`
+	doc, err := Load([]byte(src))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := doc.DeleteProp("elements.0", "events.Нажатие"); err != nil {
+		t.Fatalf("DeleteProp: %v", err)
+	}
+	out, _ := doc.Bytes()
+	got := string(out)
+	if strings.Contains(got, "Нажатие: Обработать") {
+		t.Errorf("ключ Нажатие не удалён:\n%s", got)
+	}
+	if !strings.Contains(got, "ПриИзменении: Другое") {
+		t.Errorf("потерян соседний ключ события:\n%s", got)
+	}
+	if !strings.Contains(got, "# основная кнопка") {
+		t.Errorf("потерян inline-комментарий:\n%s", got)
+	}
+	// Обратное декодирование: Нажатие исчезло, ПриИзменении осталось.
+	els, _ := doc.Elements()
+	h := els[0].El.Handlers
+	if _, ok := h["Нажатие"]; ok {
+		t.Errorf("Нажатие осталось в Handlers: %v", h)
+	}
+	if h["ПриИзменении"] != "Другое" {
+		t.Errorf("ПриИзменении потеряно: %v", h)
+	}
+}
+
+// DeleteProp отсутствующего ключа (и через отсутствующий промежуточный узел) —
+// no-op, не ошибка.
+func TestDeleteProp_MissingIsNoop(t *testing.T) {
+	doc, _ := Load([]byte(elemSample))
+	if err := doc.DeleteProp("elements.0.children.0", "events.Нажатие"); err != nil {
+		t.Errorf("удаление отсутствующего ключа должно быть no-op, got %v", err)
+	}
+	if err := doc.DeleteProp("elements.0.children.0", "hint"); err != nil {
+		t.Errorf("удаление отсутствующего листа должно быть no-op, got %v", err)
+	}
+}
+
+// SetTopProp/DeleteTopProp правят верхний уровень документа (события формы лежат
+// рядом с form/elements, batch B2).
+func TestTopProp_FormEvents(t *testing.T) {
+	doc, _ := Load([]byte(elemSample))
+	if err := doc.SetTopProp("events.ПриОткрытии", "ПриОткрытииФормы"); err != nil {
+		t.Fatalf("SetTopProp: %v", err)
+	}
+	out, _ := doc.Bytes()
+	if !strings.Contains(string(out), "ПриОткрытии: ПриОткрытииФормы") {
+		t.Errorf("событие формы не записано на верхний уровень:\n%s", out)
+	}
+	meta, err := doc.FormMeta()
+	if err != nil {
+		t.Fatalf("FormMeta: %v", err)
+	}
+	if meta.Events["ПриОткрытии"] != "ПриОткрытииФормы" {
+		t.Errorf("FormMeta.Events = %v", meta.Events)
+	}
+	if err := doc.DeleteTopProp("events.ПриОткрытии"); err != nil {
+		t.Fatalf("DeleteTopProp: %v", err)
+	}
+	out, _ = doc.Bytes()
+	if strings.Contains(string(out), "ПриОткрытииФормы") {
+		t.Errorf("событие формы не удалено:\n%s", out)
+	}
+}
+
+// SetOptions пишет набор значений целиком; число остаётся числом, строка —
+// строкой; повторный вызов заменяет; пустой список удаляет ключ (batch C1).
+func TestSetOptions_RoundTrip(t *testing.T) {
+	src := `schema: onebase.form/v1
+form:
+  name: ФормаОбъекта
+  kind: object
+  entity: Заказ
+elements:
+  - kind: Переключатель
+    name: Приоритет
+    data_path: Объект.Приоритет
+`
+	doc, err := Load([]byte(src))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	opts := []Option{
+		{Value: 1, Label: map[string]string{"ru": "Низкий"}},
+		{Value: 2, Label: map[string]string{"ru": "Высокий"}},
+	}
+	if err := doc.SetOptions("elements.0", opts); err != nil {
+		t.Fatalf("SetOptions: %v", err)
+	}
+	out, _ := doc.Bytes()
+	got := string(out)
+	if !strings.Contains(got, "value: 1") || strings.Contains(got, `value: "1"`) {
+		t.Errorf("числовое значение опции должно быть числом:\n%s", got)
+	}
+	if !strings.Contains(got, "Высокий") {
+		t.Errorf("представление опции не записано:\n%s", got)
+	}
+	// Декодируется в FormElement.Options.
+	els, _ := doc.Elements()
+	if n := len(els[0].El.Options); n != 2 {
+		t.Fatalf("ожидалось 2 опции, получено %d", n)
+	}
+	if els[0].El.Options[1].Label() != "Высокий" || els[0].El.Options[1].ValueStr() != "2" {
+		t.Errorf("опция декодирована неверно: %+v", els[0].El.Options[1])
+	}
+	// Повторный вызов заменяет, а не дублирует.
+	if err := doc.SetOptions("elements.0", []Option{{Value: "X"}}); err != nil {
+		t.Fatalf("SetOptions replace: %v", err)
+	}
+	els, _ = doc.Elements()
+	if len(els[0].El.Options) != 1 {
+		t.Errorf("повторный SetOptions не заменил набор: %+v", els[0].El.Options)
+	}
+	// Пустой список удаляет ключ options.
+	if err := doc.SetOptions("elements.0", nil); err != nil {
+		t.Fatalf("SetOptions empty: %v", err)
+	}
+	out, _ = doc.Bytes()
+	if strings.Contains(string(out), "options:") {
+		t.Errorf("пустой набор должен удалять ключ options:\n%s", out)
+	}
+}
+
 // Move не должен позволять переносить узел внутрь собственного поддерева:
 // yaml.Node хранит указатели, и такой перенос создал бы цикл, который нельзя
 // безопасно сериализовать обратно в YAML.

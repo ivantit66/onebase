@@ -28,8 +28,21 @@ func (d *Doc) SetProp(nodeID, key string, value any) error {
 	if err != nil {
 		return err
 	}
-	if m.Kind != yaml.MappingNode {
-		return fmt.Errorf("formdoc: node-id %q не mapping-узел", nodeID)
+	return setPropOn(m, key, value)
+}
+
+// SetTopProp задаёт свойство в верхнем mapping-узле документа (корневые блоки
+// формы: events/actions уровня формы лежат рядом с form/elements, а не внутри
+// form — follow-up #164 batch B2/B3).
+func (d *Doc) SetTopProp(key string, value any) error {
+	return setPropOn(d.topMapping(), key, value)
+}
+
+// setPropOn — общая логика SetProp/SetTopProp: вложенный ключ через точку,
+// промежуточные mapping-узлы создаются, лист пишется in-place.
+func setPropOn(m *yaml.Node, key string, value any) error {
+	if m == nil || m.Kind != yaml.MappingNode {
+		return fmt.Errorf("formdoc: ключ %q: цель не mapping-узел", key)
 	}
 	keys := strings.Split(key, ".")
 	for _, k := range keys[:len(keys)-1] {
@@ -44,6 +57,48 @@ func (d *Doc) SetProp(nodeID, key string, value any) error {
 		m = v
 	}
 	return setMappingScalar(m, keys[len(keys)-1], value)
+}
+
+// DeleteProp удаляет скалярное свойство по node-id. Ключ может быть вложенным
+// ("events.Нажатие") — навигация идёт по существующим промежуточным
+// mapping-узлам; отсутствующий ключ (или промежуточный узел) — no-op, не
+// ошибка. Соседние ключи и их комментарии не затрагиваются (хирургическая
+// правка, follow-up #164 batch B1).
+func (d *Doc) DeleteProp(nodeID, key string) error {
+	m, err := d.NodeByID(nodeID)
+	if err != nil {
+		return err
+	}
+	return deletePropOn(m, key)
+}
+
+// DeleteTopProp удаляет свойство из верхнего mapping-узла документа (события/
+// действия уровня формы — follow-up #164 batch B2/B3).
+func (d *Doc) DeleteTopProp(key string) error {
+	return deletePropOn(d.topMapping(), key)
+}
+
+// deletePropOn — общая логика DeleteProp/DeleteTopProp.
+func deletePropOn(m *yaml.Node, key string) error {
+	if m == nil || m.Kind != yaml.MappingNode {
+		return fmt.Errorf("formdoc: ключ %q: цель не mapping-узел", key)
+	}
+	keys := strings.Split(key, ".")
+	for _, k := range keys[:len(keys)-1] {
+		v := mappingValue(m, k)
+		if v == nil || v.Kind != yaml.MappingNode {
+			return nil // промежуточного узла нет — удалять нечего
+		}
+		m = v
+	}
+	leaf := keys[len(keys)-1]
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == leaf {
+			m.Content = append(m.Content[:i], m.Content[i+2:]...)
+			return nil
+		}
+	}
+	return nil // ключа нет — no-op
 }
 
 // setMappingScalar заменяет или дописывает скалярное значение по ключу.
@@ -216,5 +271,74 @@ func (d *Doc) Move(nodeID, newParentID string, index int) error {
 		index--
 	}
 	insertIntoSeq(dstSeq, index, node)
+	return nil
+}
+
+// DeleteElement вырезает элемент nodeID из его родительского контейнера. Узел
+// удаляется целиком — контейнер (группа/страница) уходит вместе со всеми детьми.
+// Хирургическая правка: комментарии и порядок соседних элементов не затрагиваются
+// (follow-up #164, слайс B1).
+func (d *Doc) DeleteElement(nodeID string) error {
+	seq, idx, _, err := d.locate(nodeID)
+	if err != nil {
+		return err
+	}
+	seq.Content = append(seq.Content[:idx], seq.Content[idx+1:]...)
+	return nil
+}
+
+// Option — пара значение/представление набора значений Переключателя/ПолеСписка
+// (follow-up #164 batch C1). Value — число или строка (под тип поля), Label —
+// локализованное представление (ключи ru/en/...).
+type Option struct {
+	Value any
+	Label map[string]string
+}
+
+// SetOptions переписывает блок options: элемента целиком (узлы строятся заново).
+// Опции — не дети элемента (children), поэтому правятся отдельной операцией, а
+// не Insert/Delete. Пустой список удаляет ключ options. Соседние ключи элемента
+// (kind/name/data_path/...) и их комментарии не затрагиваются.
+func (d *Doc) SetOptions(nodeID string, opts []Option) error {
+	m, err := d.NodeByID(nodeID)
+	if err != nil {
+		return err
+	}
+	if m.Kind != yaml.MappingNode {
+		return fmt.Errorf("formdoc: node-id %q не mapping-узел", nodeID)
+	}
+	if len(opts) == 0 {
+		for i := 0; i+1 < len(m.Content); i += 2 {
+			if m.Content[i].Value == "options" {
+				m.Content = append(m.Content[:i], m.Content[i+2:]...)
+				return nil
+			}
+		}
+		return nil
+	}
+	seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	for _, o := range opts {
+		om := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		vn := &yaml.Node{}
+		if err := vn.Encode(o.Value); err != nil {
+			return fmt.Errorf("formdoc: кодирование value опции: %w", err)
+		}
+		om.Content = append(om.Content, scalarKey("value"), vn)
+		if len(o.Label) > 0 {
+			ln := &yaml.Node{}
+			if err := ln.Encode(o.Label); err != nil {
+				return fmt.Errorf("formdoc: кодирование label опции: %w", err)
+			}
+			om.Content = append(om.Content, scalarKey("label"), ln)
+		}
+		seq.Content = append(seq.Content, om)
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == "options" {
+			m.Content[i+1] = seq
+			return nil
+		}
+	}
+	m.Content = append(m.Content, scalarKey("options"), seq)
 	return nil
 }

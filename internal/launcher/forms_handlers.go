@@ -231,6 +231,8 @@ func (h *handler) configuratorFormsList(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	data := &configuratorData{Base: b, ManagedForms: forms, Lang: resolveLang(r)}
+	// Сохранить узел-источник для back-link после delete-редиректа (follow-up #164).
+	data.FormEditFrom = strings.TrimSpace(r.URL.Query().Get("from"))
 	// Подсветить флаги после save/delete-редиректа.
 	if q := r.URL.Query().Get("saved"); q != "" {
 		data.FieldsSaved = true
@@ -271,8 +273,10 @@ func (h *handler) configuratorFormsEdit(w http.ResponseWriter, r *http.Request) 
 	// справочника/документа либо параметры обработки/отчёта; у обработки нет
 	// «Наименования».
 	var attrs []formScaffoldAttr
+	var tableParts []formTablePart
 	if proj, perr := h.loadProjectFor(r.Context(), b); perr == nil {
 		attrs = objectScaffoldAttrs(proj, entity)
+		tableParts = objectScaffoldTableParts(proj, entity)
 		proj.Close()
 	}
 
@@ -286,7 +290,10 @@ func (h *handler) configuratorFormsEdit(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	data := &configuratorData{Base: b, EditingForm: form, EditingFormAttrs: attrs, Lang: resolveLang(r)}
+	data := &configuratorData{Base: b, EditingForm: form, EditingFormAttrs: attrs, EditingFormTableParts: tableParts, Lang: resolveLang(r)}
+	// Узел дерева, из которого открыли редактор — для back-link «← В конфигуратор»
+	// и проброса дальше в save/delete-формы (follow-up #164, слайс A).
+	data.FormEditFrom = strings.TrimSpace(r.URL.Query().Get("from"))
 	if q := r.URL.Query().Get("saved"); q != "" {
 		data.FieldsSaved = true
 		data.FieldsSavedEntity = q
@@ -301,8 +308,9 @@ func (h *handler) configuratorFormsEdit(w http.ResponseWriter, r *http.Request) 
 // formScaffoldAttr — реквизит объекта (поле справочника/документа либо параметр
 // обработки/отчёта), из которого строится заготовка новой формы.
 type formScaffoldAttr struct {
-	Name  string
-	Title string // синоним/подпись; пустой → подставляется Name
+	Name  string `json:"name"`
+	Title string `json:"title"`          // синоним/подпись; пустой → подставляется Name
+	Type  string `json:"type,omitempty"` // тип поля (string/date/bool/reference:…/enum:…) — для «умного» дропа реквизита
 }
 
 // objectScaffoldAttrs возвращает реквизиты объекта <entity> для заготовки новой
@@ -318,7 +326,7 @@ func objectScaffoldAttrs(proj *project.Project, entity string) []formScaffoldAtt
 		if strings.EqualFold(e.Name, entity) {
 			attrs := make([]formScaffoldAttr, 0, len(e.Fields))
 			for _, f := range e.Fields {
-				attrs = append(attrs, formScaffoldAttr{Name: f.Name, Title: f.Title})
+				attrs = append(attrs, formScaffoldAttr{Name: f.Name, Title: f.Title, Type: string(f.Type)})
 			}
 			return attrs
 		}
@@ -340,6 +348,38 @@ func objectScaffoldAttrs(proj *project.Project, entity string) []formScaffoldAtt
 			}
 			return attrs
 		}
+	}
+	return nil
+}
+
+// formTablePart — табличная часть объекта с составом колонок для палитры ТЧ на
+// холсте (drop вставляет ТабличнуюЧасть) и редактора состава колонок (follow-up
+// #164, слайсы D1/D2).
+type formTablePart struct {
+	Name    string             `json:"name"`
+	Title   string             `json:"title"`
+	Columns []formScaffoldAttr `json:"columns"`
+}
+
+// objectScaffoldTableParts возвращает табличные части справочника/документа
+// <entity> с их полями (колонками). Только сущности — у обработок/отчётов ТЧ нет.
+func objectScaffoldTableParts(proj *project.Project, entity string) []formTablePart {
+	if proj == nil || entity == "" {
+		return nil
+	}
+	for _, e := range proj.Entities {
+		if !strings.EqualFold(e.Name, entity) {
+			continue
+		}
+		tps := make([]formTablePart, 0, len(e.TableParts))
+		for _, tp := range e.TableParts {
+			cols := make([]formScaffoldAttr, 0, len(tp.Fields))
+			for _, f := range tp.Fields {
+				cols = append(cols, formScaffoldAttr{Name: f.Name, Title: f.Title})
+			}
+			tps = append(tps, formTablePart{Name: tp.Name, Title: tp.Title, Columns: cols})
+		}
+		return tps
 	}
 	return nil
 }
@@ -433,6 +473,9 @@ func (h *handler) configuratorFormsSave(w http.ResponseWriter, r *http.Request) 
 	// После сохранения — редирект на редактор с флагами, чтобы избежать
 	// повторного submit при F5 и подсветить статус.
 	target := fmt.Sprintf("/bases/%s/configurator/forms/edit?entity=%s&name=%s", b.ID, entity, name)
+	if from := strings.TrimSpace(r.FormValue("from")); from != "" {
+		target += "&from=" + from
+	}
 	if saveErr != nil {
 		target += "&err=" + saveErr.Error()
 	} else {
@@ -509,6 +552,10 @@ func (h *handler) configuratorFormsDelete(w http.ResponseWriter, r *http.Request
 		target += "?err=" + delErr.Error()
 	} else {
 		target += "?saved=Удалена форма " + entity + "." + name
+	}
+	// Сохранить узел-источник, чтобы back-link на списке форм вёл обратно (follow-up #164).
+	if from := strings.TrimSpace(r.FormValue("from")); from != "" {
+		target += "&from=" + from
 	}
 	http.Redirect(w, r, target, http.StatusSeeOther)
 }

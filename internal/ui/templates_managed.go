@@ -44,6 +44,13 @@ const tplManagedForm = `
       {{end}}
     {{end}}
   </div>
+{{else if eq (str $el.Kind) "Страница"}}
+  {{/* Отдельная страница вне набора СтраницыФормы (её можно добавить на холсте) —
+       рендерим как именованный блок с детьми, а не «рендеринг не реализован». */}}
+  <fieldset class="form-group-box" style="border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
+    {{if $el.TitleMap}}<legend style="font-weight:600;color:#475569;padding:0 6px;font-size:13px">{{fieldTitleRU $el.TitleMap $el.Name}}</legend>{{end}}
+    {{range $el.Children}}{{template "managed-element" (dict "El" . "Ctx" $ctx)}}{{end}}
+  </fieldset>
 {{else if eq (str $el.Kind) "ПолеВвода"}}
   {{$fn := dpField $el.DataPath}}
   {{$f := fieldByName $ctx.Entity $fn}}
@@ -300,6 +307,38 @@ const tplManagedForm = `
   <div class="form-group">
     <label>{{fieldTitleRU $el.TitleMap $fn}}{{if $el.Required}} <span style="color:#dc2626">*</span>{{end}}</label>
     <input type="date" name="{{$fn}}" value="{{if ge (len $dv) 10}}{{slice $dv 0 10}}{{else}}{{$dv}}{{end}}"{{if $el.ReadOnly}} readonly{{end}}{{if $hChg}} onchange="obFire('{{$el.Name}}','ПриИзменении')"{{end}}>
+  </div>
+{{else if eq (str $el.Kind) "Переключатель"}}
+  {{/* Поле с набором значений: радио-переключатель (по умолчанию) или список
+       (view: select). Для enum-поля значения берутся из перечисления
+       автоматически; иначе — из el.Options. Submit шлёт обычную пару name=поле,
+       значение приводится по типу поля в formToFields (план 71b, C1/C2). */}}
+  {{$fn := dpField $el.DataPath}}
+  {{$f := fieldByName $ctx.Entity $fn}}
+  {{$cur := index $ctx.Values $fn}}
+  {{$hChg := hasHandler $el "ПриИзменении"}}
+  {{$enum := and $f (isEnum (str $f.Type))}}
+  <div class="form-group">
+    <label>{{fieldTitleRU $el.TitleMap $fn}}{{if $el.Required}} <span style="color:#dc2626">*</span>{{end}}</label>
+    {{if eq $el.View "select"}}
+      <select name="{{$fn}}"{{if $el.ReadOnly}} disabled{{end}}{{if $hChg}} onchange="obFire('{{$el.Name}}','ПриИзменении')"{{end}}>
+        <option value="">— выбрать —</option>
+        {{if $enum}}
+          {{range index $ctx.EnumOptions $fn}}<option value="{{.Value}}" {{if eq .Value $cur}}selected{{end}}>{{.Label}}</option>{{end}}
+        {{else}}
+          {{range $el.Options}}<option value="{{.ValueStr}}" {{if eq .ValueStr $cur}}selected{{end}}>{{.Label}}</option>{{end}}
+        {{end}}
+      </select>
+    {{else}}
+      <div class="switch-options" style="display:flex;flex-wrap:wrap;gap:12px;padding:4px 0">
+        {{if $enum}}
+          {{range index $ctx.EnumOptions $fn}}<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="{{$fn}}" value="{{.Value}}"{{if eq .Value $cur}} checked{{end}}{{if $el.ReadOnly}} disabled{{end}}{{if $hChg}} onchange="obFire('{{$el.Name}}','ПриИзменении')"{{end}}> {{.Label}}</label>{{end}}
+        {{else}}
+          {{range $el.Options}}<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="{{$fn}}" value="{{.ValueStr}}"{{if eq .ValueStr $cur}} checked{{end}}{{if $el.ReadOnly}} disabled{{end}}{{if $hChg}} onchange="obFire('{{$el.Name}}','ПриИзменении')"{{end}}> {{.Label}}</label>{{end}}
+        {{end}}
+      </div>
+    {{end}}
+    {{if $el.Hint}}<small style="color:#94a3b8;font-size:11px">{{$el.Hint}}</small>{{end}}
   </div>
 {{else if eq (str $el.Kind) "СтраницаКоманднаяПанель"}}
   {{/* пропускаем — отрисовывается через toolbar в обвязке формы */}}

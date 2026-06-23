@@ -126,6 +126,13 @@ type FormElement struct {
 	// <select> с этими значениями, а выбор дёргает событие ПриИзменении.
 	Choices    []FormChoice `yaml:"choices,omitempty"`
 	UnknownXML []byte       `yaml:"unknown_xml,omitempty"` // экзотический XML, сохраняется как есть
+
+	// Набор значений Переключателя/ПолеСписка (план 71b, batch C1). Options —
+	// явный список значение→представление; для enum-поля рантайм берёт значения
+	// из перечисления автоматически и Options можно не задавать. View управляет
+	// представлением: "radio" (по умолчанию) или "select".
+	Options []FormOption `yaml:"options,omitempty"`
+	View    string       `yaml:"view,omitempty"`
 }
 
 // FormChoice — один пункт списка значений элемента ПолеСписка. Value хранится
@@ -147,6 +154,39 @@ func (c FormChoice) ChoiceLabel(lang string) string {
 		}
 	}
 	return c.Value
+}
+
+// FormOption — один элемент набора значений Переключателя/ПолеСписка (C1).
+// Value хранит значение под тип поля (число/строка); Label — локализованное
+// представление (ключ "ru" и т.п., как TitleMap у элементов).
+type FormOption struct {
+	Value  any               `yaml:"value"`
+	Labels map[string]string `yaml:"label,omitempty"`
+}
+
+// ValueStr возвращает значение опции как строку (для атрибута value у radio/
+// option и для сравнения с текущим значением формы, которое всегда строковое).
+func (o FormOption) ValueStr() string {
+	if o.Value == nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", o.Value)
+}
+
+// Label возвращает представление опции: ru-локаль → любая непустая локаль →
+// строковое значение как fallback.
+func (o FormOption) Label() string {
+	if o.Labels != nil {
+		if v := o.Labels["ru"]; v != "" {
+			return v
+		}
+		for _, v := range o.Labels {
+			if v != "" {
+				return v
+			}
+		}
+	}
+	return o.ValueStr()
 }
 
 // FormAction — переопределение стандартного действия формы объекта (issue #151).

@@ -53,6 +53,15 @@ func renderDropZone(buf *bytes.Buffer, parentID string, index int) {
 		html.EscapeString(parentID), index)
 }
 
+// renderPageDropZone — точка приёма страницы в набор СтраницыФормы: вставка
+// kind:Страница в контейнер pagesID на позицию index. Отдельный класс
+// fc-drop-page принимает только структурные элементы (страницы), чтобы реквизит
+// не попадал прямым ребёнком в Pages (follow-up #164, слайс C).
+func renderPageDropZone(buf *bytes.Buffer, pagesID string, index int) {
+	fmt.Fprintf(buf, `<div class="fc-drop-page" data-parent="%s" data-index="%d">+ страница</div>`,
+		html.EscapeString(pagesID), index)
+}
+
 // elWrapClass собирает классы обёртки элемента, добавляя fc-selected выбранному.
 func elWrapClass(base, nodeID, selectedID string) string {
 	cls := "fc-el " + base
@@ -81,8 +90,16 @@ func renderCanvasElement(buf *bytes.Buffer, en *formdoc.ElementNode, selectedID 
 	case metadata.FormElementPages:
 		fmt.Fprintf(buf, `<div class="%s" data-node-id="%s" data-kind="%s">`,
 			elWrapClass("fc-pages", id, selectedID), id, kind)
-		for _, p := range en.Children {
+		for i, p := range en.Children {
+			renderPageDropZone(buf, id, i)
 			if p == nil || p.El == nil {
+				continue
+			}
+			if p.El.Kind != metadata.FormElementPage {
+				// В набор страниц затесался не-Страница (ошибка структуры, напр.
+				// случайно брошенный СтраницыФормы) — рисуем обычным рендером,
+				// чтобы было видно, что это не вкладка, а не маскировать под неё.
+				renderCanvasElement(buf, p, selectedID)
 				continue
 			}
 			ptitle := html.EscapeString(canvasTitle(p.El.Name, p.El.TitleMap, p.El.Title))
@@ -91,6 +108,16 @@ func renderCanvasElement(buf *bytes.Buffer, en *formdoc.ElementNode, selectedID 
 			renderCanvasChildren(buf, p.NodeID, p.Children, selectedID)
 			buf.WriteString(`</div>`)
 		}
+		renderPageDropZone(buf, id, len(en.Children))
+		buf.WriteString(`</div>`)
+
+	case metadata.FormElementPage:
+		// Отдельная страница (вне набора СтраницыФормы — редкий случай) рисуется
+		// как блок-вкладка со своими детьми, а не как «неизвестный» элемент.
+		// Страницы внутри СтраницыФормы рендерит ветка Pages выше.
+		fmt.Fprintf(buf, `<div class="%s" data-node-id="%s" data-kind="%s"><div class="fc-tab fc-pick">%s</div>`,
+			elWrapClass("fc-page", id, selectedID), id, kind, title)
+		renderCanvasChildren(buf, id, en.Children, selectedID)
 		buf.WriteString(`</div>`)
 
 	case metadata.FormElementField, metadata.FormElementDatePicker, metadata.FormElementInputList, metadata.FormElementFormField:
@@ -113,6 +140,19 @@ func renderCanvasElement(buf *bytes.Buffer, en *formdoc.ElementNode, selectedID 
 		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"><input type="checkbox" disabled> <span>%s</span></div>`,
 			elWrapClass("fc-check", id, selectedID), id, kind, title)
 
+	case metadata.FormElementSwitch:
+		// Переключатель: набор radio (или список) по Options/перечислению. Выбор
+		// кликом по обёртке; значения и представление правятся в панели свойств.
+		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"><label>%s</label><div class="fc-switch">`,
+			elWrapClass("fc-field", id, selectedID), id, kind, title)
+		if len(el.Options) == 0 {
+			buf.WriteString(`<span class="fc-cols-empty">значения по перечислению (или задайте в свойствах)</span>`)
+		}
+		for _, o := range el.Options {
+			fmt.Fprintf(buf, `<label class="fc-opt"><input type="radio" disabled> %s</label>`, html.EscapeString(o.Label()))
+		}
+		buf.WriteString(`</div></div>`)
+
 	case metadata.FormElementLabel:
 		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s">%s</div>`,
 			elWrapClass("fc-label", id, selectedID), id, kind, title)
@@ -121,9 +161,31 @@ func renderCanvasElement(buf *bytes.Buffer, en *formdoc.ElementNode, selectedID 
 		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"><button type="button" disabled>%s</button></div>`,
 			elWrapClass("fc-btn", id, selectedID), id, kind, title)
 
-	case metadata.FormElementTable, metadata.FormElementTablePart:
+	case metadata.FormElementPicture:
+		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"><div class="fc-pic">&#x1F5BC; %s</div></div>`,
+			elWrapClass("fc-pic-wrap", id, selectedID), id, kind, title)
+
+	case metadata.FormElementTable:
 		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"><div class="fc-tp">▦ %s</div></div>`,
 			elWrapClass("fc-table", id, selectedID), id, kind, title)
+
+	case metadata.FormElementTablePart:
+		// Заголовок ТЧ (выбирается кликом) + колонки-дети kind:Колонка, каждая со
+		// своим node-id, чтобы их можно было выбирать/удалять/переставлять и
+		// редактировать состав (follow-up #164, слайсы D1/D2).
+		fmt.Fprintf(buf, `<div class="%s" data-node-id="%s" data-kind="%s"><div class="fc-tp fc-pick">▦ %s</div><div class="fc-cols">`,
+			elWrapClass("fc-table", id, selectedID), id, kind, title)
+		if len(en.Children) == 0 {
+			buf.WriteString(`<span class="fc-cols-empty">колонки не выбраны</span>`)
+		}
+		for _, c := range en.Children {
+			if c == nil || c.El == nil {
+				continue
+			}
+			fmt.Fprintf(buf, `<span class="%s fc-pick" data-node-id="%s" data-kind="%s">%s</span>`,
+				elWrapClass("fc-col", c.NodeID, selectedID), c.NodeID, html.EscapeString(string(c.El.Kind)), html.EscapeString(columnLabel(c.El)))
+		}
+		buf.WriteString(`</div></div>`)
 
 	default:
 		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s">%s <span class="fc-kind">%s</span></div>`,
@@ -144,6 +206,24 @@ type canvasElementInfo struct {
 	ReadOnly  bool   `json:"readonly"`
 	Hint      string `json:"hint"`
 	Container bool   `json:"container"`
+	// Свойства batch A (выводятся в панель только там, где влияют на рантайм).
+	Mask     string `json:"mask"`     // ПолеВвода: маска ввода (pattern)
+	FileType bool   `json:"fileType"` // ПолеВвода: Type == "file" (файловое поле)
+	Picture  string `json:"picture"`  // ПолеКартинки: путь к картинке
+	Width    int    `json:"width"`    // ПолеКартинки: ширина
+	Height   int    `json:"height"`   // ПолеКартинки: высота
+	NoGrid   bool   `json:"noGrid"`   // ТабличнаяЧасть: простая таблица вместо SlickGrid
+	// События элемента (batch B1): имя события → имя процедуры в .form.os.
+	Events map[string]string `json:"events"`
+	// Набор значений Переключателя/ПолеСписка (batch C1).
+	Options []canvasOption `json:"options"`
+	View    string         `json:"view"` // radio|select
+}
+
+// canvasOption — значение набора Переключателя для редактора опций (C1).
+type canvasOption struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
 }
 
 // canvasModel разворачивает дерево формы в плоскую карту node-id → редактируемые
@@ -167,9 +247,25 @@ func canvasModel(doc *formdoc.Doc) (map[string]canvasElementInfo, error) {
 				ReadOnly:  el.ReadOnly,
 				Hint:      el.Hint,
 				Container: el.IsContainer(),
+				Mask:      el.Mask,
+				FileType:  el.Type == "file",
+				Picture:   el.Picture,
+				Width:     el.Width,
+				Height:    el.Height,
+				NoGrid:    el.NoGrid,
+				View:      el.View,
 			}
 			if el.TitleMap != nil {
 				info.TitleRU = el.TitleMap["ru"]
+			}
+			if len(el.Handlers) > 0 {
+				info.Events = make(map[string]string, len(el.Handlers))
+				for k, v := range el.Handlers {
+					info.Events[string(k)] = v
+				}
+			}
+			for _, o := range el.Options {
+				info.Options = append(info.Options, canvasOption{Value: o.ValueStr(), Label: o.Label()})
 			}
 			m[en.NodeID] = info
 			walk(en.Children)
@@ -177,6 +273,24 @@ func canvasModel(doc *formdoc.Doc) (map[string]canvasElementInfo, error) {
 	}
 	walk(els)
 	return m, nil
+}
+
+// columnLabel выбирает подпись колонки ТЧ для холста: ru-заголовок → поле
+// (field или последний сегмент data_path) → имя.
+func columnLabel(el *metadata.FormElement) string {
+	if el.TitleMap != nil && el.TitleMap["ru"] != "" {
+		return el.TitleMap["ru"]
+	}
+	if el.Title != "" {
+		return el.Title
+	}
+	if el.FieldName != "" {
+		return el.FieldName
+	}
+	if f := lastSegment(el.DataPath); f != "" {
+		return f
+	}
+	return el.Name
 }
 
 // canvasTitle выбирает отображаемый заголовок элемента: ru-локаль → legacy

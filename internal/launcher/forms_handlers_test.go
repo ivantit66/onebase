@@ -148,6 +148,84 @@ func TestRenderManagedFormPreview(t *testing.T) {
 	}
 }
 
+// Отдельная Страница (вне набора СтраницыФормы — её можно бросить на холст)
+// рисуется в предпросмотре именованным блоком со своими детьми, а не сообщением
+// «предпросмотр не реализован» (баг живого теста после batch B/C, #164).
+func TestRenderManagedFormPreview_StandalonePage(t *testing.T) {
+	fm := &metadata.FormModule{
+		EntityName: "Заказ",
+		Elements: []*metadata.FormElement{
+			{
+				Kind:     metadata.FormElementPage,
+				Name:     "Товары",
+				TitleMap: map[string]string{"ru": "Товары"},
+				Children: []*metadata.FormElement{
+					{
+						Kind:     metadata.FormElementField,
+						Name:     "ПолеКомментарий",
+						TitleMap: map[string]string{"ru": "Комментарий"},
+						DataPath: "Объект.Комментарий",
+					},
+				},
+			},
+		},
+	}
+	html := renderManagedFormPreview(fm)
+	if strings.Contains(html, "предпросмотр не реализован") {
+		t.Errorf("отдельная страница даёт «предпросмотр не реализован»:\n%s", html)
+	}
+	for _, s := range []string{"<legend>Товары</legend>", "Комментарий"} {
+		if !strings.Contains(html, s) {
+			t.Errorf("preview отдельной страницы не содержит %q:\n%s", s, html)
+		}
+	}
+}
+
+// Предпросмотр табличной части с выбранными колонками рисует реальную таблицу с
+// заголовками колонок, а не строку-заглушку (обратная связь по живому тесту #164).
+func TestRenderManagedFormPreview_TablePartColumns(t *testing.T) {
+	fm := &metadata.FormModule{
+		EntityName: "Заказ",
+		Elements: []*metadata.FormElement{
+			{
+				Kind: metadata.FormElementTablePart, Name: "ТабТовары",
+				TitleMap: map[string]string{"ru": "Товары"},
+				DataPath: "Объект.Товары",
+				Children: []*metadata.FormElement{
+					{Kind: metadata.FormElementColumn, Name: "КолНоменклатура",
+						TitleMap: map[string]string{"ru": "Номенклатура"}, DataPath: "Объект.Товары.Номенклатура"},
+					{Kind: metadata.FormElementColumn, Name: "КолКоличество",
+						TitleMap: map[string]string{"ru": "Количество"}, DataPath: "Объект.Товары.Количество"},
+				},
+			},
+		},
+	}
+	html := renderManagedFormPreview(fm)
+	if strings.Contains(html, "Предпросмотр упрощённый") {
+		t.Errorf("табличная часть осталась строкой-заглушкой:\n%s", html)
+	}
+	for _, s := range []string{"tp-prev-tbl", "<th>Номенклатура</th>", "<th>Количество</th>"} {
+		if !strings.Contains(html, s) {
+			t.Errorf("в предпросмотре ТЧ нет %q:\n%s", s, html)
+		}
+	}
+}
+
+// Табличная часть без выбранных колонок — подсказка, не таблица и не заглушка.
+func TestRenderManagedFormPreview_TablePartNoColumns(t *testing.T) {
+	fm := &metadata.FormModule{
+		EntityName: "Заказ",
+		Elements: []*metadata.FormElement{
+			{Kind: metadata.FormElementTablePart, Name: "ТабТовары",
+				TitleMap: map[string]string{"ru": "Товары"}, DataPath: "Объект.Товары"},
+		},
+	}
+	html := renderManagedFormPreview(fm)
+	if !strings.Contains(html, "Колонки не выбраны") {
+		t.Errorf("нет подсказки про невыбранные колонки:\n%s", html)
+	}
+}
+
 // previewErrorHTML экранирует сообщение и возвращает валидный HTML.
 func TestPreviewErrorHTML(t *testing.T) {
 	html := previewErrorHTML("parse yaml: line 5: bad <token>")
@@ -213,6 +291,38 @@ form:
 	// Прежний баг: HTML-escape-цепочки .replace(/&lt;/g,'<') не должно быть.
 	if strings.Contains(html, ".replace(/&lt;/g,'<')") {
 		t.Error("в шаблоне всё ещё используется старая цепочка HTML-escape replace — JS-escape должен идти через jsString")
+	}
+}
+
+// Регрессия (follow-up #164, слайс A): back-link «← В конфигуратор» терял
+// объект-источник и вёл в корень. С ?from=<nodeID> он обязан вести на узел
+// дерева, из которого открыли редактор; без from — фолбэк на e-<Entity>.
+func TestFormsEditor_BackLinkCarriesFrom(t *testing.T) {
+	base := &Base{ID: "b1"}
+	form := &cfgManagedForm{Entity: "Customer", Name: "ФормаОбъекта", Kind: "object", YAML: "schema: onebase.form/v1\n"}
+
+	// С from → back-link и hidden-поля сохраняют узел-источник.
+	var buf bytes.Buffer
+	withFrom := &configuratorData{Base: base, EditingForm: form, FormEditFrom: "proc-Загрузка"}
+	if err := formsTmpl.ExecuteTemplate(&buf, "forms-editor", withFrom); err != nil {
+		t.Fatalf("ExecuteTemplate: %v", err)
+	}
+	gotFrom := buf.String()
+	if !strings.Contains(gotFrom, "/bases/b1/configurator?tab=tree&select=proc-") {
+		t.Errorf("back-link не ведёт на from-узел.\n%s", extractContext(gotFrom, "В конфигуратор", 220))
+	}
+	if !strings.Contains(gotFrom, `name="from" value="proc-Загрузка"`) {
+		t.Error("в save/delete формах нет hidden-поля from")
+	}
+
+	// Без from → фолбэк на e-<Entity>.
+	buf.Reset()
+	noFrom := &configuratorData{Base: base, EditingForm: form}
+	if err := formsTmpl.ExecuteTemplate(&buf, "forms-editor", noFrom); err != nil {
+		t.Fatalf("ExecuteTemplate: %v", err)
+	}
+	if !strings.Contains(buf.String(), "/bases/b1/configurator?tab=tree&select=e-Customer") {
+		t.Errorf("фолбэк back-link не e-<Entity>.\n%s", extractContext(buf.String(), "В конфигуратор", 220))
 	}
 }
 
@@ -361,9 +471,53 @@ func TestFormsEditor_AttrPalette(t *testing.T) {
 			t.Errorf("в редакторе формы нет %q", want)
 		}
 	}
-	// У реквизита без Title подпись чипа = его имя (data-title=Name).
-	if !strings.Contains(html, `data-attr="Наименование" data-title="Наименование"`) {
+	// У реквизита без Title подпись чипа = его имя (data-title=Name). data-type
+	// пустой (в тесте тип не задан) — но присутствует между data-attr и data-title.
+	if !strings.Contains(html, `data-attr="Наименование" data-type="" data-title="Наименование"`) {
 		t.Errorf("ожидался data-title=Name для реквизита без синонима")
+	}
+}
+
+// Палитра табличных частей рендерится из EditingFormTableParts и несёт data-tp
+// для drag-drop вставки ТЧ (follow-up #164, слайс D1).
+func TestFormsEditor_TablePartPalette(t *testing.T) {
+	data := &configuratorData{
+		Base:        &Base{ID: "b"},
+		EditingForm: &cfgManagedForm{Entity: "Заказ", Name: "ФормаОбъекта", Kind: "object", YAML: "schema: onebase.form/v1\n"},
+		EditingFormTableParts: []formTablePart{
+			{Name: "Товары", Title: "Товары", Columns: []formScaffoldAttr{{Name: "Номенклатура"}}},
+		},
+	}
+	var buf bytes.Buffer
+	if err := formsTmpl.ExecuteTemplate(&buf, "forms-editor", data); err != nil {
+		t.Fatalf("ExecuteTemplate: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `id="tablepart-palette"`) || !strings.Contains(out, `data-tp="Товары"`) {
+		t.Errorf("нет палитры табличных частей:\n%s", extractContext(out, "tablepart", 220))
+	}
+}
+
+// Редактор встраивает состав колонок ТЧ как JSON (_tablePartsList) — источник
+// данных для редактора колонок D2 (follow-up #164).
+func TestFormsEditor_EmbedsTablePartColumns(t *testing.T) {
+	data := &configuratorData{
+		Base:        &Base{ID: "b"},
+		EditingForm: &cfgManagedForm{Entity: "Заказ", Name: "ФормаОбъекта", Kind: "object", YAML: "schema: onebase.form/v1\n"},
+		EditingFormTableParts: []formTablePart{
+			{Name: "Товары", Columns: []formScaffoldAttr{{Name: "Номенклатура", Title: "Ном."}}},
+		},
+	}
+	var buf bytes.Buffer
+	if err := formsTmpl.ExecuteTemplate(&buf, "forms-editor", data); err != nil {
+		t.Fatalf("ExecuteTemplate: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "_tablePartsList =") {
+		t.Error("нет встроенного списка табличных частей")
+	}
+	if !strings.Contains(out, `"name":"Товары"`) || !strings.Contains(out, `"name":"Номенклатура"`) {
+		t.Errorf("в _tablePartsList нет состава колонок:\n%s", extractContext(out, "_tablePartsList", 220))
 	}
 }
 

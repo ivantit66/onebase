@@ -81,6 +81,50 @@ func elementsFromSeq(seq *yaml.Node, prefix string) ([]*ElementNode, error) {
 	return out, nil
 }
 
+// FormMeta — корневые свойства формы для панели «Свойства формы» (follow-up #164
+// batch B2/B3). Заголовок и вид формы лежат внутри блока form:, а события и
+// действия уровня формы — в верхнем mapping-узле рядом с form/elements.
+type FormMeta struct {
+	TitleRU string
+	Kind    string
+	Events  map[string]string
+	Actions map[string]bool // имя действия → visible (по умолчанию true)
+}
+
+// FormMeta декодирует корневые свойства формы для панели свойств.
+func (d *Doc) FormMeta() (FormMeta, error) {
+	var fm FormMeta
+	top := d.topMapping()
+	if f := mappingValue(top, "form"); f != nil {
+		var block struct {
+			Title map[string]string `yaml:"title"`
+			Kind  string            `yaml:"kind"`
+		}
+		if err := f.Decode(&block); err != nil {
+			return fm, fmt.Errorf("formdoc: декод form: %w", err)
+		}
+		fm.Kind = block.Kind
+		if block.Title != nil {
+			fm.TitleRU = block.Title["ru"]
+		}
+	}
+	if ev := mappingValue(top, "events"); ev != nil {
+		_ = ev.Decode(&fm.Events)
+	}
+	if ac := mappingValue(top, "actions"); ac != nil {
+		var raw map[string]struct {
+			Visible *bool `yaml:"visible"`
+		}
+		if err := ac.Decode(&raw); err == nil {
+			fm.Actions = make(map[string]bool, len(raw))
+			for k, v := range raw {
+				fm.Actions[k] = v.Visible == nil || *v.Visible
+			}
+		}
+	}
+	return fm, nil
+}
+
 // NodeByID разрешает node-id в узел элемента (mapping). Сегменты чередуются:
 // ключ mapping-узла либо индекс sequence-узла. Несуществующий путь — ошибка.
 func (d *Doc) NodeByID(id string) (*yaml.Node, error) {

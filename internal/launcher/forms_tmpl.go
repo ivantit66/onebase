@@ -31,6 +31,16 @@ var formsTmpl = template.Must(template.New("forms").Funcs(template.FuncMap{
 		b, _ := json.Marshal(s)
 		return template.JS(b)
 	},
+	// jsonObj — встраивание произвольного значения как JS-литерала (объект/массив)
+	// через json.Marshal. nil/ошибка → "null". Помечается template.JS, чтобы
+	// html/template не экранировал готовый JSON (для _tableParts в конструкторе).
+	"jsonObj": func(v any) template.JS {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return template.JS("null")
+		}
+		return template.JS(b)
+	},
 }).Parse(tplFormsBase + tplFormsList + tplFormsEditor))
 
 // renderFormsEditor — рендер страницы редактора одной формы.
@@ -92,7 +102,7 @@ table tr:hover{background:#f4f6fb}
 {{define "forms-header"}}
 <header>
   <h1>◇ Управляемые формы</h1>
-  <a href="/bases/{{.Base.ID}}/configurator">← В конфигуратор</a>
+  <a href="/bases/{{.Base.ID}}/configurator{{if .FormEditFrom}}?tab=tree&select={{.FormEditFrom}}{{else if .EditingForm}}?tab=tree&select=e-{{.EditingForm.Entity}}{{end}}">← В конфигуратор</a>
   <span class="crumbs">
     <a href="/bases/{{.Base.ID}}/configurator/forms">Все формы</a>
     {{if .EditingForm}}/ <a href="/bases/{{.Base.ID}}/configurator/forms/edit?entity={{.EditingForm.Entity}}&name={{.EditingForm.Name}}">{{.EditingForm.Entity}}.{{.EditingForm.Name}}</a>{{end}}
@@ -129,7 +139,7 @@ const tplFormsList = `
       <td>{{if .Kind}}{{.Kind}}{{else}}—{{end}}</td>
       <td>{{if .HasOS}}есть{{else}}—{{end}}</td>
       <td style="text-align:right">
-        <a class="btn" href="/bases/{{$.Base.ID}}/configurator/forms/edit?entity={{.Entity}}&name={{.Name}}">Редактировать</a>
+        <a class="btn" href="/bases/{{$.Base.ID}}/configurator/forms/edit?entity={{.Entity}}&name={{.Name}}&from=e-{{.Entity}}">Редактировать</a>
       </td>
     </tr>
     {{end}}
@@ -180,6 +190,8 @@ const tplFormsEditor = `
 {{template "forms-head" .}}
 <style>
 .editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;height:calc(100vh - 230px);min-height:480px}
+.editor-grid.left-collapsed{grid-template-columns:1fr}
+.editor-grid.left-collapsed .editor-pane.left{display:none}
 .editor-pane{display:flex;flex-direction:column;background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.06);overflow:hidden}
 .editor-pane-hd{padding:8px 12px;background:#f8fafc;font-size:12px;font-weight:600;color:#475569;border-bottom:1px solid #eef0f5;display:flex;justify-content:space-between;align-items:center}
 .editor-pane-body{flex:1;overflow:hidden;display:flex;flex-direction:column}
@@ -197,12 +209,16 @@ const tplFormsEditor = `
 .editor-tab{padding:8px 14px;cursor:pointer;font-size:12px;border-bottom:2px solid transparent;color:#64748b}
 .editor-tab.active{color:#1a4a80;border-bottom-color:#1a4a80;background:#fff;font-weight:600}
 /* Палитра реквизитов объекта — перетаскивание/клик вставляет поле (issue #134) */
-.attr-palette{background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.06);padding:8px 12px;margin-bottom:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.attr-palette,.struct-palette{background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.06);padding:8px 12px;margin-bottom:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .attr-palette-label{font-size:12px;color:#64748b;margin-right:4px}
 .attr-chip{display:inline-flex;align-items:center;background:#eef4ff;border:1px solid #c7d8f5;border-radius:14px;padding:3px 10px;font-size:12px;color:#1a4a80;cursor:grab;user-select:none}
 .attr-chip:hover{background:#dce8ff;border-color:#9cbef0}
 .attr-chip:active{cursor:grabbing}
 .attr-chip.dragging{opacity:.4}
+.struct-chip{background:#fef3e8;border-color:#f3d6b3;color:#9a5b1a}
+.struct-chip:hover{background:#fde9d0;border-color:#e8c191}
+.tablepart-chip{background:#fef9c3;border-color:#f3e0a0;color:#92400e}
+.tablepart-chip:hover{background:#fdf3b8;border-color:#e9d27e}
 #yaml-editor.attr-drop-target{outline:2px dashed #1a4a80;outline-offset:-2px}
 /* Визуальный конструктор форм (#164): холст, drop-зоны, панель свойств */
 .rp-tabs{display:flex;gap:2px}
@@ -214,8 +230,12 @@ const tplFormsEditor = `
 .fc-children{display:flex;flex-direction:column;gap:1px;min-height:6px}
 .fc-drop{height:6px;border-radius:4px;transition:background .1s,height .1s}
 .fc-drop.fc-drop-over{background:#1a4a80;height:14px}
+.fc-drop-page{font-size:11px;color:#b08442;border:1px dashed #d8c4a0;border-radius:5px;padding:2px 6px;margin:3px 0;text-align:center;background:#fffdf8;transition:background .1s}
+.fc-drop-page.fc-drop-over{background:#fde9c8;color:#9a5b1a;border-color:#e0b87a}
 .fc-el{border:1px solid transparent;border-radius:6px;padding:3px 5px;cursor:pointer}
 .fc-el.fc-selected{outline:2px solid #1a4a80;background:#eef4ff}
+.fc-dragging{opacity:.4}
+[data-node-id]{cursor:grab}
 .fc-pick:hover{background:#f5f8ff}
 .fc-group{border:1px solid #e2e8f0;padding:5px 9px;margin:1px 0}
 .fc-group>legend{font-weight:600;color:#475569;padding:0 5px;font-size:12px}
@@ -229,20 +249,38 @@ const tplFormsEditor = `
 .fc-label{color:#475569}
 .fc-btn button{padding:5px 10px;border:1px solid #d0d7e3;border-radius:5px;background:#f8fafc;pointer-events:none}
 .fc-table .fc-tp{background:#fef9c3;color:#92400e;padding:6px 8px;border-radius:6px;font-size:12px}
+.fc-pic{background:#eef2ff;color:#3730a3;border:1px dashed #c7d2fe;border-radius:6px;padding:10px;text-align:center;font-size:12px}
+.fc-cols{display:flex;flex-wrap:wrap;gap:4px;padding:4px 2px 0}
+.fc-col{font-size:11px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:4px;padding:2px 7px;color:#475569}
+.fc-col.fc-selected{outline:2px solid #1a4a80;background:#eef4ff}
+.fc-cols-empty{font-size:11px;color:#94a3b8;font-style:italic}
+.fc-switch{display:flex;flex-wrap:wrap;gap:10px;padding:2px 0}
+.fc-opt{font-size:12px;color:#475569;display:inline-flex;align-items:center;gap:4px;pointer-events:none}
 .fc-unknown{background:#fef2f2;color:#991b1b;font-size:12px}
 .fc-kind{color:#94a3b8;font-size:11px}
 #canvas-host.fc-canvas-disabled{opacity:.5;pointer-events:none}
 .fc-banner{background:#fee2e2;color:#dc2626;padding:6px 10px;border-radius:6px;font-size:12px;margin-bottom:8px;display:none}
 .fc-banner.active{display:block}
-.prop-panel{border-top:1px solid #eef0f5;background:#fafbff;max-height:44%;overflow:auto;padding:10px 12px;font-size:12px}
+.prop-panel{border-top:1px solid #eef0f5;background:#fafbff;max-height:44%;overflow:hidden;padding:0;font-size:12px;display:flex;flex-direction:column}
 .prop-panel .prop-empty{color:#94a3b8}
+.prop-tabs{display:flex;gap:2px;border-bottom:1px solid #e2e8f0;padding:8px 12px 0;background:#fafbff;flex:0 0 auto}
+#prop-body{flex:1 1 auto;min-height:0;overflow:auto;padding:10px 12px}
+.prop-tab{padding:4px 12px;font-size:12px;color:#64748b;cursor:pointer;border-bottom:2px solid transparent;user-select:none}
+.prop-tab:hover{color:#1a4a80}
+.prop-tab.active{color:#1a4a80;border-bottom-color:#1a4a80;font-weight:600}
 .prop-panel h4{margin:0 0 8px;font-size:12px;color:#1a4a80}
 .prop-panel h4 .prop-kind{color:#94a3b8;font-weight:400;margin-left:6px}
 .prop-row{margin-bottom:8px}
 .prop-row>label{display:block;color:#64748b;margin-bottom:2px}
-.prop-row input[type=text]{width:100%;padding:5px 8px;border:1px solid #d0d7e3;border-radius:5px;font-size:12px}
+.prop-row input[type=text],.prop-row input[type=number],.prop-row select{width:100%;padding:5px 8px;border:1px solid #d0d7e3;border-radius:5px;font-size:12px;background:#fff}
 .prop-row.prop-check{display:flex;align-items:center;gap:6px}
 .prop-row.prop-check>label{margin:0}
+.prop-row.prop-section{font-weight:600;color:#1a4a80;border-top:1px solid #eef0f5;padding-top:8px;margin-top:10px}
+.prop-hint{font-size:11px;color:#94a3b8;margin-bottom:6px}
+.prop-row.prop-opt{display:flex;gap:4px;align-items:center}
+.prop-row.prop-opt input{flex:1}
+.prop-row.prop-opt .btn{padding:2px 8px}
+.prop-actions{margin-top:12px;border-top:1px solid #eef0f5;padding-top:10px}
 </style>
 <body>
 {{template "forms-header" .}}
@@ -254,21 +292,18 @@ const tplFormsEditor = `
 <form id="save-form" action="/bases/{{.Base.ID}}/configurator/forms/save" method="POST">
 <input type="hidden" name="entity" value="{{.EditingForm.Entity}}">
 <input type="hidden" name="name" value="{{.EditingForm.Name}}">
+<input type="hidden" name="from" value="{{.FormEditFrom}}">
 <input type="hidden" name="yaml" id="yaml-hidden">
 <input type="hidden" name="os" id="os-hidden">
 </form>
 
 <div class="editor-tools">
   <button class="btn btn-primary" onclick="saveForm()">Сохранить</button>
-  <button class="btn btn-success" onclick="refreshPreview()">Просмотр</button>
   <button class="btn" onclick="validateForm()">Проверить</button>
-  <label style="display:inline-flex;align-items:center;gap:5px;margin-left:6px;font-size:12px;color:#475569;cursor:pointer"
-         title="Включает SlickGrid (Excel-навигация с клавиатуры, выравнивание чисел) для всех табличных частей формы. В YAML проставляется use_grid: true.">
-    <input type="checkbox" id="grid-toggle" onchange="setGridFlag(this.checked)"> Табличные части: SlickGrid
-  </label>
   <form action="/bases/{{.Base.ID}}/configurator/forms/delete" method="POST" style="display:inline" onsubmit="return confirm('Удалить эту форму вместе с модулем и ресурсами?')">
     <input type="hidden" name="entity" value="{{.EditingForm.Entity}}">
     <input type="hidden" name="name" value="{{.EditingForm.Name}}">
+    <input type="hidden" name="from" value="{{.FormEditFrom}}">
     <button class="btn btn-danger" type="submit">Удалить</button>
   </form>
   <span class="editor-meta">{{.EditingForm.Entity}}.{{.EditingForm.Name}}{{if .EditingForm.Kind}} · {{.EditingForm.Kind}}{{end}}</span>
@@ -278,13 +313,34 @@ const tplFormsEditor = `
 <div class="attr-palette" id="attr-palette">
   <span class="attr-palette-label">Реквизиты объекта (клик или перетащите в YAML, чтобы добавить поле):</span>
   {{range .EditingFormAttrs}}
-  <span class="attr-chip" draggable="true" data-attr="{{.Name}}" data-title="{{if .Title}}{{.Title}}{{else}}{{.Name}}{{end}}" onclick="insertFieldFromChip(this)" title="Вставить поле для «{{.Name}}»">{{.Name}}</span>
+  <span class="attr-chip" draggable="true" data-attr="{{.Name}}" data-type="{{.Type}}" data-title="{{if .Title}}{{.Title}}{{else}}{{.Name}}{{end}}" onclick="insertFieldFromChip(this)" title="Вставить поле для «{{.Name}}»">{{.Name}}</span>
+  {{end}}
+</div>
+{{end}}
+
+<div class="struct-palette" id="struct-palette">
+  <span class="attr-palette-label">Структура (перетащите на холст):</span>
+  <span class="attr-chip struct-chip" draggable="true" data-kind="ГруппаФормы" data-name="Группа" data-title="Группа" title="Группа полей">＋ Группа</span>
+  <span class="attr-chip struct-chip" draggable="true" data-kind="СтраницыФормы" data-name="Страницы" title="Набор вкладок: бросьте на холст — появится набор с одной готовой вкладкой; ещё вкладки добавляйте кнопкой «+ страница» внутри">＋ Страницы (набор)</span>
+  <span class="attr-chip struct-chip" draggable="true" data-kind="Страница" data-name="Страница" data-title="Страница" title="Вкладка: бросьте на «+ страница» внутри набора — добавится вкладка; на обычное место холста — обернётся в новый набор вкладок">＋ Страница (вкладка)</span>
+  <span class="attr-chip struct-chip" draggable="true" data-kind="Надпись" data-name="Надпись" data-title="Надпись" title="Текстовая надпись">＋ Надпись</span>
+  <span class="attr-chip struct-chip" draggable="true" data-kind="Кнопка" data-name="Кнопка" data-title="Кнопка" title="Кнопка (обработчик нажатия — отдельным шагом)">＋ Кнопка</span>
+  <span class="attr-chip struct-chip" draggable="true" data-kind="ПолеКартинки" data-name="Картинка" data-title="Картинка" title="Поле картинки (путь укажите в свойствах)">＋ Картинка</span>
+  <span class="attr-chip struct-chip" draggable="true" data-kind="Переключатель" data-name="Переключатель" data-title="Переключатель" title="Переключатель значений (radio/список): задайте поле и значения в свойствах">＋ Переключатель</span>
+  <span class="attr-chip struct-chip" draggable="true" data-kind="КоманднаяПанель" data-name="КоманднаяПанель" title="Командная панель (контейнер для кнопок)">＋ Команд. панель</span>
+</div>
+
+{{if .EditingFormTableParts}}
+<div class="struct-palette" id="tablepart-palette">
+  <span class="attr-palette-label">Табличные части (перетащите на холст):</span>
+  {{range .EditingFormTableParts}}
+  <span class="attr-chip tablepart-chip" draggable="true" data-tp="{{.Name}}" data-title="{{if .Title}}{{.Title}}{{else}}{{.Name}}{{end}}" title="Добавить табличную часть «{{.Name}}»">▦ {{.Name}}</span>
   {{end}}
 </div>
 {{end}}
 
 <div class="editor-grid">
-  <div class="editor-pane">
+  <div class="editor-pane left">
     <div class="editor-pane-hd">
       YAML
       <span style="color:#94a3b8;font-weight:400">{{.EditingForm.YAMLPath}}</span>
@@ -304,7 +360,8 @@ const tplFormsEditor = `
         <span class="rp-tab active" data-rp="design" onclick="switchRightPane('design')">Конструктор</span>
         <span class="rp-tab" data-rp="preview" onclick="switchRightPane('preview')">Просмотр</span>
       </div>
-      <button class="btn" onclick="reloadCanvas()" style="padding:3px 8px;font-size:11px">Обновить</button>
+      <button class="btn" id="toggle-left-btn" onclick="toggleLeftPane()" style="padding:3px 8px;font-size:11px" title="Свернуть/развернуть редактор кода (YAML и модуль)">⮜ Свернуть код</button>
+      <button class="btn" onclick="reloadCanvas()" style="padding:3px 8px;font-size:11px" title="Пере-синхронизировать холст с YAML">Обновить</button>
     </div>
     <div class="editor-pane-body">
       <div id="design-wrap">
@@ -313,7 +370,13 @@ const tplFormsEditor = `
           <div class="empty" style="padding:18px">Загрузка холста…</div>
         </div>
         <div class="prop-panel" id="prop-panel">
-          <div class="prop-empty">Выберите элемент на холсте, чтобы изменить его свойства. Перетащите реквизит из палитры на холст, чтобы добавить поле.</div>
+          <div class="prop-tabs">
+            <span class="prop-tab active" data-pt="element" onclick="switchPropTab('element')">Элемент</span>
+            <span class="prop-tab" data-pt="form" onclick="switchPropTab('form')" title="Свойства формы: заголовок, вид, события, действия">Форма</span>
+          </div>
+          <div id="prop-body">
+            <div class="prop-empty">Выберите элемент на холсте, чтобы изменить его свойства. Перетащите реквизит из палитры на холст, чтобы добавить поле.</div>
+          </div>
         </div>
       </div>
       <iframe id="preview-frame" sandbox="allow-same-origin allow-scripts" style="display:none;flex:1;border:none"></iframe>
@@ -378,6 +441,22 @@ if (typeof require === 'undefined') {
 function getYAML() { return window.yamlEditor ? window.yamlEditor.getValue() : (window._yamlTA ? window._yamlTA.value : ''); }
 function getOS()   { return window.osEditor ? window.osEditor.getValue() : (window._osTA ? window._osTA.value : ''); }
 function setYAML(v) { if (window.yamlEditor) window.yamlEditor.setValue(v); else if (window._yamlTA) window._yamlTA.value = v; }
+function setOS(v)  { if (window.osEditor) window.osEditor.setValue(v); else if (window._osTA) window._osTA.value = v; }
+
+// osProcedures — имена процедур из модуля .form.os (для привязки событий, B1).
+function osProcedures() {
+  var src = getOS() || '', re = /Процедура\s+([A-Za-zА-Яа-яЁё0-9_]+)\s*\(/g, m, out = [];
+  while ((m = re.exec(src)) !== null) out.push(m[1]);
+  return out;
+}
+// ensureProcedure — дописывает пустую процедуру в .form.os, если её ещё нет
+// (кнопка «Создать обработчик…», B1). Сохранится вместе с формой.
+function ensureProcedure(name) {
+  if (osProcedures().indexOf(name) >= 0) return;
+  var src = getOS();
+  if (src && !/\n$/.test(src)) src += '\n';
+  setOS(src + '\nПроцедура ' + name + '()\n\t\nКонецПроцедуры\n');
+}
 
 // ── Палитра реквизитов: вставка поля ПолеВвода по клику/дропу (issue #134) ──
 function _attrFieldSnippet(attr, title, base) {
@@ -457,7 +536,7 @@ function insertFieldFromChip(chip) {
     chip.classList.add('dragging');
     e.dataTransfer.effectAllowed = 'copy';
     e.dataTransfer.setData('text/onebase-attr',
-      JSON.stringify({ attr: chip.getAttribute('data-attr'), title: chip.getAttribute('data-title') }));
+      JSON.stringify({ attr: chip.getAttribute('data-attr'), title: chip.getAttribute('data-title'), type: chip.getAttribute('data-type') || '' }));
   });
   pal.addEventListener('dragend', function (e) {
     var chip = e.target.closest ? e.target.closest('.attr-chip') : null;
@@ -485,36 +564,48 @@ function insertFieldFromChip(chip) {
   });
 })();
 
-// setGridFlag — переключатель SlickGrid (план 48). Проставляет/снимает
-// use_grid: true у всех элементов kind: ТабличнаяЧасть в YAML формы.
-// Делаем построчно, без YAML-парсера: сначала убираем все строки use_grid,
-// затем при включении вставляем флаг сразу после строки "- kind: ТабличнаяЧасть"
-// с тем же отступом, что у kind. Идемпотентно. Ограничение: kind должен быть
-// первым ключом элемента списка (как во всех примерах).
-function setGridFlag(enable) {
-  var lines = getYAML().split('\n');
-  var out = [];
-  for (var i = 0; i < lines.length; i++) {
-    var line = lines[i];
-    if (/^\s*use_grid\s*:/.test(line)) continue; // снять существующие
-    out.push(line);
-    var m = line.match(/^(\s*)-\s+kind\s*:\s*(?:ТабличнаяЧасть|TablePart)\s*$/);
-    if (enable && m) {
-      var keyIndent = m[1].length + 2; // ключи-братья выровнены по kind (после "- ")
-      out.push(new Array(keyIndent + 1).join(' ') + 'use_grid: true');
-    }
-  }
-  setYAML(out.join('\n'));
-  refreshPreview();
-}
+// Палитра структурных элементов (#164, слайс C): тащит kind на холст СВОИМ mime
+// text/onebase-struct, чтобы не пересекаться с реквизитами (text/onebase-attr).
+(function () {
+  var pal = document.getElementById('struct-palette');
+  if (!pal) return;
+  pal.addEventListener('dragstart', function (e) {
+    var chip = e.target.closest ? e.target.closest('.struct-chip') : null;
+    if (!chip) return;
+    chip.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.setData('text/onebase-struct', JSON.stringify({
+      kind: chip.getAttribute('data-kind'),
+      name: chip.getAttribute('data-name') || '',
+      title: chip.getAttribute('data-title') || ''
+    }));
+  });
+  pal.addEventListener('dragend', function (e) {
+    var chip = e.target.closest ? e.target.closest('.struct-chip') : null;
+    if (chip) chip.classList.remove('dragging');
+  });
+})();
 
-// syncGridToggle — отражает текущее состояние YAML в чекбоксе (отмечен, если
-// хоть одна ТЧ уже с use_grid: true). Вызывается после рендера превью.
-function syncGridToggle() {
-  var cb = document.getElementById('grid-toggle');
-  if (!cb) return;
-  cb.checked = /^\s*use_grid\s*:\s*true\s*$/m.test(getYAML());
-}
+// Палитра табличных частей (#164, слайс D1): свой mime text/onebase-tablepart,
+// drop вставляет kind:ТабличнаяЧасть с name=Таб<ТЧ> и data_path=Объект.<ТЧ>.
+(function () {
+  var pal = document.getElementById('tablepart-palette');
+  if (!pal) return;
+  pal.addEventListener('dragstart', function (e) {
+    var chip = e.target.closest ? e.target.closest('.tablepart-chip') : null;
+    if (!chip) return;
+    chip.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.setData('text/onebase-tablepart', JSON.stringify({
+      tp: chip.getAttribute('data-tp'),
+      title: chip.getAttribute('data-title') || ''
+    }));
+  });
+  pal.addEventListener('dragend', function (e) {
+    var chip = e.target.closest ? e.target.closest('.tablepart-chip') : null;
+    if (chip) chip.classList.remove('dragging');
+  });
+})();
 
 function switchTab(name) {
   document.querySelectorAll('.editor-tab').forEach(function (el) { el.classList.toggle('active', el.dataset.tab === name); });
@@ -531,7 +622,6 @@ function saveForm() {
 }
 
 function refreshPreview() {
-  syncGridToggle();
   var body = new URLSearchParams();
   body.append('yaml', getYAML());
   body.append('entity', '{{.EditingForm.Entity}}');
@@ -578,8 +668,14 @@ function validateForm() {
 // selectedId, model}. Monaco и холст синхронизируются от одного ответа.
 var _editOpURL = '/bases/{{.Base.ID}}/configurator/forms/edit-op';
 var _entity = {{jsString .EditingForm.Entity}};
-var _selected = '';   // node-id выбранного элемента
+// Состав табличных частей объекта (имя ТЧ → колонки) для редактора колонок (D2).
+var _tablePartsList = {{jsonObj .EditingFormTableParts}};
+var _tableParts = {};
+(_tablePartsList || []).forEach(function (tp) { _tableParts[tp.name] = tp.columns || []; });
+var _selected = '';   // текущая цель правки: node-id элемента ИЛИ "form"
+var _lastEl = '';     // последний выбранный элемент (для закладки «Элемент»)
 var _model = {};      // node-id → свойства (для панели свойств)
+var _form = {};       // корневые свойства формы (titleRu/kind/events/actions)
 var _rightPane = 'design';
 var _syncing = false; // защита от рекурсии setYAML → reloadCanvas
 
@@ -612,7 +708,9 @@ function editOp(params, mutating) {
       banner.classList.remove('active');
       host.classList.remove('fc-canvas-disabled');
       _model = resp.model || {};
+      _form = resp.form || {};
       _selected = resp.selectedId || '';
+      if (_selected && _selected !== 'form') _lastEl = _selected; // запоминаем элемент для закладки «Элемент»
       renderCanvasHTML(resp.canvasHtml || '');
       if (mutating && typeof resp.yaml === 'string') {
         _syncing = true; setYAML(resp.yaml); _syncing = false;
@@ -633,6 +731,27 @@ function reloadCanvas() {
   return editOp({ op: 'render', node: _selected }, false);
 }
 
+// syncFromYAML — живая синхронизация после правки YAML: на закладке «Конструктор»
+// перерисовываем холст, на «Просмотр» — обновляем предпросмотр (раньше для этого
+// была отдельная кнопка «Просмотр» в шапке).
+function syncFromYAML() {
+  if (_rightPane === 'preview') refreshPreview();
+  else reloadCanvas();
+}
+
+// insertPagesSet — вставляет набор СтраницыФормы с одной готовой вкладкой, чтобы
+// добавленная страница сразу была закладкой (а не висячей страницей). Двумя
+// шагами: сначала набор-контейнер, затем страница в него (id набора = selectedId).
+function insertPagesSet(parent, index) {
+  return editOp({ op: 'insert', parent: parent, index: index, kind: 'СтраницыФормы', name: 'Страницы', title_ru: '' }, true)
+    .then(function (r) {
+      if (r && r.ok && r.selectedId) {
+        return editOp({ op: 'insert', parent: r.selectedId, index: 0, kind: 'Страница', name: 'Страница', title_ru: 'Страница' }, true);
+      }
+      return r;
+    });
+}
+
 function renderCanvasHTML(html) {
   var host = document.getElementById('canvas-host');
   var banner = document.getElementById('fc-banner');
@@ -641,6 +760,8 @@ function renderCanvasHTML(html) {
   var wrap = document.createElement('div');
   wrap.innerHTML = html;
   while (wrap.firstChild) host.appendChild(wrap.firstChild);
+  // Элементы холста перетаскиваемы — для переноса в другой контейнер (op:move).
+  host.querySelectorAll('[data-node-id]').forEach(function (el) { el.draggable = true; });
 }
 
 // Делегирование на холсте: клик — выбор элемента; drop реквизита на зону — вставка.
@@ -648,49 +769,151 @@ function renderCanvasHTML(html) {
   var host = document.getElementById('canvas-host');
   if (!host) return;
   host.addEventListener('click', function (e) {
+    // Клик по «+ страница» добавляет вкладку в набор (так нагляднее, чем drag).
+    var pz = e.target.closest ? e.target.closest('.fc-drop-page') : null;
+    if (pz && host.contains(pz)) {
+      e.stopPropagation();
+      editOp({ op: 'insert', parent: pz.getAttribute('data-parent'), index: pz.getAttribute('data-index'),
+        kind: 'Страница', name: 'Страница', title_ru: 'Страница' }, true);
+      return;
+    }
     var el = e.target.closest ? e.target.closest('[data-node-id]') : null;
-    if (!el || !host.contains(el)) return;
+    if (!el || !host.contains(el)) {
+      // Клик по пустому месту холста (не по элементу и не по drop-зоне) —
+      // открыть свойства формы (B2). Drop-зоны игнорируем, чтобы не сбивать выбор.
+      var dz = e.target.closest ? e.target.closest('.fc-drop, .fc-drop-page') : null;
+      if (!dz) selectNode('form');
+      return;
+    }
     e.stopPropagation();
     selectNode(el.getAttribute('data-node-id'));
   });
+  // Перетаскивание элемента холста — для переноса в другой контейнер. Свой mime
+  // text/onebase-node, чтобы не путать с палитрами (attr/struct/tablepart).
+  host.addEventListener('dragstart', function (e) {
+    var el = e.target.closest ? e.target.closest('[data-node-id]') : null;
+    if (!el || !host.contains(el)) return;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/onebase-node', el.getAttribute('data-node-id'));
+    el.classList.add('fc-dragging');
+  });
+  host.addEventListener('dragend', function (e) {
+    var el = e.target.closest ? e.target.closest('[data-node-id]') : null;
+    if (el) el.classList.remove('fc-dragging');
+  });
   host.addEventListener('dragover', function (e) {
-    var dz = e.target.closest ? e.target.closest('.fc-drop') : null;
-    if (!dz || (e.dataTransfer.types || []).indexOf('text/onebase-attr') < 0) return;
-    e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+    var dz = e.target.closest ? e.target.closest('.fc-drop, .fc-drop-page') : null;
+    if (!dz) return;
+    var types = e.dataTransfer.types || [];
+    var hasStruct = types.indexOf('text/onebase-struct') >= 0;
+    var hasAttr = types.indexOf('text/onebase-attr') >= 0;
+    var hasTP = types.indexOf('text/onebase-tablepart') >= 0;
+    var hasNode = types.indexOf('text/onebase-node') >= 0;
+    if (!hasStruct && !hasAttr && !hasTP && !hasNode) return;
+    if (dz.classList.contains('fc-drop-page') && !hasStruct) return; // page-зоны — только новая страница
+    e.preventDefault(); e.dataTransfer.dropEffect = hasNode ? 'move' : 'copy';
     dz.classList.add('fc-drop-over');
   });
   host.addEventListener('dragleave', function (e) {
-    var dz = e.target.closest ? e.target.closest('.fc-drop') : null;
+    var dz = e.target.closest ? e.target.closest('.fc-drop, .fc-drop-page') : null;
     if (dz) dz.classList.remove('fc-drop-over');
   });
   host.addEventListener('drop', function (e) {
-    var dz = e.target.closest ? e.target.closest('.fc-drop') : null;
+    var dz = e.target.closest ? e.target.closest('.fc-drop, .fc-drop-page') : null;
     if (!dz) return;
     dz.classList.remove('fc-drop-over');
+    var parent = dz.getAttribute('data-parent'), index = dz.getAttribute('data-index');
+    // Перенос существующего узла холста (op:move). Только обычные зоны (.fc-drop):
+    // страницы переставляются ↑/↓. Запрет переноса в себя/в собственного потомка.
+    var node = e.dataTransfer.getData('text/onebase-node');
+    if (node) {
+      e.preventDefault();
+      if (dz.classList.contains('fc-drop-page')) return;
+      if (parent === node || parent.indexOf(node + '.') === 0) return;
+      editOp({ op: 'move', node: node, parent: parent, index: index }, true);
+      return;
+    }
+    // Структурный элемент (группа/страницы/страница/надпись) — свой mime.
+    var sraw = e.dataTransfer.getData('text/onebase-struct');
+    if (sraw) {
+      e.preventDefault();
+      var s; try { s = JSON.parse(sraw); } catch (_) { return; }
+      if (dz.classList.contains('fc-drop-page')) {
+        // Зона «+ страница» внутри набора — кладём только вкладку.
+        if (s.kind !== 'Страница') return;
+        editOp({ op: 'insert', parent: parent, index: index, kind: 'Страница', name: s.name || 'Страница', title_ru: s.title || 'Страница' }, true);
+        return;
+      }
+      // Обычная зона: и «Страницы (набор)», и одиночная «Страница» дают готовый
+      // набор с одной вкладкой — чтобы это всегда была закладка, а не висячая
+      // страница (issue #164, обратная связь по живому тесту).
+      if (s.kind === 'СтраницыФормы' || s.kind === 'Страница') { insertPagesSet(parent, index); return; }
+      editOp({ op: 'insert', parent: parent, index: index, kind: s.kind, name: s.name || '', title_ru: s.title || '' }, true);
+      return;
+    }
+    if (dz.classList.contains('fc-drop-page')) return; // в Pages напрямую кладём только страницы
+    // Табличная часть — свой mime.
+    var traw = e.dataTransfer.getData('text/onebase-tablepart');
+    if (traw) {
+      e.preventDefault();
+      var tp; try { tp = JSON.parse(traw); } catch (_) { return; }
+      editOp({ op: 'insert', parent: parent, index: index, kind: 'ТабличнаяЧасть',
+        name: 'Таб' + tp.tp, data_path: 'Объект.' + tp.tp, title_ru: tp.title || tp.tp }, true);
+      return;
+    }
     var raw = e.dataTransfer.getData('text/onebase-attr');
     if (!raw) return;
     e.preventDefault();
     var d; try { d = JSON.parse(raw); } catch (_) { return; }
     editOp({
-      op: 'insert', parent: dz.getAttribute('data-parent'), index: dz.getAttribute('data-index'),
-      kind: 'ПолеВвода', name: 'Поле' + d.attr, data_path: 'Объект.' + d.attr, title_ru: d.title || d.attr
+      op: 'insert', parent: parent, index: index,
+      kind: fieldKind(d.type), name: 'Поле' + d.attr, data_path: 'Объект.' + d.attr, title_ru: d.title || d.attr
     }, true);
   });
+  // «Умный» выбор элемента по типу реквизита: bool → Флажок, date → ПолеДаты,
+  // остальное (в т.ч. enum/ссылка — они сами рисуются выпадающим списком) → ПолеВвода.
+  function fieldKind(type) {
+    var t = (type || '').toLowerCase();
+    if (t === 'bool') return 'Флажок';
+    if (t === 'date') return 'ПолеДаты';
+    return 'ПолеВвода';
+  }
 })();
 
 function selectNode(nodeId) {
   _selected = nodeId;
+  if (nodeId && nodeId !== 'form') _lastEl = nodeId; // запоминаем для закладки «Элемент»
   document.querySelectorAll('#canvas-host .fc-selected').forEach(function (el) { el.classList.remove('fc-selected'); });
   var el = document.querySelector('#canvas-host [data-node-id="' + nodeId + '"]');
   if (el) el.classList.add('fc-selected');
   renderProps();
 }
 
-// renderProps строит панель свойств выбранного элемента из _model. Обработчики
-// вешаются через addEventListener (без inline-onchange — без проблем экранирования).
+// switchPropTab — закладки панели свойств «Элемент | Форма» (вместо отдельной
+// кнопки «Свойства формы»). «Форма» выбирает корневые свойства; «Элемент» —
+// возвращает к последнему выбранному элементу.
+function switchPropTab(which) {
+  if (which === 'form') { if (_selected !== 'form') selectNode('form'); else renderProps(); }
+  else { selectNode(_lastEl || ''); }
+}
+// toggleLeftPane — свернуть/развернуть левый блок (YAML + модуль), отдав место холсту.
+function toggleLeftPane() {
+  var grid = document.querySelector('.editor-grid');
+  var collapsed = grid.classList.toggle('left-collapsed');
+  var btn = document.getElementById('toggle-left-btn');
+  if (btn) btn.textContent = collapsed ? '⮞ Показать код' : '⮜ Свернуть код';
+  if (window.yamlEditor) window.yamlEditor.layout();
+  if (window.osEditor) window.osEditor.layout();
+}
+
+// renderProps строит панель свойств в #prop-body из _model (или свойства формы).
+// Закладки «Элемент | Форма» статичны; активная выводится из _selected.
 function renderProps() {
-  var panel = document.getElementById('prop-panel');
+  var tab = (_selected === 'form') ? 'form' : 'element';
+  document.querySelectorAll('#prop-panel .prop-tab').forEach(function (t) { t.classList.toggle('active', t.dataset.pt === tab); });
+  var panel = document.getElementById('prop-body');
   panel.innerHTML = '';
+  if (_selected === 'form') { renderFormProps(panel); return; }
   var info = _model[_selected];
   if (!info) {
     var em = document.createElement('div'); em.className = 'prop-empty';
@@ -703,12 +926,268 @@ function renderProps() {
   h.appendChild(sk); panel.appendChild(h);
   addTextProp(panel, 'Заголовок (ru)', 'title.ru', info.titleRu || '');
   addTextProp(panel, 'Имя', 'name', info.name || '');
-  if (!info.container) {
+  if (info.kind === 'ПолеКартинки') {
+    addTextProp(panel, 'Картинка (путь)', 'picture', info.picture || '');
+    addNumProp(panel, 'Ширина, px', 'width', info.width);
+    addNumProp(panel, 'Высота, px', 'height', info.height);
+  } else if (!info.container) {
     addTextProp(panel, 'Поле данных (data_path)', 'data_path', info.dataPath || '');
     addTextProp(panel, 'Подсказка', 'hint', info.hint || '');
     addCheckProp(panel, 'Обязательное', 'required', info.required);
     addCheckProp(panel, 'Только чтение', 'readonly', info.readonly);
+    if (info.kind === 'ПолеВвода') {
+      addTextProp(panel, 'Маска ввода', 'mask', info.mask || '');
+      addCheckRaw(panel, 'Файловое поле', info.fileType, function (ch) { setProp('type', ch ? 'file' : ''); });
+    }
   }
+  if (info.kind === 'ТабличнаяЧасть') {
+    addCheckRaw(panel, 'Простая таблица (без SlickGrid)', info.noGrid, function (ch) { setProp('no_grid', ch ? 'true' : ''); });
+    addColumnsEditor(panel);
+  }
+  if (info.kind === 'Переключатель') { addOptionsEditor(panel, info); }
+  addEventsSection(panel, info);
+  addElementActions(panel, info);
+}
+
+// ── Свойства формы (batch B2/B3) ────────────────────────────────────────────
+// Корневой псевдо-узел "form": заголовок и вид формы (внутри form:), события и
+// штатные действия формы (верхний уровень). Все правки уходят как node="form" —
+// сервер сам направляет ключ в нужный блок (см. setFormProp).
+function renderFormProps(panel) {
+  var f = _form || {};
+  var h = document.createElement('h4'); h.textContent = 'Форма';
+  var sk = document.createElement('span'); sk.className = 'prop-kind'; sk.textContent = f.kind || ''; h.appendChild(sk);
+  panel.appendChild(h);
+  addTextProp(panel, 'Заголовок (ru)', 'title.ru', f.titleRu || '');
+  // Вид формы.
+  var krow = document.createElement('div'); krow.className = 'prop-row';
+  var kl = document.createElement('label'); kl.textContent = 'Вид формы'; krow.appendChild(kl);
+  var ksel = document.createElement('select');
+  ['object', 'list', 'choice', 'folder', 'custom'].forEach(function (k) { ksel.appendChild(new Option(k, k)); });
+  ksel.value = f.kind || 'custom';
+  ksel.addEventListener('change', function () { setProp('kind', ksel.value); });
+  krow.appendChild(ksel); panel.appendChild(krow);
+  // События формы и штатные действия.
+  addEventsRows(panel, formEvents(), f.events || {}, 'Форма');
+  addFormActionsSection(panel, f);
+}
+// Штатные действия формы (B3). Рантайм читает только actions.delete.visible —
+// показываем галочку для кнопки «Удалить»; снятие пишет visible:false.
+function addFormActionsSection(panel, f) {
+  var hd = document.createElement('div'); hd.className = 'prop-row prop-section'; hd.textContent = 'Штатные действия';
+  panel.appendChild(hd);
+  var acts = f.actions || {};
+  var delVisible = !(acts.delete === false);
+  addCheckRaw(panel, 'Показывать кнопку «Удалить»', delVisible, function (ch) {
+    setProp('actions.delete.visible', ch ? 'true' : 'false');
+  });
+}
+
+// ── События элемента/формы (batch B1) ───────────────────────────────────────
+// applicableEvents — какие события показывать для элемента данного вида.
+function applicableEvents(kind) {
+  switch (kind) {
+    case 'Кнопка': case 'КнопкаКП': return ['Нажатие'];
+    case 'ПолеВвода': case 'Флажок': case 'ПолеДаты': case 'Переключатель':
+    case 'ПолеСписка': case 'ТабличнаяЧасть': return ['ПриИзменении'];
+    default: return [];
+  }
+}
+// formEvents — события уровня формы (подмножество частых из form_module.go).
+function formEvents() {
+  return ['ПриОткрытии', 'ПриСоздании', 'ПередЗаписью', 'ПриЗаписи', 'ПослеЗаписи', 'ПередЗакрытием'];
+}
+function addEventsSection(panel, info) {
+  addEventsRows(panel, applicableEvents(info.kind), info.events || {}, info.name || info.kind);
+}
+// addEventsRows строит по <select> на каждое событие: «— нет —» + процедуры из
+// .form.os + «Создать обработчик…». Текущая привязка = cur[событие]. Запись —
+// setProp events.<событие>; снятие — delProp; создание дописывает процедуру.
+function addEventsRows(panel, evs, cur, defPrefix) {
+  if (!evs.length) return;
+  var hd = document.createElement('div'); hd.className = 'prop-row prop-section'; hd.textContent = 'События';
+  panel.appendChild(hd);
+  var procs = osProcedures();
+  var CREATE = '@create';
+  evs.forEach(function (ev) {
+    var row = document.createElement('div'); row.className = 'prop-row';
+    var l = document.createElement('label'); l.textContent = ev; row.appendChild(l);
+    var sel = document.createElement('select');
+    sel.appendChild(new Option('— нет —', ''));
+    procs.forEach(function (p) { sel.appendChild(new Option(p, p)); });
+    sel.appendChild(new Option('Создать обработчик…', CREATE));
+    sel.value = cur[ev] || '';
+    sel.addEventListener('change', function () {
+      var v = sel.value;
+      if (v === CREATE) {
+        var name = window.prompt('Имя процедуры-обработчика:', (defPrefix || '') + ev);
+        if (!name) { sel.value = cur[ev] || ''; return; }
+        ensureProcedure(name);
+        setProp('events.' + ev, name);
+      } else if (v === '') {
+        editOp({ op: 'delProp', node: _selected, key: 'events.' + ev }, true);
+      } else {
+        setProp('events.' + ev, v);
+      }
+    });
+    row.appendChild(sel); panel.appendChild(row);
+  });
+}
+
+// ── Редактор набора значений Переключателя (batch C1) ───────────────────────
+// Для enum-поля значения подставляются рантаймом автоматически — редактор нужен
+// для произвольных (в т.ч. числовых) наборов. Опции пишутся целиком op:setOptions.
+function addOptionsEditor(panel, info) {
+  var vrow = document.createElement('div'); vrow.className = 'prop-row';
+  var vl = document.createElement('label'); vl.textContent = 'Представление'; vrow.appendChild(vl);
+  var vsel = document.createElement('select');
+  vsel.appendChild(new Option('Переключатель (radio)', 'radio'));
+  vsel.appendChild(new Option('Список (select)', 'select'));
+  vsel.value = (info.view === 'select') ? 'select' : 'radio';
+  vsel.addEventListener('change', function () {
+    if (vsel.value === 'select') setProp('view', 'select');
+    else editOp({ op: 'delProp', node: _selected, key: 'view' }, true);
+  });
+  vrow.appendChild(vsel); panel.appendChild(vrow);
+
+  var hd = document.createElement('div'); hd.className = 'prop-row prop-section'; hd.textContent = 'Значения';
+  panel.appendChild(hd);
+  var note = document.createElement('div'); note.className = 'prop-hint';
+  note.textContent = 'Для поля-перечисления значения подставляются автоматически; здесь задаются произвольные наборы.';
+  panel.appendChild(note);
+  var opts = (info.options || []).map(function (o) { return { value: o.value, label: o.label }; });
+  var nodeAtEdit = _selected;
+  function commit() { editOp({ op: 'setOptions', node: nodeAtEdit, options: JSON.stringify(opts) }, true); }
+  var listWrap = document.createElement('div'); panel.appendChild(listWrap);
+  function redraw() {
+    listWrap.innerHTML = '';
+    opts.forEach(function (o, i) {
+      var row = document.createElement('div'); row.className = 'prop-row prop-opt';
+      var vi = document.createElement('input'); vi.type = 'text'; vi.placeholder = 'значение'; vi.value = o.value;
+      vi.addEventListener('change', function () { opts[i].value = vi.value; commit(); });
+      var li = document.createElement('input'); li.type = 'text'; li.placeholder = 'представление'; li.value = o.label;
+      li.addEventListener('change', function () { opts[i].label = li.value; commit(); });
+      var rm = mkBtn('×', function () { opts.splice(i, 1); commit(); }); rm.className = 'btn btn-danger';
+      row.appendChild(vi); row.appendChild(li); row.appendChild(rm); listWrap.appendChild(row);
+    });
+    var add = mkBtn('+ значение', function () { opts.push({ value: '', label: '' }); redraw(); });
+    listWrap.appendChild(add);
+  }
+  redraw();
+}
+// Кнопки порядка и удаления элемента (follow-up #164, слайсы B1/B2): «выше/ниже»
+// переставляют узел в соседний индекс того же родителя; «удалить» вырезает узел
+// (контейнер — вместе с детьми, с подтверждением).
+function addElementActions(panel, info) {
+  var row = document.createElement('div'); row.className = 'prop-row prop-actions';
+  row.appendChild(mkBtn('↑ Выше', function () { moveSelected(-1); }));
+  row.appendChild(mkBtn('↓ Ниже', function () { moveSelected(1); }));
+  var del = mkBtn('Удалить элемент', deleteSelected);
+  del.className = 'btn btn-danger';
+  row.appendChild(del);
+  panel.appendChild(row);
+}
+function mkBtn(label, onClick) {
+  var b = document.createElement('button');
+  b.type = 'button'; b.className = 'btn'; b.textContent = label;
+  b.addEventListener('click', onClick);
+  return b;
+}
+// nodeAddr раскладывает node-id на родительский элемент-контейнер и индекс в
+// его sequence. "elements.2" → {parent:"", index:2}; "elements.0.children.1" →
+// {parent:"elements.0", index:1}. seqPath — путь самого sequence (для проверки
+// соседей по _model). null для неструктурных адресов (напр. колонок ТЧ).
+function nodeAddr(nodeId) {
+  var dot = nodeId.lastIndexOf('.');
+  if (dot < 0) return null;
+  var idx = parseInt(nodeId.slice(dot + 1), 10);
+  if (isNaN(idx)) return null;
+  var seqPath = nodeId.slice(0, dot);
+  var parent;
+  if (seqPath === 'elements') parent = '';
+  else if (seqPath.slice(-9) === '.children') parent = seqPath.slice(0, -9);
+  else return null;
+  return { parent: parent, index: idx, seqPath: seqPath };
+}
+function moveSelected(delta) {
+  if (!_selected) return;
+  var a = nodeAddr(_selected);
+  if (!a) return;
+  var finalIdx = a.index + delta;
+  if (finalIdx < 0) return;
+  // Вниз и уже последний — соседа нет, выходим.
+  if (delta > 0 && !_model[a.seqPath + '.' + finalIdx]) return;
+  // Сервер компенсирует сдвиг после удаления при переносе вперёд в том же
+  // контейнере (см. formdoc.Move): чтобы оказаться на finalIdx, при движении
+  // вниз передаём finalIdx+1, при движении вверх — finalIdx как есть.
+  var serverIdx = delta > 0 ? finalIdx + 1 : finalIdx;
+  var newId = a.seqPath + '.' + finalIdx;
+  editOp({ op: 'move', node: _selected, parent: a.parent, index: serverIdx }, true).then(function (resp) {
+    if (resp && resp.ok) selectNode(newId); // удержать выделение на переехавшем узле
+  });
+}
+function deleteSelected() {
+  if (!_selected) return;
+  var info = _model[_selected] || {};
+  var label = info.name || info.kind || 'элемент';
+  var msg = info.container
+    ? 'Удалить «' + label + '» вместе со вложенными элементами?'
+    : 'Удалить «' + label + '»?';
+  if (!window.confirm(msg)) return;
+  editOp({ op: 'delete', node: _selected }, true);
+}
+
+// ── Редактор состава колонок ТЧ (#164, слайс D2) ────────────────────────────
+// data_path выбранной ТЧ "Объект.Товары" → имя ТЧ "Товары" (ключ _tableParts).
+function tablePartName() {
+  var dp = (_model[_selected] || {}).dataPath || '';
+  var i = dp.lastIndexOf('.');
+  return i >= 0 ? dp.slice(i + 1) : dp;
+}
+// Уже добавленные колонки ТЧ tpNodeId: поле (последний сегмент data_path) → node-id.
+function presentColumns(tpNodeId) {
+  var map = {}, prefix = tpNodeId + '.children.';
+  Object.keys(_model).forEach(function (id) {
+    if (id.indexOf(prefix) !== 0) return;
+    var inf = _model[id];
+    if ((inf.kind || '') !== 'Колонка') return;
+    var dp = inf.dataPath || '', j = dp.lastIndexOf('.');
+    var seg = j >= 0 ? dp.slice(j + 1) : dp;
+    if (seg) map[seg] = id;
+  });
+  return map;
+}
+function addColumnsEditor(panel) {
+  var tp = tablePartName();
+  var cols = _tableParts[tp] || [];
+  var present = presentColumns(_selected);
+  var hd = document.createElement('div'); hd.className = 'prop-row';
+  var l = document.createElement('label'); l.textContent = 'Колонки (показывать):';
+  hd.appendChild(l); panel.appendChild(hd);
+  if (!cols.length) {
+    var note = document.createElement('div'); note.className = 'prop-empty';
+    note.textContent = 'Состав колонок неизвестен (метаданные ТЧ не загружены).';
+    panel.appendChild(note); return;
+  }
+  cols.forEach(function (c) {
+    var row = document.createElement('div'); row.className = 'prop-row prop-check';
+    var cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!present[c.name];
+    cb.addEventListener('change', function () { toggleColumn(tp, c, cb.checked, present[c.name]); });
+    var lab = document.createElement('label'); lab.textContent = c.title || c.name;
+    row.appendChild(cb); row.appendChild(lab); panel.appendChild(row);
+  });
+}
+// Включение колонки → insert kind:Колонка в конец ТЧ; выключение → delete её узла.
+// Выделение удерживаем на ТЧ, чтобы можно было щёлкать чекбоксы подряд.
+function toggleColumn(tp, col, on, existingId) {
+  var tpId = _selected, p;
+  if (on) {
+    p = editOp({ op: 'insert', parent: tpId, index: 9999, kind: 'Колонка',
+      name: 'Кол' + col.name, data_path: 'Объект.' + tp + '.' + col.name, title_ru: col.title || '' }, true);
+  } else if (existingId) {
+    p = editOp({ op: 'delete', node: existingId }, true);
+  } else { return; }
+  p.then(function (resp) { if (resp && resp.ok) selectNode(tpId); });
 }
 function addTextProp(panel, label, key, val) {
   var row = document.createElement('div'); row.className = 'prop-row';
@@ -718,11 +1197,23 @@ function addTextProp(panel, label, key, val) {
   row.appendChild(inp); panel.appendChild(row);
 }
 function addCheckProp(panel, label, key, checked) {
+  addCheckRaw(panel, label, checked, function (ch) { setProp(key, ch ? 'true' : ''); });
+}
+// addCheckRaw — чекбокс с произвольным обработчиком (для type=file, no_grid и т.п.,
+// где значение не «true»/«»).
+function addCheckRaw(panel, label, checked, onChange) {
   var row = document.createElement('div'); row.className = 'prop-row prop-check';
   var inp = document.createElement('input'); inp.type = 'checkbox'; inp.checked = !!checked;
-  inp.addEventListener('change', function () { setProp(key, inp.checked ? 'true' : ''); });
+  inp.addEventListener('change', function () { onChange(inp.checked); });
   var l = document.createElement('label'); l.textContent = label;
   row.appendChild(inp); row.appendChild(l); panel.appendChild(row);
+}
+function addNumProp(panel, label, key, val) {
+  var row = document.createElement('div'); row.className = 'prop-row';
+  var l = document.createElement('label'); l.textContent = label; row.appendChild(l);
+  var inp = document.createElement('input'); inp.type = 'number'; inp.value = val || 0;
+  inp.addEventListener('change', function () { setProp(key, inp.value); });
+  row.appendChild(inp); panel.appendChild(row);
 }
 function setProp(key, value) {
   if (!_selected) return;
@@ -738,7 +1229,7 @@ function hookYamlChange() {
   window.yamlEditor.onDidChangeModelContent(function () {
     if (_syncing) return;
     clearTimeout(_yamlChangeTimer);
-    _yamlChangeTimer = setTimeout(reloadCanvas, 400);
+    _yamlChangeTimer = setTimeout(syncFromYAML, 400);
   });
 }
 
@@ -748,7 +1239,7 @@ if (window._yamlTA) {
   window._yamlTA.addEventListener('input', function () {
     if (_syncing) return;
     clearTimeout(_yamlChangeTimer);
-    _yamlChangeTimer = setTimeout(reloadCanvas, 400);
+    _yamlChangeTimer = setTimeout(syncFromYAML, 400);
   });
   reloadCanvas();
 }
@@ -798,7 +1289,12 @@ legend{font-weight:600;color:#475569;padding:0 6px;font-size:12px}
 .hint{display:block;color:#94a3b8;font-size:11px;margin-top:3px}
 .deco{padding:6px 0;color:#475569;font-size:13px}
 .btn{padding:6px 12px;border:1px solid #d0d7e3;background:#f8fafc;border-radius:5px;cursor:pointer;margin-right:4px;font-size:12px}
-.tp-stub{background:#fef9c3;padding:8px;border-radius:6px;font-size:11px;color:#92400e;margin:6px 0}
+.tp-prev{margin:8px 0}
+.tp-prev-hd{font-size:12px;font-weight:600;color:#475569;margin-bottom:4px}
+.tp-prev-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tp-prev-tbl th,.tp-prev-tbl td{border:1px solid #e2e8f0;padding:5px 8px;text-align:left}
+.tp-prev-tbl th{background:#f8fafc;color:#475569;font-weight:600}
+.tp-prev-tbl td{height:24px}
 .unknown{background:#fef2f2;padding:8px;border-radius:6px;font-size:11px;color:#991b1b;margin:6px 0}
 </style></head><body>`)
 
@@ -898,6 +1394,14 @@ func renderPreviewElement(buf *bytes.Buffer, el *metadata.FormElement, tabsCount
 			pageIdx++
 		}
 		buf.WriteString(`</div></div>`)
+	case metadata.FormElementPage:
+		// Отдельная страница вне набора СтраницыФормы (её можно бросить на холст) —
+		// рисуем именованным блоком с детьми, а не «предпросмотр не реализован».
+		fmt.Fprintf(buf, `<fieldset><legend>%s</legend>`, html.EscapeString(title))
+		for _, c := range el.Children {
+			renderPreviewElement(buf, c, tabsCounter)
+		}
+		buf.WriteString(`</fieldset>`)
 	case metadata.FormElementField:
 		req := ""
 		if el.Required {
@@ -932,12 +1436,34 @@ func renderPreviewElement(buf *bytes.Buffer, el *metadata.FormElement, tabsCount
 	case metadata.FormElementPicture:
 		fmt.Fprintf(buf, `<div class="hint">[Картинка: %s]</div>`, html.EscapeString(el.Name))
 	case metadata.FormElementTable, metadata.FormElementTablePart:
-		mode := "обычная таблица"
-		if el.UseGrid {
-			mode = "SlickGrid (Excel-навигация)"
+		// Колонки, выбранные в конструкторе (дочерние kind:Колонка), рисуем
+		// реальной таблицей-каркасом с парой пустых строк. Без явных колонок —
+		// подсказка (в рантайме они подставятся из метаданных автоматически).
+		var cols []*metadata.FormElement
+		for _, c := range el.Children {
+			if c != nil && c.Kind == metadata.FormElementColumn {
+				cols = append(cols, c)
+			}
 		}
-		fmt.Fprintf(buf, `<div class="tp-stub">Табличная часть «%s» — %s. Предпросмотр упрощённый.</div>`,
-			html.EscapeString(title), mode)
+		fmt.Fprintf(buf, `<div class="tp-prev"><div class="tp-prev-hd">▦ %s</div>`, html.EscapeString(title))
+		if len(cols) == 0 {
+			buf.WriteString(`<div class="hint">Колонки не выбраны — отметьте состав в свойствах табличной части (в рантайме иначе показываются все поля).</div>`)
+		} else {
+			buf.WriteString(`<table class="tp-prev-tbl"><thead><tr>`)
+			for _, c := range cols {
+				fmt.Fprintf(buf, `<th>%s</th>`, html.EscapeString(columnLabel(c)))
+			}
+			buf.WriteString(`</tr></thead><tbody>`)
+			for r := 0; r < 2; r++ {
+				buf.WriteString(`<tr>`)
+				for range cols {
+					buf.WriteString(`<td></td>`)
+				}
+				buf.WriteString(`</tr>`)
+			}
+			buf.WriteString(`</tbody></table>`)
+		}
+		buf.WriteString(`</div>`)
 	case metadata.FormElementCommandBar:
 		// командная панель — обычно рендерится в toolbar над формой;
 		// в preview просто рисуем кнопки в ряд.

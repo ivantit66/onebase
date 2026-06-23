@@ -406,6 +406,15 @@ type configuratorData struct {
 	// EditingFormAttrs — реквизиты редактируемого объекта для палитры
 	// перетаскивания реквизитов на форму (issue #134).
 	EditingFormAttrs []formScaffoldAttr
+	// FormEditFrom — node-id узла дерева, из которого открыт редактор формы
+	// (?from=…). Back-link «← В конфигуратор» ведёт обратно на этот узел, а не
+	// в корень конфигуратора (follow-up #164, слайс A). Пусто → фолбэк на
+	// e-<Entity> редактируемой формы.
+	FormEditFrom string
+	// EditingFormTableParts — табличные части редактируемого объекта с составом
+	// колонок: палитра ТЧ на холсте и редактор состава колонок (follow-up #164,
+	// слайсы D1/D2).
+	EditingFormTableParts []formTablePart
 	Subsystems       []cfgSubsystem
 	Widgets          []cfgWidget
 	// GroupOrder — пользовательский порядок групп дерева (ключи data-group/data-gid)

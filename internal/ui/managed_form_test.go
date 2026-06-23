@@ -119,6 +119,49 @@ func TestPageManagedForm_Renders(t *testing.T) {
 	}
 }
 
+// Отдельная Страница (вне набора СтраницыФормы) рендерится в рантайме как блок
+// со своими детьми, а не «рендеринг не реализован» (#164, фикс после batch B/C).
+func TestPageManagedForm_StandalonePage(t *testing.T) {
+	form := &metadata.FormModule{
+		Name: "ФормаОбъекта", Kind: "object", EntityName: "Заказ",
+		LayoutKind: metadata.FormLayoutManaged,
+		Title:      map[string]string{"ru": "Заказ"},
+		Elements: []*metadata.FormElement{
+			{
+				Kind: metadata.FormElementPage, Name: "Товары",
+				TitleMap: map[string]string{"ru": "Товары"},
+				Children: []*metadata.FormElement{
+					{Kind: metadata.FormElementField, Name: "ПолеКомментарий",
+						TitleMap: map[string]string{"ru": "Комментарий"}, DataPath: "Объект.Комментарий"},
+				},
+			},
+		},
+	}
+	ent := &metadata.Entity{
+		Name: "Заказ", Kind: metadata.KindDocument,
+		Fields: []metadata.Field{{Name: "Комментарий", Type: metadata.FieldTypeString}},
+		Forms:  []*metadata.FormModule{form},
+	}
+	data := map[string]any{
+		"Entity": ent, "Form": form, "IsNew": true,
+		"Values": map[string]string{"Комментарий": ""}, "RefOptions": map[string]any{},
+		"EnumOptions": map[string]any{}, "TPRefOptions": map[string]any{}, "User": nil, "Lang": "ru",
+	}
+	var buf bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buf, "page-managed-form", data); err != nil {
+		t.Fatalf("ExecuteTemplate: %v", err)
+	}
+	html := buf.String()
+	if strings.Contains(html, "рендеринг не реализован") {
+		t.Errorf("отдельная страница даёт «рендеринг не реализован»:\n%s", html)
+	}
+	for _, s := range []string{"Товары", "Комментарий", `name="Комментарий"`} {
+		if !strings.Contains(html, s) {
+			t.Errorf("рантайм отдельной страницы не содержит %q", s)
+		}
+	}
+}
+
 // Тест что pickManagedForm с пустой строкой kind возвращает первую managed-форму
 // (используется на путях где kind не известен).
 func TestPickManagedForm_AnyKind(t *testing.T) {

@@ -678,7 +678,7 @@ const cfgTabTree = `{{define "tab-tree"}}
     </summary>
     {{range .ManagedForms}}
     <div class="cfg-item">
-      <a href="/bases/{{$.Base.ID}}/configurator/forms/edit?entity={{.Entity}}&name={{.Name}}" style="color:inherit;text-decoration:none;display:block">
+      <a href="/bases/{{$.Base.ID}}/configurator/forms/edit?entity={{.Entity}}&name={{.Name}}&from=e-{{.Entity}}" style="color:inherit;text-decoration:none;display:block">
         <span class="ic">◇</span>{{.Entity}} · {{formLabel .Name}}<span style="color:#aaa;font-size:10px;margin-left:4px">{{.Kind}}</span>
       </a>
     </div>
@@ -1370,7 +1370,7 @@ const cfgTabTree = `{{define "tab-tree"}}
                 <td style="padding:6px 8px">{{if .Kind}}{{.Kind}}{{else}}—{{end}}</td>
                 <td style="padding:6px 8px">{{if .HasOS}}{{t $.Lang "есть"}}{{else}}—{{end}}</td>
                 <td style="text-align:right;padding:6px 8px">
-                  <a href="/bases/{{$.Base.ID}}/configurator/forms/edit?entity={{.Entity}}&name={{.Name}}"
+                  <a href="/bases/{{$.Base.ID}}/configurator/forms/edit?entity={{.Entity}}&name={{.Name}}&from=proc-{{$pn}}"
                      style="display:inline-block;padding:3px 10px;background:#1a4a80;color:#fff;text-decoration:none;border-radius:4px;font-size:11px">
                     {{t $.Lang "Редактировать"}}
                   </a>
@@ -1383,7 +1383,7 @@ const cfgTabTree = `{{define "tab-tree"}}
             <p style="margin:0 0 10px">{{t $.Lang "У обработки"}} <b>{{.Name}}</b> {{t $.Lang "нет управляемых форм."}}</p>
             {{end}}
             <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-              <a href="/bases/{{$.Base.ID}}/configurator/forms/edit?entity={{.Name}}&name=ФормаОбъекта"
+              <a href="/bases/{{$.Base.ID}}/configurator/forms/edit?entity={{.Name}}&name=ФормаОбъекта&from=proc-{{$pn}}"
                  style="display:inline-block;padding:5px 12px;background:#16a34a;color:#fff;text-decoration:none;border-radius:4px;font-size:12px">
                 + {{t $.Lang "Форма объекта"}}
               </a>
@@ -2184,7 +2184,7 @@ const cfgTabTree = `{{define "tab-tree"}}
       <td style="padding:6px 8px">{{if .Kind}}{{.Kind}}{{else}}—{{end}}</td>
       <td style="padding:6px 8px">{{if .HasOS}}есть{{else}}—{{end}}</td>
       <td style="text-align:right;padding:6px 8px">
-        <a href="/bases/{{$baseID}}/configurator/forms/edit?entity={{.Entity}}&name={{.Name}}"
+        <a href="/bases/{{$baseID}}/configurator/forms/edit?entity={{.Entity}}&name={{.Name}}&from=e-{{$e.Name}}"
            style="display:inline-block;padding:3px 10px;background:#1a4a80;color:#fff;text-decoration:none;border-radius:4px;font-size:11px">
           Редактировать
         </a>
@@ -2201,11 +2201,11 @@ const cfgTabTree = `{{define "tab-tree"}}
   <p style="margin:0 0 10px">У сущности <b>{{$e.Name}}</b> нет управляемых форм. Авто-форма выше используется по умолчанию.</p>
   {{end}}
   <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-    <a href="/bases/{{$baseID}}/configurator/forms/edit?entity={{$e.Name}}&name=ФормаОбъекта"
+    <a href="/bases/{{$baseID}}/configurator/forms/edit?entity={{$e.Name}}&name=ФормаОбъекта&from=e-{{$e.Name}}"
        style="display:inline-block;padding:5px 12px;background:#16a34a;color:#fff;text-decoration:none;border-radius:4px;font-size:12px">
       + Форма объекта
     </a>
-    <a href="/bases/{{$baseID}}/configurator/forms/edit?entity={{$e.Name}}&name=ФормаСписка"
+    <a href="/bases/{{$baseID}}/configurator/forms/edit?entity={{$e.Name}}&name=ФормаСписка&from=e-{{$e.Name}}"
        style="display:inline-block;padding:5px 12px;background:#16a34a;color:#fff;text-decoration:none;border-radius:4px;font-size:12px">
       + Форма списка
     </a>
