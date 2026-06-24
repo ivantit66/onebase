@@ -20,6 +20,9 @@ func Validate(entities []*Entity, enums []*Enum) error {
 				return fmt.Errorf("entity %s: field %s references unknown enum %s", e.Name, f.Name, f.EnumName)
 			}
 		}
+		if err := validateTileView(e); err != nil {
+			return err
+		}
 		for _, tp := range e.TableParts {
 			for _, f := range tp.Fields {
 				if IsRichText(f.Type) {
@@ -34,6 +37,50 @@ func Validate(entities []*Entity, enums []*Enum) error {
 			if !entityNames[src] {
 				return fmt.Errorf("entity %s: based_on references unknown entity %s", e.Name, src)
 			}
+		}
+	}
+	return nil
+}
+
+func validateTileView(e *Entity) error {
+	if e == nil || e.TileView == nil {
+		return nil
+	}
+	if e.TileView.Image != "" {
+		f := findEntityField(e, e.TileView.Image)
+		if f == nil {
+			return fmt.Errorf("entity %s: tile_view.image references unknown field %s", e.Name, e.TileView.Image)
+		}
+		if !IsImage(f.Type) {
+			return fmt.Errorf("entity %s: tile_view.image field %s must have type image", e.Name, e.TileView.Image)
+		}
+	}
+	for _, item := range []struct {
+		role string
+		name string
+	}{
+		{"title", e.TileView.Title},
+		{"subtitle", e.TileView.Subtitle},
+	} {
+		if item.name == "" {
+			continue
+		}
+		if findEntityField(e, item.name) == nil {
+			return fmt.Errorf("entity %s: tile_view.%s references unknown field %s", e.Name, item.role, item.name)
+		}
+	}
+	for _, name := range e.TileView.Fields {
+		if findEntityField(e, name) == nil {
+			return fmt.Errorf("entity %s: tile_view.fields references unknown field %s", e.Name, name)
+		}
+	}
+	return nil
+}
+
+func findEntityField(e *Entity, name string) *Field {
+	for i := range e.Fields {
+		if e.Fields[i].Name == name {
+			return &e.Fields[i]
 		}
 	}
 	return nil

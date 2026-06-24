@@ -52,6 +52,14 @@ type rawEntity struct {
 	ItemForm      []string          `yaml:"item_form"`
 	BasedOn       []string          `yaml:"based_on"`
 	ListMode      string            `yaml:"list_mode"`
+	TileView      *rawTileView      `yaml:"tile_view"`
+}
+
+type rawTileView struct {
+	Image    string    `yaml:"image"`
+	Title    string    `yaml:"title"`
+	Subtitle string    `yaml:"subtitle"`
+	Fields   *[]string `yaml:"fields"`
 }
 
 func LoadFile(path string, kind Kind) (*Entity, error) {
@@ -79,6 +87,17 @@ func LoadFile(path string, kind Kind) (*Entity, error) {
 	// Нормализуем: «Feed», «FEED», « feed » → «feed». Иначе resolveListMode
 	// (сравнение с точной строкой "feed") молча откатывался бы на постранично.
 	e.ListMode = strings.ToLower(strings.TrimSpace(raw.ListMode))
+	if raw.TileView != nil {
+		e.TileView = &TileView{
+			Image:    strings.TrimSpace(raw.TileView.Image),
+			Title:    strings.TrimSpace(raw.TileView.Title),
+			Subtitle: strings.TrimSpace(raw.TileView.Subtitle),
+		}
+		if raw.TileView.Fields != nil {
+			e.TileView.Fields = trimStringList(*raw.TileView.Fields)
+			e.TileView.FieldsSet = true
+		}
+	}
 	if raw.Numerator != nil {
 		n := &Numerator{
 			Prefix: raw.Numerator.Prefix,
@@ -112,6 +131,19 @@ func LoadFile(path string, kind Kind) (*Entity, error) {
 		e.Predefined = append(e.Predefined, &PredefinedItem{Name: rp.Name, Fields: fields})
 	}
 	return e, nil
+}
+
+func trimStringList(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 type rawRegister struct {

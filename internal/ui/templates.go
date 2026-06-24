@@ -52,8 +52,18 @@ func templateFuncs(bundle *i18n.Bundle) template.FuncMap {
 			}
 			return fmt.Sprintf("%v", v)
 		},
-		"isRef":  func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "reference:") },
-		"isEnum": func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "enum:") },
+		"isRef":    func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "reference:") },
+		"isEnum":   func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "enum:") },
+		"tileView": resolveTileView,
+		"hasValue": func(v any) bool {
+			if v == nil {
+				return false
+			}
+			if s, ok := v.(string); ok {
+				return s != ""
+			}
+			return true
+		},
 		"enumLabel": func(labels map[string]map[string]string, field, value string) string {
 			if m, ok := labels[field]; ok {
 				if lbl, ok := m[value]; ok && lbl != "" {
@@ -669,6 +679,7 @@ body{padding-bottom:32px}
 .tile-card.tile-deleted .tile-title{text-decoration:line-through}
 .tile-img{width:100%;aspect-ratio:4/3;border-radius:8px;background:#f1f5f9 center/cover no-repeat;margin-bottom:10px;display:flex;align-items:center;justify-content:center;color:#cbd5e1;font-size:34px;flex-shrink:0}
 .tile-title{font-size:15px;font-weight:600;color:#1e293b;margin-bottom:8px;word-break:break-word}
+.tile-subtitle{font-size:13px;color:#64748b;margin-top:-4px;margin-bottom:8px;word-break:break-word}
 .tile-posted{color:#16a34a;font-weight:700}
 .tile-field{font-size:12.5px;color:#475569;margin-bottom:3px;display:flex;gap:5px;flex-wrap:wrap}
 .tile-label{color:#94a3b8;flex-shrink:0}
@@ -1211,6 +1222,7 @@ const tplList = `
 {{else if .TilesView}}
 {{/* ===== TILES VIEW (плитка) ===== */}}
 {{if .Rows}}
+{{$tile := tileView .Entity}}
 <div class="tile-grid">
 {{range .Rows}}{{$row := .}}{{$isFolder := index $row "is_folder"}}
 <div class="tile-card{{if index $row "deletion_mark"}} tile-deleted{{end}}"
@@ -1227,15 +1239,17 @@ const tplList = `
   data-unpost-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/unpost"
   data-unmark-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/delete?mark=0"
   data-open-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}{{if $.CurrentSubsystem}}?subsystem={{$.CurrentSubsystem}}{{end}}">
-  {{range $f := $.Entity.Fields}}{{if isImage (str $f.Type)}}{{$iv := index $row $f.Name}}
+  {{range $f := $tile.ImageFields}}{{$iv := index $row $f.Name}}
   <div class="tile-img"{{if $iv}} style="background-image:url('/ui/_image/{{$iv}}')"{{end}}>{{if not $iv}}🖼{{end}}</div>
+  {{end}}
+  {{with $tile.TitleField}}
+    <div class="tile-title">{{if $.Entity.Hierarchical}}{{if $isFolder}}📁 {{else}}📄 {{end}}{{end}}{{fmtCell (index $row .Name)}}{{if index $row "_is_predefined"}} <span title="{{t $.Lang "Предопределённый элемент"}}" style="color:#f59e0b;font-size:11px">★</span>{{end}}{{if eq (str $.Entity.Kind) "document"}}{{if index $row "posted"}} <span class="tile-posted" title="{{t $.Lang "Проведён"}}">✓</span>{{end}}{{end}}</div>
+  {{end}}
+  {{with $tile.SubtitleField}}{{$v := index $row .Name}}{{if hasValue $v}}
+    <div class="tile-subtitle">{{if eq (str .Type) "date"}}{{fmtDate $v}}{{else if isRichText (str .Type)}}{{richPlain $v}}{{else if isEnum (str .Type)}}{{enumLabel $.EnumLabels .Name (str $v)}}{{else}}{{fmtCell $v}}{{end}}</div>
   {{end}}{{end}}
-  {{range $i, $f := $.Entity.Fields}}{{if not (isImage (str $f.Type))}}
-    {{if eq $i 0}}
-    <div class="tile-title">{{if $.Entity.Hierarchical}}{{if $isFolder}}📁 {{else}}📄 {{end}}{{end}}{{fmtCell (index $row $f.Name)}}{{if index $row "_is_predefined"}} <span title="{{t $.Lang "Предопределённый элемент"}}" style="color:#f59e0b;font-size:11px">★</span>{{end}}{{if eq (str $.Entity.Kind) "document"}}{{if index $row "posted"}} <span class="tile-posted" title="{{t $.Lang "Проведён"}}">✓</span>{{end}}{{end}}</div>
-    {{else}}{{$v := index $row $f.Name}}{{if $v}}
-    <div class="tile-field"><span class="tile-label">{{$f.DisplayName $.Lang}}:</span> {{if eq (str $f.Type) "date"}}<span class="tile-val">{{fmtDate $v}}</span>{{else if isRichText (str $f.Type)}}<span class="tile-val">{{richPlain $v}}</span>{{else if isEnum (str $f.Type)}}<span class="tile-val">{{enumLabel $.EnumLabels $f.Name (str $v)}}</span>{{else}}<span class="tile-val">{{fmtCell $v}}</span>{{end}}</div>
-    {{end}}{{end}}
+  {{range $f := $tile.Fields}}{{$v := index $row $f.Name}}{{if hasValue $v}}
+    <div class="tile-field"><span class="tile-label">{{$f.DisplayName $.Lang}}:</span> {{if eq (str $f.Type) "date"}}<span class="tile-val">{{fmtDate $v}}</span>{{else if isRichText (str $f.Type)}}<span class="tile-val">{{richPlain $v}}</span>{{else if isEnum (str $f.Type)}}<span class="tile-val">{{enumLabel $.EnumLabels $f.Name (str $v)}}</span>{{else if isImage (str $f.Type)}}<span class="tile-val">{{if $v}}<img src="/ui/_image/{{$v}}" style="height:28px;width:28px;object-fit:cover;border-radius:5px;vertical-align:middle" alt="">{{else}}—{{end}}</span>{{else}}<span class="tile-val">{{fmtCell $v}}</span>{{end}}</div>
   {{end}}{{end}}
   <div class="tile-foot">
     {{if and $isFolder $.Entity.Hierarchical}}

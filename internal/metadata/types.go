@@ -183,6 +183,21 @@ type Entity struct {
 	// или "feed" (лента с догрузкой по скроллу, как динамический список 1С).
 	// Пользователь может переопределить тумблером (запоминается per-сущность).
 	ListMode string
+	// TileView задаёт пользовательскую компоновку плитки списка. Nil означает
+	// старое автоправило: картинка из image-поля, заголовок из первого поля,
+	// остальные реквизиты ниже.
+	TileView *TileView
+}
+
+// TileView описывает, какие реквизиты использовать в плиточной карточке списка.
+// Имена ссылаются на поля Entity.Fields.
+type TileView struct {
+	Image    string
+	Title    string
+	Subtitle string
+	Fields   []string
+	// FieldsSet отличает отсутствующий ключ fields от явного fields: [].
+	FieldsSet bool
 }
 
 type Register struct {
