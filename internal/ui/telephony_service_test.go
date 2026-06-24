@@ -232,3 +232,22 @@ func readCallsSummary(t *testing.T, s *Server, ctx context.Context) string {
 	}
 	return fmt.Sprintf("%v", res)
 }
+
+// АдресОригинации собирает корректный ARI-запрос (endpoint оператора, extension
+// = набираемый номер) и НЕ складывает числовые строки через "+" (готча DSL).
+func TestTelephony_OriginateURL(t *testing.T) {
+	s, ctx, _ := newCallcenterServer(t)
+	vars := s.buildDSLVars(ctx, nil)
+	proc := s.reg.GetModuleNamespacedProc("Телефония", "АдресОригинации")
+	if proc == nil {
+		t.Fatal("функция Телефония.АдресОригинации не найдена в модуле")
+	}
+	res, err := s.interp.Call(proc, nil, []any{"101", "79990001122", "from-internal", "ariuser", "aripass"}, vars)
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	want := "/ari/channels?endpoint=PJSIP/101&extension=79990001122&context=from-internal&priority=1&api_key=ariuser:aripass"
+	if got := fmt.Sprintf("%v", res); got != want {
+		t.Fatalf("URL originate неверный:\n got=%s\nwant=%s", got, want)
+	}
+}
