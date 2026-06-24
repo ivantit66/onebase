@@ -53,6 +53,7 @@ docs/*
 !docs/forms-1c-converter.md
 !docs/ai-assistant.md
 !docs/features.md
+!docs/roadmap.json
 !docs/users-load-limits.md
 !docs/release-template.md
 

@@ -1,0 +1,194 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "id": "visual-form-designer",
+      "plan": "Plans/71-visual-form-designer.md",
+      "status": "in_progress",
+      "bucket": "now",
+      "progress": 75,
+      "track": { "ru": "Формы и интерфейс", "en": "Forms & UI" },
+      "title": { "ru": "Визуальный конструктор форм", "en": "Visual form designer" },
+      "summary": {
+        "ru": "Редактор управляемых форм с предпросмотром, свойствами элементов, событиями и табличными частями без ручной правки YAML.",
+        "en": "Managed form editor with preview, element properties, events, and table parts without hand-editing YAML."
+      },
+      "feature": "Визуальный конструктор управляемых форм"
+    },
+    {
+      "id": "ai-dev-tools-next",
+      "plan": "Plans/74-ai-dev-tools-next.md",
+      "status": "in_progress",
+      "bucket": "now",
+      "progress": 35,
+      "track": { "ru": "ИИ", "en": "AI" },
+      "title": { "ru": "AI-инструменты разработчика 2.0", "en": "AI developer tools 2.0" },
+      "summary": {
+        "ru": "Машинные контракты, headless-проверки, генерация рабочих feature slices и интеграция через MCP для внешних агентов.",
+        "en": "Machine-readable contracts, headless checks, working feature-slice generation, and MCP integration for external agents."
+      },
+      "feature": "ИИ-помощник в конфигураторе"
+    },
+    {
+      "id": "config-versioning-marketplace",
+      "plan": "Plans/60-config-versioning-marketplace.md",
+      "status": "in_progress",
+      "bucket": "now",
+      "progress": 35,
+      "track": { "ru": "Экосистема", "en": "Ecosystem" },
+      "title": { "ru": "Версионирование конфигураций и marketplace", "en": "Configuration versioning and marketplace" },
+      "summary": {
+        "ru": "История изменений конфигурации в базе, diff/rollback и будущая установка типовых решений из каталога.",
+        "en": "Configuration history in the database, diff/rollback, and future installation of templates from a catalog."
+      }
+    },
+    {
+      "id": "auto-backup",
+      "plan": "Plans/28-auto-backup.md",
+      "status": "in_progress",
+      "bucket": "now",
+      "progress": 35,
+      "track": { "ru": "Администрирование", "en": "Administration" },
+      "title": { "ru": "Автобэкап с ротацией", "en": "Scheduled backups with rotation" },
+      "summary": {
+        "ru": "Расписание резервного копирования баз, хранение последних снимков и понятное управление из интерфейса.",
+        "en": "Scheduled database backups, retention of recent snapshots, and clear administration from the UI."
+      }
+    },
+    {
+      "id": "techdebt-observability",
+      "plan": "Plans/56-techdebt-ci-observability.md",
+      "status": "in_progress",
+      "bucket": "now",
+      "progress": 65,
+      "track": { "ru": "Качество", "en": "Quality" },
+      "title": { "ru": "CI, наблюдаемость и техдолг", "en": "CI, observability, and tech debt" },
+      "summary": {
+        "ru": "Race/coverage, метрики, RBAC-проверки, единое логирование и чистка инфраструктурного долга перед ростом платформы.",
+        "en": "Race/coverage checks, metrics, RBAC hardening, consistent logging, and infrastructure cleanup before the platform grows further."
+      }
+    },
+    {
+      "id": "rest-api-v2",
+      "plan": "Plans/26-rest-api-v2.md",
+      "status": "planned",
+      "bucket": "next",
+      "progress": 0,
+      "track": { "ru": "Интеграции", "en": "Integrations" },
+      "title": { "ru": "REST API v2", "en": "REST API v2" },
+      "summary": {
+        "ru": "Единый публичный API для объектов конфигурации: фильтры, пагинация, проведение, отчёты и OpenAPI.",
+        "en": "A unified public API for configuration objects: filters, pagination, posting, reports, and OpenAPI."
+      }
+    },
+    {
+      "id": "pwa-store-wrapper",
+      "plan": "Plans/46-pwa-store-wrapper.md",
+      "status": "planned",
+      "bucket": "next",
+      "progress": 0,
+      "track": { "ru": "Мобильность", "en": "Mobile" },
+      "title": { "ru": "Публикация PWA в сторах", "en": "PWA store packaging" },
+      "summary": {
+        "ru": "TWA/Capacitor-обёртка для публикации мобильного интерфейса OneBase в Google Play и App Store.",
+        "en": "TWA/Capacitor wrapper for publishing the OneBase mobile UI to Google Play and the App Store."
+      }
+    },
+    {
+      "id": "dsl-real-world",
+      "plan": "Plans/34-dsl-real-world.md",
+      "status": "planned",
+      "bucket": "next",
+      "progress": 0,
+      "track": { "ru": "DSL", "en": "DSL" },
+      "title": { "ru": "DSL для реальных конфигураций", "en": "DSL for real-world configurations" },
+      "summary": {
+        "ru": "Добивка языка под практические сценарии: общие модули, ссылочные поля, функции дат и серверные хуки.",
+        "en": "Language improvements for practical apps: common modules, reference fields, date functions, and server hooks."
+      }
+    },
+    {
+      "id": "pages",
+      "plan": "Plans/66-pages.md",
+      "status": "done",
+      "bucket": "done",
+      "progress": 100,
+      "track": { "ru": "Формы и интерфейс", "en": "Forms & UI" },
+      "title": { "ru": "Произвольные страницы на DSL", "en": "Custom DSL pages" },
+      "summary": {
+        "ru": "Именованные экраны разделов с показателями, таблицами, графиками, кнопками и серверными действиями.",
+        "en": "Named section screens with metrics, tables, charts, buttons, and server-side actions."
+      },
+      "feature": "Страницы (произвольные экраны на DSL)"
+    },
+    {
+      "id": "report-composition-v2",
+      "plan": "Plans/68-report-composition-v2.md",
+      "status": "done",
+      "bucket": "done",
+      "progress": 100,
+      "track": { "ru": "Отчёты", "en": "Reports" },
+      "title": { "ru": "СКД v2", "en": "Report composition v2" },
+      "summary": {
+        "ru": "Группировки, итоги, Excel, вычисляемые показатели, drill-down, pivot и варианты компоновки.",
+        "en": "Groups, totals, Excel export, calculated measures, drill-down, pivot tables, and composition variants."
+      },
+      "feature": "Компоновка отчётов (СКД)"
+    },
+    {
+      "id": "runtime-report-settings",
+      "plan": "Plans/70-report-runtime-settings.md",
+      "status": "done",
+      "bucket": "done",
+      "progress": 100,
+      "track": { "ru": "Отчёты", "en": "Reports" },
+      "title": { "ru": "Настройки отчёта пользователем", "en": "User report settings" },
+      "summary": {
+        "ru": "Пользователь меняет группировки, показатели, колонки и отборы прямо на форме отчёта и сохраняет настройки.",
+        "en": "Users change report groups, measures, columns, and filters directly on the report form and save their settings."
+      },
+      "feature": "Настройка отчёта пользователем"
+    },
+    {
+      "id": "http-services",
+      "plan": "Plans/61-http-services.md",
+      "status": "done",
+      "bucket": "done",
+      "progress": 100,
+      "track": { "ru": "Интеграции", "en": "Integrations" },
+      "title": { "ru": "HTTP-сервисы на DSL", "en": "HTTP services in DSL" },
+      "summary": {
+        "ru": "Публикация REST-эндпоинтов `/hs/*` из конфигурации, обработчики на DSL и документация через OpenAPI/RapiDoc.",
+        "en": "Publishing `/hs/*` REST endpoints from configuration, DSL handlers, and OpenAPI/RapiDoc documentation."
+      },
+      "feature": "HTTP-сервисы (публикация REST на DSL)"
+    },
+    {
+      "id": "database-rollup",
+      "plan": "Plans/74-database-rollup.md",
+      "status": "done",
+      "bucket": "done",
+      "progress": 100,
+      "track": { "ru": "Администрирование", "en": "Administration" },
+      "title": { "ru": "Свёртка информационной базы", "en": "Database rollup" },
+      "summary": {
+        "ru": "Сокращение истории базы с сохранением остатков регистров, датой запрета проведения, CLI и UI конфигуратора.",
+        "en": "Shrinking database history while preserving register balances, posting lock dates, CLI, and configurator UI."
+      },
+      "feature": "Свёртка базы"
+    },
+    {
+      "id": "one-c-converter",
+      "plan": "Plans/37-managed-forms-1c-converter.md",
+      "status": "planned",
+      "bucket": "later",
+      "progress": 20,
+      "track": { "ru": "Миграция", "en": "Migration" },
+      "title": { "ru": "Конвертер управляемых форм 1С", "en": "1C managed forms converter" },
+      "summary": {
+        "ru": "Двусторонний обмен Form.xml/Module.bsl с формами OneBase и визуальным редактором.",
+        "en": "Round-trip exchange between 1C Form.xml/Module.bsl and OneBase forms with the visual editor."
+      }
+    }
+  ]
+}
