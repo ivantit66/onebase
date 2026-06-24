@@ -43,6 +43,9 @@ Thumbs.db
 .claude/scheduled_tasks.lock
 .superpowers/
 
+# Local agent instructions
+AGENTS.md
+
 # IDE
 .idea/
 .vscode/
