@@ -1,11 +1,111 @@
 package scheduler
 
 import (
+	"context"
+	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/ivantit66/onebase/internal/storage"
 	"github.com/stretchr/testify/assert"
 )
+
+func openSchedulerTestDB(t *testing.T) (*storage.DB, context.Context) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := storage.ConnectSQLite(ctx, filepath.Join(t.TempDir(), "scheduler.db"))
+	if err != nil {
+		t.Fatalf("ConnectSQLite: %v", err)
+	}
+	t.Cleanup(db.Close)
+	if err := db.EnsureScheduledRunsTable(ctx); err != nil {
+		t.Fatalf("EnsureScheduledRunsTable: %v", err)
+	}
+	return db, ctx
+}
+
+func TestShutdownDrainsRunningGoJob(t *testing.T) {
+	db, ctx := openSchedulerTestDB(t)
+	sched := New(db, nil, nil)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	jobCtx, done, ok := sched.beginJob()
+	assert.True(t, ok)
+	go func() {
+		defer done()
+		sched.executeGoJob(jobCtx, "SlowJob", func(context.Context) error {
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
+
+	shutdownDone := make(chan error, 1)
+	go func() {
+		shutdownDone <- sched.Shutdown(context.Background())
+	}()
+
+	select {
+	case err := <-shutdownDone:
+		t.Fatalf("Shutdown returned before active job completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	assert.NoError(t, <-shutdownDone)
+
+	runs, err := db.ScheduledRuns(ctx, "SlowJob", 1)
+	assert.NoError(t, err)
+	if assert.Len(t, runs, 1) {
+		assert.Equal(t, runStatusSuccess, runs[0].Status)
+		assert.NotNil(t, runs[0].FinishedAt)
+	}
+}
+
+func TestShutdownDeadlineMarksRunningGoJobInterrupted(t *testing.T) {
+	db, ctx := openSchedulerTestDB(t)
+	sched := New(db, nil, nil)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	jobDone := make(chan struct{})
+	jobCtx, done, ok := sched.beginJob()
+	assert.True(t, ok)
+	go func() {
+		defer close(jobDone)
+		defer done()
+		sched.executeGoJob(jobCtx, "BlockedJob", func(context.Context) error {
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	err := sched.Shutdown(shutdownCtx)
+	assert.True(t, errors.Is(err, context.DeadlineExceeded), "got %v", err)
+
+	runs, err := db.ScheduledRuns(ctx, "BlockedJob", 1)
+	assert.NoError(t, err)
+	if assert.Len(t, runs, 1) {
+		assert.Equal(t, runStatusInterrupted, runs[0].Status)
+		assert.Equal(t, "scheduler shutdown interrupted", runs[0].Error)
+	}
+
+	close(release)
+	<-jobDone
+
+	runs, err = db.ScheduledRuns(ctx, "BlockedJob", 1)
+	assert.NoError(t, err)
+	if assert.Len(t, runs, 1) {
+		assert.Equal(t, runStatusInterrupted, runs[0].Status)
+	}
+}
 
 func TestResolveTemplate_Today(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)

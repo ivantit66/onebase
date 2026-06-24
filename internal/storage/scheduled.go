@@ -93,19 +93,23 @@ func (db *DB) ScheduledRuns(ctx context.Context, jobName string, limit int) ([]S
 	for rows.Next() {
 		var r ScheduledRun
 		var output, errText *string
-		var finishedAt *time.Time
+		var startedAtRaw, finishedAtRaw any
 		var durationMs *int64
-		if err := rows.Scan(&r.ID, &r.JobName, &r.StartedAt, &finishedAt, &r.Status, &output, &errText, &durationMs); err != nil {
+		if err := rows.Scan(&r.ID, &r.JobName, &startedAtRaw, &finishedAtRaw, &r.Status, &output, &errText, &durationMs); err != nil {
 			return nil, err
 		}
+		r.StartedAt = parseAuditTime(startedAtRaw)
 		if output != nil {
 			r.Output = *output
 		}
 		if errText != nil {
 			r.Error = *errText
 		}
-		if finishedAt != nil {
-			r.FinishedAt = finishedAt
+		if finishedAtRaw != nil {
+			finishedAt := parseAuditTime(finishedAtRaw)
+			if !finishedAt.IsZero() {
+				r.FinishedAt = &finishedAt
+			}
 		}
 		if durationMs != nil {
 			r.DurationMs = *durationMs
