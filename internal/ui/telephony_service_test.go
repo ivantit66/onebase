@@ -292,3 +292,14 @@ func TestTelephony_PanelRenders(t *testing.T) {
 		t.Fatalf("панель неполна: kpi=%v client=%v journal=%v links=%v", hasKPI, hasClient, hasJournal, hasLinks)
 	}
 }
+
+// Общий layout содержит слушатель шины для входящего звонка (план 75): без него
+// скрин-поп не виден ни на одной странице (страницы JS не инжектят).
+func TestTelephony_LayoutHasCallToast(t *testing.T) {
+	src := templateSource()
+	for _, want := range []string{"onebase:звонок.входящий", "callToast"} {
+		if !strings.Contains(src, want) {
+			t.Errorf("layout не содержит %q (глобальная всплывашка входящего звонка)", want)
+		}
+	}
+}
