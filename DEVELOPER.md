@@ -749,6 +749,44 @@ bases:
 - Редактирование: кнопка **«Конфигуратор»** → «Выгрузить» → правка → «Загрузить»
 - Выгрузка попадает в `~/.onebase/workspace/<base-id>/`
 
+### Рекомендуемый поток: Git → релиз → прод
+
+Для командной разработки держите конфигурацию в файловом режиме:
+
+```bash
+onebase dev --project ./my-project --db "postgres://localhost/mydb?sslmode=disable"
+git status
+git commit
+```
+
+Git остаётся источником правды для разработчиков: код-ревью, CI, история
+изменений и ветки живут там. Перед релизом прогоняйте проверку:
+
+```bash
+onebase check --project ./my-project
+```
+
+На прод накатывайте уже выбранную ревизию из Git в БД-режим:
+
+```bash
+onebase deploy \
+  --project ./my-project \
+  --db "postgres://user:pass@server/prod?sslmode=disable" \
+  --message "release 1.4.0"
+```
+
+`deploy` загружает YAML/DSL-файлы в `_onebase_config`, применяет DDL-миграции
+и создаёт одну запись в `_config_versions` с сообщением релиза. После этого
+прод запускается без файлов проекта:
+
+```bash
+onebase run --config-source database --db "postgres://user:pass@server/prod?sslmode=disable"
+```
+
+Такой поток не заменяет Git. Он закрывает другую задачу: в самой продовой базе
+видно, какая конфигурация была применена, и появляется техническая основа для
+diff/rollback без доступа к репозиторию.
+
 ### Конфигуратор
 
 Кнопка **Конфигуратор** в лаунчере открывает визуальный редактор конфигурации:
@@ -768,6 +806,7 @@ bases:
 | Таблица | Назначение |
 |---|---|
 | `_onebase_config` | Конфигурация в БД-режиме |
+| `_config_versions` | История снимков конфигурации в БД-режиме |
 | `_users` | Пользователи |
 | `_sessions` | Сессии авторизации |
 | `_audit` | Журнал регистрации (события) |
@@ -2124,6 +2163,7 @@ onebase restore --db <dsn> --file ./backups/backup_mydb_2026-05-07_10-30.sql.gz
 
 | Команда | Описание |
 |---|---|
+| `onebase deploy --project <dir> --db <dsn> --message <text>` | Накатить файловую конфигурацию в БД-режим, применить миграции и записать версию релиза |
 | `onebase backup --db <dsn> --out <dir>` | Создать бэкап БД в формате .sql.gz |
 | `onebase restore --db <dsn> --file <path>` | Восстановить БД из бэкапа |
 | `onebase init --template <name> <dir>` | Создать проект из шаблона |

@@ -3,9 +3,9 @@
 **Статус:** 🟡 Часть A начата (2026-06-24): добавлено ядро истории
 конфигурации в `internal/configdb` — таблица `_config_versions`, gzip(JSON)
 снимки `_onebase_config`, авто-снимок после `SaveFile`/`DeleteFile`,
-`ListVersions`/`GetVersion`/`DiffVersions`/`RollbackToVersion` и SQLite-тесты.
-UI истории, группировка batch-сохранений в одну версию и marketplace ещё не
-реализованы.
+`ListVersions`/`GetVersion`/`DiffVersions`/`RollbackToVersion`, SQLite-тесты
+и релизный снимок в `onebase deploy --message`. UI истории, группировка
+batch-сохранений в одну версию и marketplace ещё не реализованы.
 **Источник:** `АнализПроекта-2026-06-10.md` §4.5 (marketplace) + §4.6 (версионирование).
 **Приоритет:** 🟢 Экосистемный — превращает инструмент в платформу. Объединены: обе фичи про «конфигурация как актив».
 
@@ -48,6 +48,8 @@ CREATE TABLE _config_versions (
 
 ### Поведение
 - Каждое сохранение конфигурации в конфигураторе создаёт версию (с сообщением).
+- Каждый `onebase deploy --project <dir> --db <dsn> --message <text>` создаёт
+  одну релизную версию после импорта конфигурации и применения миграций.
 - Страница «История конфигурации»: список версий, **diff** между любыми двумя (по объектам/
   полям/тексту DSL), **откат** к версии (создаёт новую версию = «откат к N», не стирает историю).
 - Экспорт версии в `.obz` и в git-дружественный набор файлов (для внешнего versioning).
@@ -56,6 +58,7 @@ CREATE TABLE _config_versions (
 |---|---|
 | `internal/configdb/versions.go` (новый) | DDL + create/list/get/diff/rollback версий |
 | `internal/configdb` | хук «сохранение → новая версия» |
+| `internal/cli/deploy.go` | релизный снимок при накатывании файловой конфигурации в БД |
 | `internal/launcher/config_history.go` (новый) | UI истории: список/diff/откат |
 | `internal/backup/universal.go` | переиспользовать сериализацию снимка |
 

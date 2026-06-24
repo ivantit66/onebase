@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/ivantit66/onebase/internal/auth"
 	"github.com/ivantit66/onebase/internal/configdb"
 	"github.com/ivantit66/onebase/internal/project"
 	"github.com/ivantit66/onebase/internal/storage"
+	"github.com/spf13/cobra"
 )
 
 var deployCmd = &cobra.Command{
@@ -23,21 +25,24 @@ Steps performed:
   2. Create platform schema (_onebase_config, _users, _sessions, ...)
   3. Import YAML configuration files into _onebase_config
   4. Run DDL migrations (CREATE TABLE IF NOT EXISTS for all entities)
+  5. Store one configuration version for this release
 
 After deploy, start the server with:
   onebase run --config-source database --db <DSN> --port <PORT>`,
-	Example: `  onebase deploy --project ./myapp --db "postgres://user:pass@server/mydb?sslmode=disable"`,
+	Example: `  onebase deploy --project ./myapp --db "postgres://user:pass@server/mydb?sslmode=disable" --message "release 1.4.0"`,
 	RunE:    runDeploy,
 }
 
 func init() {
 	deployCmd.Flags().String("project", ".", "path to local project directory")
 	deployCmd.Flags().String("db", "", "PostgreSQL connection string (required)")
+	deployCmd.Flags().String("message", "", "configuration version message for this release")
 	_ = deployCmd.MarkFlagRequired("db")
 }
 
 func runDeploy(cmd *cobra.Command, _ []string) error {
 	dir, _ := cmd.Flags().GetString("project")
+	messageFlag, _ := cmd.Flags().GetString("message")
 	dsn := dsnFromFlags(cmd)
 	ctx := context.Background()
 
@@ -118,6 +123,12 @@ func runDeploy(cmd *cobra.Command, _ []string) error {
 	}
 
 	appCfg, _ := project.LoadConfig(dir)
+	versionMessage := deployVersionMessage(dir, messageFlag, appCfg)
+	version, err := cfgRepo.CreateVersion(ctx, configdb.VersionOptions{Message: versionMessage})
+	if err != nil {
+		return fmt.Errorf("config version: %w", err)
+	}
+
 	appName := "myapp"
 	if appCfg != nil && appCfg.Name != "" {
 		appName = appCfg.Name
@@ -128,8 +139,32 @@ func runDeploy(cmd *cobra.Command, _ []string) error {
 	fmt.Fprintln(os.Stdout, "")
 	fmt.Fprintf(os.Stdout, "  Приложение: %s\n", appName)
 	fmt.Fprintf(os.Stdout, "  База данных: %s\n", dsn)
+	fmt.Fprintf(os.Stdout, "  Версия конфигурации: %s (%s)\n", version.ID, version.Message)
 	fmt.Fprintln(os.Stdout, "")
 	fmt.Fprintln(os.Stdout, "Запустите сервер командой:")
 	fmt.Fprintf(os.Stdout, "  onebase run --config-source database --db \"%s\" --port 8080\n", dsn)
 	return nil
+}
+
+func deployVersionMessage(dir, explicit string, cfg *project.AppConfig) string {
+	if msg := strings.TrimSpace(explicit); msg != "" {
+		return msg
+	}
+	if cfg != nil {
+		name := strings.TrimSpace(cfg.Name)
+		version := strings.TrimSpace(cfg.Version)
+		switch {
+		case name != "" && version != "":
+			return "release " + name + " " + version
+		case version != "":
+			return "release " + version
+		case name != "":
+			return "release " + name
+		}
+	}
+	base := filepath.Base(filepath.Clean(dir))
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		return "release"
+	}
+	return "release " + base
 }
