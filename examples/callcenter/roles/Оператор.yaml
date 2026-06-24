@@ -1,0 +1,10 @@
+name: Оператор
+title: Оператор колл-центра
+description: Доступ к панели телефонии, клиентам и журналу звонков
+permissions:
+  catalogs:
+    Клиент: [read, write]
+    Оператор: [read]
+    Очередь: [read]
+  documents:
+    Звонок: [read, write]

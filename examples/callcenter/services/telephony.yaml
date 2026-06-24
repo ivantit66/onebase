@@ -1,0 +1,18 @@
+name: Телефония
+title: Телефония (CTI) — события звонков
+root_url: telephony
+# auth hmac: Asterisk/провайдер подписывает тело — X-Webhook-Signature =
+# hex(HMAC-SHA256(тело, secret)) (допускается префикс "sha256="). Секрет — из
+# окружения, не в YAML/git. Альтернатива для простых интеграций: auth token
+# (постоянный X-Webhook-Token). /hs/-эндпоинт ещё гейтится предохранителем сети
+# (план 62): включите «Разрешить сетевые операции» (Система → Настройки).
+auth: hmac
+secret: "${env:TELEPHONY_SECRET}"
+rate_limit: 1200
+templates:
+  - template: /event
+    methods:
+      POST: СобытиеЗвонка
+  - template: /lookup
+    methods:
+      GET: КтоЗвонит

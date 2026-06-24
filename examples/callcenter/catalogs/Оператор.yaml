@@ -1,0 +1,17 @@
+name: Оператор
+title: Оператор
+description: Сопоставление пользователя onebase и SIP-экстеншена Asterisk
+hierarchical: false
+fields:
+  - name: Наименование
+    type: string
+  - name: Логин
+    type: string
+    label: Логин пользователя onebase (кому слать скрин-поп)
+  - name: Экстеншен
+    type: string
+    label: SIP-экстеншен / endpoint (PJSIP/<экстеншен>)
+  - name: Очередь
+    type: reference:Очередь
+  - name: Активный
+    type: bool

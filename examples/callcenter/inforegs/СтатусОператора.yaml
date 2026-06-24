@@ -1,0 +1,9 @@
+name: СтатусОператора
+dimensions:
+  - name: Оператор
+    type: reference:Оператор
+resources:
+  - name: Статус
+    type: string
+  - name: ОбновленО
+    type: date

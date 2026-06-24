@@ -77,3 +77,32 @@ func TestCheckHTTPServices(t *testing.T) {
 		t.Errorf("ожидалось ровно 5 ошибок, получено %d: %+v", len(issues), issues)
 	}
 }
+
+// Секрет, вынесенный в ${env:VAR}, считается ЗАДАННЫМ даже если переменная не
+// экспортирована в момент onebase check: загрузчик раскрывает ${env:…} в пустую
+// строку, но валидатор смотрит на сырое (до раскрытия) значение. Иначе
+// идиоматически правильный конфиг (секрет в окружении, не в git) не проходит
+// собственный линтер — план 75: examples/callcenter с auth hmac должен
+// проходить check без TELEPHONY_SECRET в среде.
+func TestCheckHTTPServices_EnvSourcedSecretIsConfigured(t *testing.T) {
+	good := parseServiceProg(t, `Функция Событие(Запрос) Экспорт
+  Возврат "ok";
+КонецФункции`)
+	tmpl := httpservice.URLTemplate{Template: "/event", Methods: map[string]string{"POST": "Событие"}}
+
+	svc := &httpservice.Service{Name: "Тел", RootURL: "tel", Auth: "hmac",
+		Secret: "${env:TELE_TEST_SECRET}", Templates: []httpservice.URLTemplate{tmpl}}
+	svc.Normalize()   // сохраняет сырой секрет (${env:…}) до раскрытия
+	svc.Secret = ""   // имитируем раскрытие незаданной переменной загрузчиком
+
+	proj := &project.Project{
+		HTTPServices:    []*httpservice.Service{svc},
+		ServicePrograms: map[string]*ast.Program{"Тел": good},
+	}
+
+	for _, is := range CheckHTTPServices(proj) {
+		if strings.Contains(is.Message, "требует secret") {
+			t.Errorf("env-секрет ошибочно помечен отсутствующим: %+v", is)
+		}
+	}
+}

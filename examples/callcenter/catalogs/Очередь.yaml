@@ -1,0 +1,11 @@
+name: Очередь
+title: Очередь
+description: Очередь колл-центра (группа операторов)
+hierarchical: false
+fields:
+  - name: Наименование
+    type: string
+  - name: Описание
+    type: string
+  - name: Активна
+    type: bool

@@ -47,7 +47,10 @@ func CheckHTTPServices(proj *project.Project) []Issue {
 		switch svc.Auth {
 		case "", "none", "basic", "session":
 		case "token", "hmac":
-			if strings.TrimSpace(svc.Secret) == "" {
+			// Секрет, вынесенный в ${env:VAR}, считается заданным, даже если
+			// переменная не экспортирована при линте (HasSecret смотрит на
+			// сырое значение) — наличие переменной это забота рантайма.
+			if !svc.HasSecret() {
 				add(svc.Name, fmt.Sprintf("auth %q требует secret (используйте ${env:VAR})", svc.Auth))
 			}
 		default:

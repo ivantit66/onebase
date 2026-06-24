@@ -1,0 +1,18 @@
+name: Клиент
+title: Клиент
+hierarchical: false
+fields:
+  - name: Наименование
+    type: string
+  - name: Организация
+    type: string
+  - name: Телефон
+    type: string
+  - name: МобильныйТелефон
+    type: string
+  - name: Email
+    type: string
+  - name: Ответственный
+    type: reference:Оператор
+  - name: Комментарий
+    type: string

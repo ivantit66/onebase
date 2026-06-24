@@ -1,0 +1,29 @@
+name: Звонок
+title: Звонок
+numerator:
+  prefix: "ЗВ-"
+  length: 6
+  period: year
+fields:
+  - name: Номер
+    type: string
+  - name: Дата
+    type: date
+  - name: Клиент
+    type: reference:Клиент
+  - name: Оператор
+    type: reference:Оператор
+  - name: Направление
+    type: enum:НаправлениеЗвонка
+  - name: Состояние
+    type: enum:СостояниеЗвонка
+  - name: НомерАбонента
+    type: string
+    label: Внешний номер абонента (from/to)
+  - name: ВнешнийId
+    type: string
+    label: Идентификатор канала Asterisk (linkedid)
+  - name: ДлительностьМинут
+    type: number
+  - name: Описание
+    type: string

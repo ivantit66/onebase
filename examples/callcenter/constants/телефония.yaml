@@ -1,0 +1,18 @@
+constants:
+  - name: ХостARI
+    type: string
+    label: Хост Asterisk ARI (например 127.0.0.1)
+  - name: ПортARI
+    type: number
+    default: 8088
+    label: Порт ARI
+  - name: ПользовательARI
+    type: string
+    label: Пользователь ARI (ari.conf)
+  - name: ПарольARI
+    type: string
+    label: Пароль ARI
+  - name: КонтекстЗвонка
+    type: string
+    default: from-internal
+    label: Контекст dialplan для originate

@@ -825,6 +825,35 @@ window.onebaseDevice={
     requestAnimationFrame(function(){el.style.opacity='1';});
     setTimeout(function(){el.style.opacity='0';setTimeout(function(){el.remove();},250);},6000);
   }
+  /* План 75 (телефония/CTI): входящий звонок -> «скрин-поп» на любой странице.
+     Конфигурация публикует ОтправитьУведомление(логин,"звонок.входящий",
+     {номер,клиент,ссылка,id}); здесь рисуем тост с именем клиента и ссылкой на
+     карточку. Слушатель безвреден вне телефонии: срабатывает только на это
+     событие. DOM собираем textContent/href — без innerHTML (защита от XSS). */
+  function callToast(d){
+    d=d||{};
+    var box=document.getElementById('ob-toasts');
+    if(!box){box=document.createElement('div');box.id='ob-toasts';
+      box.style.cssText='position:fixed;right:16px;bottom:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;max-width:360px';
+      (document.body||document.documentElement).appendChild(box);}
+    var el=document.createElement('div');
+    el.style.cssText='position:relative;background:#065f46;color:#fff;padding:12px 28px 12px 14px;border-radius:8px;box-shadow:0 6px 16px rgba(0,0,0,.3);font-size:14px;line-height:1.4';
+    var head=document.createElement('div'); head.style.cssText='font-weight:600;margin-bottom:4px';
+    head.textContent='📞 Входящий звонок'; el.appendChild(head);
+    var line=document.createElement('div');
+    line.textContent=(d['номер']||'')+(d['клиент']?(' — '+d['клиент']):''); el.appendChild(line);
+    var url=d['ссылка'];
+    if(typeof url==='string'&&url.charAt(0)==='/'){
+      var a=document.createElement('a'); a.href=url; a.textContent='Открыть карточку клиента';
+      a.style.cssText='display:inline-block;margin-top:6px;color:#a7f3d0;text-decoration:underline'; el.appendChild(a);
+    }
+    var x=document.createElement('button'); x.textContent='×'; x.setAttribute('aria-label','Закрыть');
+    x.style.cssText='position:absolute;top:4px;right:8px;background:none;border:none;color:#fff;font-size:18px;line-height:1;cursor:pointer';
+    x.onclick=function(){el.remove();}; el.appendChild(x);
+    box.appendChild(el);
+    setTimeout(function(){if(el.parentNode)el.remove();},20000);
+  }
+  window.addEventListener('onebase:звонок.входящий',function(ev){callToast(ev.detail);});
   function connect(){
     if(typeof EventSource==='undefined')return;
     var es=new EventSource('/ui/events'); window.__obEvents=es;

@@ -47,6 +47,12 @@ type Service struct {
 	// Secret — секрет для auth token/hmac. Задавайте через ${env:VAR} —
 	// значение живёт в окружении, не в YAML/git/.obz.
 	Secret string `yaml:"secret"`
+	// SecretRaw — секрет в исходном виде, ДО раскрытия ${env:VAR} загрузчиком.
+	// Захватывается в Normalize, не читается из YAML. Нужен валидатору
+	// (onebase check), чтобы отличить «секрет не задан» от «секрет вынесен в
+	// окружение»: незаданная при линте переменная даёт пустой Secret, но
+	// конфигурация при этом корректна — наличие переменной это забота рантайма.
+	SecretRaw string `yaml:"-"`
 	// RateLimit — максимум запросов в минуту на сервис; 0 = без лимита.
 	RateLimit int `yaml:"rate_limit"`
 	// Roles — если непусто, вызов разрешён только аутентифицированному
@@ -83,6 +89,12 @@ func (s *Service) DisplayName(lang string) string {
 // замыкающих слэшей, методы в верхнем регистре, дефолтная аутентификация.
 // Вызывается загрузчиком; экспортирован для программного построения сервисов.
 func (s *Service) Normalize() {
+	// Сохраняем сырой секрет один раз — до того, как загрузчик раскроет
+	// ${env:VAR}. Захват один раз (по пустому SecretRaw) защищает от затирания,
+	// если Normalize вызовут повторно уже после раскрытия.
+	if s.SecretRaw == "" {
+		s.SecretRaw = s.Secret
+	}
 	s.RootURL = strings.Trim(strings.TrimSpace(s.RootURL), "/")
 	if s.Auth == "" {
 		s.Auth = "none"
@@ -97,6 +109,15 @@ func (s *Service) Normalize() {
 		}
 		t.Methods = up
 	}
+}
+
+// HasSecret сообщает, сконфигурирован ли секрет для auth token/hmac. Смотрит на
+// СЫРОЕ значение (SecretRaw, до раскрытия ${env:VAR}), поэтому секрет, вынесенный
+// в окружение, считается заданным даже если переменная не экспортирована в
+// момент проверки (onebase check). Запасной взгляд на Secret покрывает сервисы,
+// собранные программно без Normalize.
+func (s *Service) HasSecret() bool {
+	return strings.TrimSpace(s.SecretRaw) != "" || strings.TrimSpace(s.Secret) != ""
 }
 
 // Match сопоставляет путь ресурса (часть URL ПОСЛЕ корня сервиса, например
