@@ -340,6 +340,18 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
+	if appCfg != nil && appCfg.Backup != nil {
+		target := backup.AutoTarget{
+			DBType:     dbType,
+			DSN:        dsn,
+			SQLitePath: sqlitePath,
+			ProjectDir: dir,
+		}
+		if err := backup.RegisterAutoBackup(appCfg.Backup, target, sched); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: auto backup job: %v\n", err)
+		}
+	}
+
 	if appCfg != nil && appCfg.Email != nil {
 		m := mailer.New(mailer.Config{
 			SMTPHost:    appCfg.Email.SMTPHost,

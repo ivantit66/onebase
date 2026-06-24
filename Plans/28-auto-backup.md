@@ -1,6 +1,11 @@
 # Этап 28 — Автоматический бэкап по расписанию
 
-**Статус:** ⬜ Не начато
+**Статус:** 🟡 Ядро реализовано (2026-06-24): `backup:` в `app.yaml`,
+регистрация задания `AutoBackup` в существующем scheduler, ротация `keep_last`,
+атомарная запись PostgreSQL/SQLite-дампов через временный файл + rename,
+панель бэкапов показывает PostgreSQL `.sql.gz` и SQLite `.db`. Отдельная таблица
+`_backups` не вводилась: текущий лаунчер уже ведёт список по файлам, а статусы
+запусков пишет `_scheduled_runs`.
 
 ## Контекст
 
@@ -15,7 +20,7 @@ backup:
   enabled: true
   schedule: "0 2 * * *"     # каждую ночь в 02:00 (cron-формат)
   keep_last: 7               # хранить последние N бэкапов
-  directory: ""              # пусто = ~/.onebase/backups/<base-id>/
+  directory: ""              # пусто = <project>/backups
 ```
 
 ### UI (Администрирование → Бэкапы)
@@ -27,7 +32,9 @@ backup:
 
 ## Хранилище
 
-Файлы: `~/.onebase/backups/<base-id>/backup_<dbname>_<timestamp>.sql.gz`
+Файлы: `<project>/backups/backup_<dbname>_<timestamp>.sql.gz` для PostgreSQL и
+`<project>/backups/backup_<dbname>_<timestamp>.db` для SQLite. Если `directory`
+задан, используется он.
 
 Метаданные бэкапов в таблице `_backups`:
 
@@ -61,6 +68,9 @@ CREATE TABLE IF NOT EXISTS _backups (
 - При старте сервера: если `cfg.Enabled` и `cfg.Schedule != ""` → регистрирует cron-задание
 - После каждого успешного бэкапа — ротация: удаляет файлы сверх `KeepLast`
 
+Фактически реализовано в `internal/backup/auto.go`: пустое расписание при
+`enabled: true` означает `0 2 * * *`, пустой/нулевой `keep_last` — 7.
+
 **`internal/cli/run.go`** и **`dev.go`**:
 - После старта планировщика вызвать `backup.RegisterAutoBackup()`
 
@@ -92,6 +102,9 @@ func rotate(dir string, keepLast int) error {
 
 - `RegisterAutoBackup` с расписанием `* * * * *` создаёт файл в течение минуты
 - Ротация: 8 файлов при `keep_last: 7` → удаляет старейший
+
+Фактические автотесты не ждут реальную минуту: отдельно проверяют регистрацию
+задания, дефолты, создание через injected dumper и ротацию файлов.
 
 ## Эстимейт
 

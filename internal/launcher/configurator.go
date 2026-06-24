@@ -17,6 +17,7 @@ import (
 	"unicode"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/ivantit66/onebase/internal/backup"
 	"github.com/ivantit66/onebase/internal/configdb"
 	"github.com/ivantit66/onebase/internal/converter"
 	"github.com/ivantit66/onebase/internal/i18n"
@@ -415,8 +416,8 @@ type configuratorData struct {
 	// колонок: палитра ТЧ на холсте и редактор состава колонок (follow-up #164,
 	// слайсы D1/D2).
 	EditingFormTableParts []formTablePart
-	Subsystems       []cfgSubsystem
-	Widgets          []cfgWidget
+	Subsystems            []cfgSubsystem
+	Widgets               []cfgWidget
 	// GroupOrder — пользовательский порядок групп дерева (ключи data-group/data-gid)
 	// для клиентской перестановки; пусто — порядок по умолчанию из шаблона.
 	GroupOrder    []string
@@ -1007,42 +1008,39 @@ func (h *handler) loadCfgData(ctx context.Context, b *Base, tab string, lang ...
 	// Backup dir & files
 	data.BackupDir = h.backupDir(b)
 	backupDir := data.BackupDir
-	if files, err := filepath.Glob(filepath.Join(backupDir, "backup_*.sql.gz")); err == nil {
+	if files, err := backup.BackupFiles(backupDir); err == nil {
 		for _, f := range files {
-			info, _ := os.Stat(f)
-			if info == nil {
-				continue
-			}
 			data.BackupFiles = append(data.BackupFiles, backupFile{
-				Name: filepath.Base(f),
-				Size: fmt.Sprintf("%.1f KB", float64(info.Size())/1024),
-				Date: info.ModTime().Format("2006-01-02 15:04"),
+				Name: filepath.Base(f.Path),
+				Size: fmt.Sprintf("%.1f KB", float64(f.Info.Size())/1024),
+				Date: f.Info.ModTime().Format("2006-01-02 15:04"),
 			})
-		}
-		for i, j := 0, len(data.BackupFiles)-1; i < j; i, j = i+1, j-1 {
-			data.BackupFiles[i], data.BackupFiles[j] = data.BackupFiles[j], data.BackupFiles[i]
 		}
 	}
 
 	// Backup settings from app.yaml
 	{
-		cfgPath := ""
+		var raw []byte
+		var readErr error
 		if b.ConfigSource == "database" {
-			// read from DB config
+			if db, err := OpenDB(ctx, b); err == nil {
+				readErr = db.QueryRow(ctx,
+					"SELECT content FROM _onebase_config WHERE path='config/app.yaml'").Scan(&raw)
+				db.Close()
+			}
 		} else {
-			cfgPath = filepath.Join(b.Path, "config", "app.yaml")
+			raw, readErr = os.ReadFile(filepath.Join(b.Path, "config", "app.yaml"))
 		}
-		if cfgPath != "" {
-			if raw, err := os.ReadFile(cfgPath); err == nil {
-				var tmp struct {
-					Backup struct {
-						Enabled   bool   `yaml:"enabled"`
-						Schedule  string `yaml:"schedule"`
-						KeepLast  int    `yaml:"keep_last"`
-						Directory string `yaml:"directory"`
-					} `yaml:"backup"`
-				}
-				yaml.Unmarshal(raw, &tmp)
+		if readErr == nil && len(raw) > 0 {
+			var tmp struct {
+				Backup struct {
+					Enabled   bool   `yaml:"enabled"`
+					Schedule  string `yaml:"schedule"`
+					KeepLast  int    `yaml:"keep_last"`
+					Directory string `yaml:"directory"`
+				} `yaml:"backup"`
+			}
+			if yaml.Unmarshal(raw, &tmp) == nil {
 				data.BackupSettings = backupSettings{
 					Enabled:   tmp.Backup.Enabled,
 					Schedule:  tmp.Backup.Schedule,

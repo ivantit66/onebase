@@ -13,6 +13,7 @@ import (
 
 	"github.com/ivantit66/onebase/internal/api"
 	"github.com/ivantit66/onebase/internal/auth"
+	"github.com/ivantit66/onebase/internal/backup"
 	"github.com/ivantit66/onebase/internal/configdb"
 	"github.com/ivantit66/onebase/internal/devserver"
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
@@ -81,6 +82,7 @@ func runDev(cmd *cobra.Command, _ []string) error {
 	}
 
 	var watchDir string
+	var appCfg *project.AppConfig
 	load := func() {
 		var proj *project.Project
 		var lerr error
@@ -101,6 +103,7 @@ func runDev(cmd *cobra.Command, _ []string) error {
 			return
 		}
 		defer proj.Close()
+		appCfg, _ = project.LoadConfig(proj.Dir)
 
 		if err := db.Migrate(ctx, proj.Entities); err != nil {
 			fmt.Fprintln(os.Stderr, "[dev] migrate error:", err)
@@ -187,6 +190,14 @@ func runDev(cmd *cobra.Command, _ []string) error {
 		if loadErr := sched.Reload(proj.ScheduledJobs); loadErr != nil {
 			fmt.Fprintln(os.Stderr, "[dev] scheduler reload error:", loadErr)
 		}
+		if appCfg != nil && appCfg.Backup != nil {
+			if err := backup.RegisterAutoBackup(appCfg.Backup, backup.AutoTarget{
+				DSN:        dsn,
+				ProjectDir: dir,
+			}, sched); err != nil {
+				fmt.Fprintln(os.Stderr, "[dev] auto backup error:", err)
+			}
+		}
 		fmt.Fprintln(os.Stdout, "[dev] reloaded")
 	}
 	load()
@@ -197,7 +208,6 @@ func runDev(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	appCfg, _ := project.LoadConfig(dir)
 	uiCfg := ui.Config{DSN: dsn, PlatVersion: version.String(), PlatAuthor: version.Author, PlatLicense: version.License}
 	if appCfg != nil {
 		uiCfg.AppName = appCfg.Name

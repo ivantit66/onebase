@@ -86,6 +86,14 @@ type DemoConfig struct {
 	Message       string `yaml:"message"`        // текст баннера
 }
 
+// BackupConfig holds automatic backup settings from app.yaml section "backup".
+type BackupConfig struct {
+	Enabled   bool   `yaml:"enabled"`
+	Schedule  string `yaml:"schedule"`  // cron, по умолчанию "0 2 * * *"
+	KeepLast  int    `yaml:"keep_last"` // по умолчанию 7
+	Directory string `yaml:"directory"` // пусто = <project>/backups
+}
+
 // AppConfig holds the optional config/app.yaml metadata.
 type AppConfig struct {
 	Name    string `yaml:"name"`
@@ -101,6 +109,7 @@ type AppConfig struct {
 	Email       *EmailConfig       `yaml:"email,omitempty"`
 	Attachments *AttachmentsConfig `yaml:"attachments,omitempty"`
 	Demo        *DemoConfig        `yaml:"demo,omitempty"`
+	Backup      *BackupConfig      `yaml:"backup,omitempty"`
 	// LLM — необязательный конфиг ИИ-помощника прямо в конфигурации. Когда задан,
 	// применяется к базе при старте (см. run.go) и имеет приоритет над _settings.
 	// Ключи задавайте через ${env:VAR}, чтобы секрет жил в окружении, а не в

@@ -28,42 +28,62 @@ func Dump(ctx context.Context, connStr, outDir string) (string, error) {
 	}
 
 	dbName := dbNameFromDSN(connStr)
-	ts := time.Now().Format("2006-01-02_15-04")
+	ts := time.Now().Format("2006-01-02_15-04-05")
 	filename := fmt.Sprintf("backup_%s_%s.sql.gz", dbName, ts)
 	outPath := filepath.Join(outDir, filename)
+	tmp, err := os.CreateTemp(outDir, "."+filename+".*.tmp")
+	if err != nil {
+		return "", err
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
 
 	// pg_dump → stdout → gzip → file
 	cmd := exec.CommandContext(ctx, pgDump, "--format=plain", "--no-owner", "--no-acl", "--clean", "--if-exists", connStr)
 	r, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = tmp.Close()
 		return "", err
 	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
+		_ = tmp.Close()
 		return "", fmt.Errorf("pg_dump: %w", err)
 	}
 
-	f, err := os.Create(outPath)
-	if err != nil {
-		_ = cmd.Process.Kill()
-		return "", err
-	}
-
-	gz := gzip.NewWriter(f)
+	gz := gzip.NewWriter(tmp)
 	if _, err := io.Copy(gz, r); err != nil {
-		f.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		_ = gz.Close()
+		_ = tmp.Close()
 		return "", err
 	}
 	if err := gz.Close(); err != nil {
-		f.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		_ = tmp.Close()
 		return "", err
 	}
-	f.Close()
+	if err := tmp.Close(); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return "", err
+	}
 
 	if err := cmd.Wait(); err != nil {
-		os.Remove(outPath)
 		return "", fmt.Errorf("pg_dump завершился с ошибкой: %w", err)
 	}
+	_ = os.Remove(outPath)
+	if err := os.Rename(tmpPath, outPath); err != nil {
+		return "", err
+	}
+	committed = true
 	return outPath, nil
 }
 

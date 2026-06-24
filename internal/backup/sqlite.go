@@ -28,11 +28,27 @@ func DumpSQLite(ctx context.Context, dbPath, outDir string) (string, error) {
 			break
 		}
 	}
-	ts := time.Now().Format("2006-01-02_15-04")
+	ts := time.Now().Format("2006-01-02_15-04-05")
 	filename := fmt.Sprintf("backup_%s_%s.db", base, ts)
 	outPath := filepath.Join(outDir, filename)
-	// Remove any stale destination — VACUUM INTO fails if the file exists.
-	_ = os.Remove(outPath)
+	tmp, err := os.CreateTemp(outDir, "."+filename+".*.tmp")
+	if err != nil {
+		return "", err
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", err
+	}
+	// VACUUM INTO fails if the file exists. Reserve a unique name with
+	// CreateTemp, then remove it before SQLite writes the actual backup.
+	_ = os.Remove(tmpPath)
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
 
 	db, err := storage.ConnectSQLite(ctx, dbPath)
 	if err != nil {
@@ -44,7 +60,7 @@ func DumpSQLite(ctx context.Context, dbPath, outDir string) (string, error) {
 	// We can't use parameters (it's not a query but a meta-command); embed
 	// the path with simple single-quote escaping.
 	escaped := ""
-	for _, c := range outPath {
+	for _, c := range tmpPath {
 		if c == '\'' {
 			escaped += "''"
 			continue
@@ -54,6 +70,11 @@ func DumpSQLite(ctx context.Context, dbPath, outDir string) (string, error) {
 	if _, err := db.Exec(ctx, "VACUUM INTO '"+escaped+"'"); err != nil {
 		return "", fmt.Errorf("sqlite VACUUM INTO: %w", err)
 	}
+	_ = os.Remove(outPath)
+	if err := os.Rename(tmpPath, outPath); err != nil {
+		return "", err
+	}
+	committed = true
 	return outPath, nil
 }
 

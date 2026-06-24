@@ -2599,7 +2599,7 @@ const cfgTabBackup = `{{define "tab-backup"}}
     <button class="btn-save" type="submit">{{t $.Lang "Создать бэкап сейчас"}}</button>
   </form>
   <form method="POST" action="/bases/{{.Base.ID}}/configurator/backup/upload" enctype="multipart/form-data" style="margin-bottom:16px;display:flex;align-items:center;gap:8px" onsubmit="cfgBackupStart(this,'⏳ Загружаю...')">
-    <input type="file" name="backup_file" accept=".sql.gz,.sql" required style="font-size:12px">
+    <input type="file" name="backup_file" accept=".sql.gz,.sql,.db,.sqlite,.sqlite3" required style="font-size:12px">
     <button class="btn-save" type="submit">{{t $.Lang "Загрузить файл бэкапа"}}</button>
   </form>
   <h3 style="font-size:13px;margin:0 0 8px;color:#374151">{{t $.Lang "Файлы бэкапов"}}</h3>
