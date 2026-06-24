@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -34,6 +35,8 @@ Read-only «рентген» — контракт для ИИ и будущег�
 
 func init() {
 	addBaseFlags(describeCmd)
+	describeCmd.Flags().Bool("compact", false, "вывести компактный текстовый контракт для prompt-контекста")
+	describeCmd.Flags().Bool("full", false, "вывести полный JSON-контракт (значение по умолчанию)")
 	rootCmd.AddCommand(describeCmd)
 }
 
@@ -306,6 +309,12 @@ func runDescribe(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	defer proj.Close()
+
+	compact, _ := cmd.Flags().GetBool("compact")
+	if compact {
+		fmt.Fprint(os.Stdout, projectAIContext(proj))
+		return nil
+	}
 
 	out := describeOutput{
 		SchemaVersion:    2,

@@ -12,7 +12,7 @@ import (
 // (покрывает Anthropic и GLM через z.ai). Модель может несколько раз запрашивать
 // инструменты; exec их исполняет, результаты возвращаются модели, пока она не
 // выдаст финальный текст (или не исчерпается лимит итераций).
-func completeAnthropicTools(ctx context.Context, hc *http.Client, rm ResolvedModel, req ChatRequest, tools []Tool, exec ToolExecutor) (ChatResponse, error) {
+func completeAnthropicTools(ctx context.Context, hc *http.Client, rm ResolvedModel, req ChatRequest, tools []Tool, exec ToolExecutor, maxRounds int) (ChatResponse, error) {
 	base := rm.Endpoint.BaseURL
 	if base == "" {
 		base = "https://api.anthropic.com"
@@ -50,7 +50,7 @@ func completeAnthropicTools(ctx context.Context, hc *http.Client, rm ResolvedMod
 	}
 
 	var totalIn, totalOut int
-	for iter := 0; iter < MaxToolIterations; iter++ {
+	for iter := 0; iter < maxRounds; iter++ {
 		body := map[string]any{
 			"model":      rm.Model.Name,
 			"max_tokens": maxTokens(rm.Model, req),
@@ -122,5 +122,5 @@ func completeAnthropicTools(ctx context.Context, hc *http.Client, rm ResolvedMod
 		}
 		messages = append(messages, map[string]any{"role": "user", "content": results})
 	}
-	return ChatResponse{}, fmt.Errorf("anthropic: превышен лимит раундов инструментов (%d)", MaxToolIterations)
+	return ChatResponse{}, fmt.Errorf("anthropic: превышен лимит раундов инструментов (%d)", maxRounds)
 }

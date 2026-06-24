@@ -69,7 +69,13 @@ func printIssuesText(res configcheck.Result) {
 			if is.Kind != "" {
 				prefix = "[" + is.Kind + "] "
 			}
+			if is.Code != "" {
+				prefix += "[" + is.Code + "] "
+			}
 			fmt.Fprintf(os.Stdout, "%s: %s%s\n", loc, prefix, is.Message)
+			if is.SuggestedFix != "" {
+				fmt.Fprintf(os.Stdout, "  подсказка: %s\n", is.SuggestedFix)
+			}
 		}
 	}
 

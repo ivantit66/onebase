@@ -12,7 +12,7 @@ import (
 // completeGeminiTools — агентный цикл function-calling по Gemini generateContent.
 // Конец цикла — ответ без functionCall в parts. Ответы функций уходят одним
 // сообщением role=user с частями functionResponse.
-func completeGeminiTools(ctx context.Context, hc *http.Client, rm ResolvedModel, req ChatRequest, tools []Tool, exec ToolExecutor) (ChatResponse, error) {
+func completeGeminiTools(ctx context.Context, hc *http.Client, rm ResolvedModel, req ChatRequest, tools []Tool, exec ToolExecutor, maxRounds int) (ChatResponse, error) {
 	base := rm.Endpoint.BaseURL
 	if base == "" {
 		base = "https://generativelanguage.googleapis.com/v1beta"
@@ -46,7 +46,7 @@ func completeGeminiTools(ctx context.Context, hc *http.Client, rm ResolvedModel,
 	}
 
 	var totalIn, totalOut int
-	for iter := 0; iter < MaxToolIterations; iter++ {
+	for iter := 0; iter < maxRounds; iter++ {
 		body := map[string]any{
 			"contents":         contents,
 			"tools":            toolsBody,
@@ -111,5 +111,5 @@ func completeGeminiTools(ctx context.Context, hc *http.Client, rm ResolvedModel,
 		}
 		contents = append(contents, map[string]any{"role": "user", "parts": respParts})
 	}
-	return ChatResponse{}, fmt.Errorf("gemini: превышен лимит раундов инструментов (%d)", MaxToolIterations)
+	return ChatResponse{}, fmt.Errorf("gemini: превышен лимит раундов инструментов (%d)", maxRounds)
 }

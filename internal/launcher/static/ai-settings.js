@@ -68,6 +68,14 @@
     head.appendChild(jb);
     root.appendChild(head);
 
+    var limits = el('<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:-2px 0 10px;font-size:12px;color:#334155"></div>');
+    var rounds = el('<label style="display:flex;gap:6px;align-items:center">ai.max_tool_rounds <input type="number" min="0" max="64" style="width:70px;padding:3px 5px;border:1px solid #cbd5e1;border-radius:3px;font-size:12px"></label>');
+    rounds.querySelector('input').value = cfg.max_tool_rounds || 0;
+    rounds.querySelector('input').onchange = function () { cfg.max_tool_rounds = Math.max(0, Math.min(64, parseInt(this.value, 10) || 0)); this.value = cfg.max_tool_rounds || 0; };
+    limits.appendChild(rounds);
+    limits.appendChild(el('<span style="font-size:11px;color:#64748b">0 = системный дефолт</span>'));
+    root.appendChild(limits);
+
     warnBox = el('<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:4px;padding:6px 8px;margin-bottom:10px;font-size:11px;color:#b91c1c;display:none"></div>');
     root.appendChild(warnBox);
     updateWarnings();

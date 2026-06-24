@@ -21,6 +21,8 @@ func TestSafeConfigPath_Valid(t *testing.T) {
 		"enums/статус.yaml",
 		"accounts/основной.yaml",
 		"accountregs/хозрасчётный.yaml",
+		"src/модуль.os",
+		"forms/клиент/ФормаОбъекта.form.yaml",
 	} {
 		if err := safeConfigPath(ok); err != nil {
 			t.Errorf("ожидался валидный путь %q, получена ошибка: %v", ok, err)
@@ -32,7 +34,6 @@ func TestSafeConfigPath_Rejects(t *testing.T) {
 	for _, bad := range []string{
 		"",                      // пустой
 		"клиент.yaml",           // нет подкаталога
-		"src/модуль.os",         // не-whitelist подкаталог
 		"secrets/x.yaml",        // не-whitelist подкаталог
 		"catalogs/../evil.yaml", // обход через ..
 		"../catalogs/x.yaml",    // обход через ..

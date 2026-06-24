@@ -55,6 +55,7 @@ type Config struct {
 	Profiles       []Profile  `json:"profiles" yaml:"profiles"`
 	DefaultProfile string     `json:"default_profile,omitempty" yaml:"default_profile,omitempty"` // для неуказанных задач
 	LogHistory     bool       `json:"log_history,omitempty" yaml:"log_history,omitempty"`         // вести журнал ИИ-обращений конфигуратора
+	MaxToolRounds  int        `json:"max_tool_rounds,omitempty" yaml:"max_tool_rounds,omitempty"` // 0 → MaxToolIterations
 }
 
 // Дефолты, применяемые когда в конфиге не задано иное.

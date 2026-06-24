@@ -33,12 +33,14 @@ import (
 // Issue is a single error/warning. Line and column are 1-based; zero means the
 // parser could not pinpoint a position.
 type Issue struct {
-	File    string `json:"file,omitempty"`
-	Object  string `json:"object,omitempty"`
-	Kind    string `json:"kind,omitempty"`
-	Message string `json:"message"`
-	Line    int    `json:"line,omitempty"`
-	Column  int    `json:"column,omitempty"`
+	File         string `json:"file,omitempty"`
+	Object       string `json:"object,omitempty"`
+	Kind         string `json:"kind,omitempty"`
+	Code         string `json:"code,omitempty"`
+	Message      string `json:"message"`
+	SuggestedFix string `json:"suggestedFix,omitempty"`
+	Line         int    `json:"line,omitempty"`
+	Column       int    `json:"column,omitempty"`
 }
 
 // Result is the machine-readable check outcome: ok=true means clean.
@@ -53,11 +55,71 @@ type Result struct {
 // NewResult wraps a slice of issues and warnings into a Result.
 // OK is determined solely by len(issues) == 0; warnings never set OK=false.
 func NewResult(issues []Issue, warnings ...[]Issue) Result {
+	issues = AnnotateIssues(issues)
 	var ws []Issue
 	for _, w := range warnings {
 		ws = append(ws, w...)
 	}
+	ws = AnnotateIssues(ws)
 	return Result{OK: len(issues) == 0, Total: len(issues), Issues: issues, Warnings: ws}
+}
+
+// AnnotateIssues fills machine-readable Code and SuggestedFix for common issue
+// classes. It is intentionally heuristic: loaders still own the exact messages,
+// while AI tooling gets a stable enough contract for remediation loops.
+func AnnotateIssues(in []Issue) []Issue {
+	if len(in) == 0 {
+		return in
+	}
+	out := make([]Issue, len(in))
+	for i, is := range in {
+		out[i] = annotateIssue(is)
+	}
+	return out
+}
+
+func annotateIssue(is Issue) Issue {
+	if is.Code != "" && is.SuggestedFix != "" {
+		return is
+	}
+	lowMsg := strings.ToLower(is.Message)
+	lowKind := strings.ToLower(is.Kind)
+	lowFile := strings.ToLower(is.File)
+	set := func(code, fix string) {
+		if is.Code == "" {
+			is.Code = code
+		}
+		if is.SuggestedFix == "" {
+			is.SuggestedFix = fix
+		}
+	}
+	switch {
+	case strings.Contains(lowMsg, "устаревший формат печатной формы"):
+		set("printform.legacy", "Запустите `onebase printforms migrate` или перепишите печатную форму в layout v2.")
+	case strings.Contains(lowMsg, "форма пустая"):
+		set("printform.empty", "Опишите legacy-поля `title/header/table/footer` или переведите файл в layout v2.")
+	case strings.Contains(lowMsg, "wizard") || strings.Contains(lowMsg, "steps"):
+		set("processor.unsupported-key", "Удалите неподдерживаемые `wizard/steps`; сейчас обработка принимает плоский список `params`.")
+	case strings.Contains(lowMsg, "выражение без эффекта"):
+		set("dsl.expression-without-effect", "Если это вызов процедуры, добавьте скобки: `ИмяПроцедуры()`.")
+	case strings.Contains(lowMsg, "неизвестная функция"):
+		set("dsl.unknown-function", "Проверьте имя процедуры/функции, импортируемый модуль или используйте существенный builtin из `onebase ai-guide`.")
+	case strings.HasSuffix(lowFile, ".os") || strings.Contains(lowKind, "dsl"):
+		set("dsl.syntax", "Проверьте синтаксис модуля около указанной строки и колонки.")
+	case strings.Contains(lowMsg, "yaml:") || strings.Contains(lowMsg, "cannot unmarshal") || strings.Contains(lowMsg, "unmarshal errors") || strings.Contains(lowMsg, "did not find expected"):
+		set("yaml.invalid", "Исправьте YAML-синтаксис, отступы и тип значения в указанном файле.")
+	case strings.Contains(lowKind, "запрос") || strings.Contains(lowMsg, "compile query") || strings.Contains(lowMsg, "no such table") || strings.Contains(lowMsg, "ambiguous column"):
+		set("query.invalid", "Проверьте источник запроса, имена полей и параметры; для диагностики используйте `onebase query --sql`.")
+	case strings.Contains(lowKind, "компоновка"):
+		set("report.composition.invalid", "Сверьте поля группировок, показателей, сортировки и графика с колонками запроса отчёта.")
+	case strings.Contains(lowKind, "имя таблицы") || strings.Contains(lowMsg, "коллизия"):
+		set("metadata.name-collision", "Переименуйте один из объектов, чтобы их физические имена таблиц не совпадали.")
+	case strings.Contains(lowMsg, "project.load"):
+		set("project.load-failed", "Сначала исправьте ошибку загрузки проекта; затем повторите `onebase check --json`.")
+	default:
+		set("metadata.invalid", "Исправьте структуру объекта по `onebase schema` и повторите `onebase check`.")
+	}
+	return is
 }
 
 // CheckDir walks the configuration sources under dir so each broken file is

@@ -63,12 +63,32 @@ func (h *handler) cfgAdminAI(w http.ResponseWriter, r *http.Request) {
 		cfg = starterLLMConfig() // пустую базу заполняем заготовкой
 	}
 	initCfg, _ := json.Marshal(cfg.Redacted())
+	dailyTokenCap := db.GetAIDailyTokenCap(r.Context())
 
 	page := fmt.Sprintf(`<div style="padding:16px">
   <h3 style="margin:0 0 6px;font-size:15px">ИИ-помощник</h3>
   <div style="font-size:11px;color:#666;margin-bottom:10px">Провайдеры, модели и маршрутизация по задачам. Распознавание документов идёт на vision-моделях (Gemini) с фолбэком; текстовые задачи — на GLM через z.ai. Ключи хранятся в служебной таблице базы и не попадают в экспорт конфигурации. API-ключи отображаются замаскированными (<code>****</code>); оставьте маску без изменений — ключ сохранится прежним.</div>
   <div id="ai-settings-root" data-base="%s" data-cfg="%s">Загрузка…</div>
 </div>`, b.ID, html.EscapeString(string(initCfg)))
+
+	// Бюджетные предохранители конфигураторного и пользовательского ИИ.
+	budgetSection := fmt.Sprintf(`<div style="padding:0 16px 16px;border-top:1px solid #e2e8f0;margin-top:4px;padding-top:14px">
+  <h4 style="margin:0 0 6px;font-size:13px">Бюджеты ИИ</h4>
+  <div style="font-size:11px;color:#666;margin-bottom:8px">Суточный потолок токенов защищает базу от непредвиденного расхода. Значение <b>0</b> отключает лимит.</div>
+  <label style="font-size:12px">ai.daily_token_cap <input id="ai-daily-token-cap" type="number" min="0" value="%d" style="width:120px;padding:4px 8px;border:1px solid #cbd5e1;border-radius:3px;font-size:12px;margin-left:6px"></label>
+  <button onclick="aiBudgetSave()" style="background:#16a34a;color:#fff;border:none;padding:5px 14px;border-radius:3px;cursor:pointer;font-size:12px;margin-left:6px">Сохранить лимит</button>
+  <span id="ai-budget-msg" style="font-size:11px;margin-left:6px"></span>
+</div>
+<script>
+function aiBudgetSave(){
+  var m=document.getElementById('ai-budget-msg');m.textContent='';
+  var n=parseInt(document.getElementById('ai-daily-token-cap').value,10)||0;if(n<0)n=0;
+  fetch('/bases/%s/configurator/admin/ai/budget',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({daily_token_cap:n})})
+    .then(function(r){return r.json()})
+    .then(function(d){if(d.ok){m.textContent='Сохранено';m.style.color='#16a34a';}else{m.textContent=(d.error||'Ошибка');m.style.color='#c00';}})
+    .catch(function(){m.textContent='Ошибка сети';m.style.color='#c00';});
+}
+</script>`, dailyTokenCap, b.ID)
 
 	// Режим доступа ИИ-чата к данным (план 54). Управляет тем, кто и как
 	// обращается к данным базы через инструмент «выполнить_запрос».
@@ -90,7 +110,7 @@ function aiScopeSave(){
 </script>`, aiScopeOptions(db.GetAIDataScope(r.Context())), b.ID)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(page + "\n<script>\n" + aiSettingsJS + "\n</script>\n" + scopeSection))
+	w.Write([]byte(page + "\n<script>\n" + aiSettingsJS + "\n</script>\n" + budgetSection + scopeSection))
 }
 
 // aiScopeOptions строит <option> режима доступа ИИ к данным с выбранным текущим.
@@ -131,6 +151,33 @@ func (h *handler) cfgAdminAIDataScope(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := db.SaveAIDataScope(r.Context(), req.Scope); err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// cfgAdminAIBudgetSave сохраняет бюджетные предохранители ИИ, которые лежат в
+// _settings отдельно от llm.config.
+func (h *handler) cfgAdminAIBudgetSave(w http.ResponseWriter, r *http.Request) {
+	b, err := h.store.Get(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, 404, map[string]any{"error": "not found"})
+		return
+	}
+	var req struct {
+		DailyTokenCap int `json:"daily_token_cap"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]any{"error": "Некорректный JSON: " + err.Error()})
+		return
+	}
+	db, err := getAuthDB(r.Context(), b)
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := db.SaveAIDailyTokenCap(r.Context(), req.DailyTokenCap); err != nil {
 		writeJSON(w, 500, map[string]any{"error": err.Error()})
 		return
 	}

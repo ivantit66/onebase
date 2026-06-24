@@ -12,7 +12,7 @@ import (
 // completeOpenAITools — агентный цикл tool-use по OpenAI chat/completions
 // (покрывает OpenAI и openai-совместимые). Изображения в tool-путь не передаются
 // (как и в anthropic-цикле). Аргументы инструмента у OpenAI приходят JSON-строкой.
-func completeOpenAITools(ctx context.Context, hc *http.Client, rm ResolvedModel, req ChatRequest, tools []Tool, exec ToolExecutor) (ChatResponse, error) {
+func completeOpenAITools(ctx context.Context, hc *http.Client, rm ResolvedModel, req ChatRequest, tools []Tool, exec ToolExecutor, maxRounds int) (ChatResponse, error) {
 	base := rm.Endpoint.BaseURL
 	if base == "" {
 		base = "https://api.openai.com/v1"
@@ -53,7 +53,7 @@ func completeOpenAITools(ctx context.Context, hc *http.Client, rm ResolvedModel,
 	}
 
 	var totalIn, totalOut int
-	for iter := 0; iter < MaxToolIterations; iter++ {
+	for iter := 0; iter < maxRounds; iter++ {
 		body := map[string]any{
 			"model":      rm.Model.Name,
 			"max_tokens": maxTokens(rm.Model, req),
@@ -132,5 +132,5 @@ func completeOpenAITools(ctx context.Context, hc *http.Client, rm ResolvedModel,
 			})
 		}
 	}
-	return ChatResponse{}, fmt.Errorf("openai: превышен лимит раундов инструментов (%d)", MaxToolIterations)
+	return ChatResponse{}, fmt.Errorf("openai: превышен лимит раундов инструментов (%d)", maxRounds)
 }

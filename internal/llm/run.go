@@ -90,7 +90,7 @@ func (r *Runner) RunWithTools(ctx context.Context, task string, req ChatRequest,
 		}
 		tried++
 		r.logf("llm: задача %q (tools) → модель %s (%s)", task, rm.Model.Name, rm.Endpoint.Kind)
-		resp, err := completeTools(ctx, httpClient(rm.Endpoint), rm, req, tools, exec)
+		resp, err := completeTools(ctx, httpClient(rm.Endpoint), rm, req, tools, exec, toolRoundLimit(r.cfg))
 		if err == nil {
 			r.logf("llm: ответила модель %s (tools)", rm.Model.Name)
 			return resp, nil
@@ -142,17 +142,27 @@ func complete(ctx context.Context, rm ResolvedModel, req ChatRequest) (ChatRespo
 
 // completeTools диспетчеризует tool-use по типу endpoint'а. Поддерживаются все
 // протоколы; неизвестный тип → ошибка (модель в RunWithTools пропускается фолбэком).
-func completeTools(ctx context.Context, hc *http.Client, rm ResolvedModel, req ChatRequest, tools []Tool, exec ToolExecutor) (ChatResponse, error) {
+func completeTools(ctx context.Context, hc *http.Client, rm ResolvedModel, req ChatRequest, tools []Tool, exec ToolExecutor, maxRounds int) (ChatResponse, error) {
 	switch rm.Endpoint.Kind {
 	case KindAnthropic:
-		return completeAnthropicTools(ctx, hc, rm, req, tools, exec)
+		return completeAnthropicTools(ctx, hc, rm, req, tools, exec, maxRounds)
 	case KindOpenAI, KindCompatible:
-		return completeOpenAITools(ctx, hc, rm, req, tools, exec)
+		return completeOpenAITools(ctx, hc, rm, req, tools, exec, maxRounds)
 	case KindGemini:
-		return completeGeminiTools(ctx, hc, rm, req, tools, exec)
+		return completeGeminiTools(ctx, hc, rm, req, tools, exec, maxRounds)
 	default:
 		return ChatResponse{}, fmt.Errorf("endpoint %q: тип %q не поддерживает tool-use", rm.Endpoint.Name, rm.Endpoint.Kind)
 	}
+}
+
+func toolRoundLimit(cfg Config) int {
+	if cfg.MaxToolRounds <= 0 {
+		return MaxToolIterations
+	}
+	if cfg.MaxToolRounds > 64 {
+		return 64
+	}
+	return cfg.MaxToolRounds
 }
 
 func httpClient(ep Endpoint) *http.Client {

@@ -103,6 +103,9 @@ header: "**Поставщик**: {{Поставщик}}"`)
 	if len(res.Warnings) != 1 {
 		t.Errorf("ожидался 1 warning в Result, получено %d", len(res.Warnings))
 	}
+	if len(res.Warnings) > 0 && res.Warnings[0].Code != "printform.legacy" {
+		t.Errorf("ожидался code=printform.legacy, получено %+v", res.Warnings[0])
+	}
 }
 
 // CheckDir должен валидировать журналы/роли/печатные формы пофайлово, с

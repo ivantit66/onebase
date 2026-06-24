@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -25,10 +26,25 @@ func TestConfigurator_GeneratePanelWired(t *testing.T) {
 	}
 	js := configuratorJS(t)
 	for _, sub := range []string{
-		"configurator/ai-generate", "configurator/ai-apply",
+		"configurator/ai-generate", "configurator/ai-apply", "cfggen-change-check",
+		"cfggen-new-content", "selectedChanges", "oldContent", "toolTrace", "Tool trace:",
+		"cfggen-check", "checkText", "repairRounds",
 	} {
 		if !strings.Contains(js, sub) {
 			t.Errorf("в configurator.js нет %q — панель генерации не подключена", sub)
+		}
+	}
+}
+
+func TestAISettings_LimitFieldsWired(t *testing.T) {
+	b, err := os.ReadFile("static/ai-settings.js")
+	if err != nil {
+		t.Fatalf("read static/ai-settings.js: %v", err)
+	}
+	js := string(b)
+	for _, sub := range []string{"ai.max_tool_rounds", "max_tool_rounds"} {
+		if !strings.Contains(js, sub) {
+			t.Errorf("в ai-settings.js нет %q — настройка лимита tool-use не подключена", sub)
 		}
 	}
 }

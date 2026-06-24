@@ -4081,18 +4081,94 @@ document.querySelectorAll('details.cfg-tree').forEach(function(d){
     var lastChanges=null;
     btn.addEventListener('click',function(){openPanel('cfggen-panel');prompt.focus();});
     document.getElementById('cfggen-close').addEventListener('click',function(){closePanel('cfggen-panel');});
-    function renderChanges(changes,note){
+    function renderCheck(check,checkText,repairRounds){
+      if(!check&&!checkText)return;
+      var ok=check&&check.ok;
+      var box=document.createElement('div');box.className='cfggen-check';box.style.cssText='margin-bottom:8px;border:1px solid '+(ok?'#bbf7d0':'#fecaca')+';border-radius:8px;background:'+(ok?'#f0fdf4':'#fef2f2')+';overflow:hidden';
+      var head=document.createElement('div');head.style.cssText='padding:7px 8px;font-size:12px;font-weight:600;color:'+(ok?'#166534':'#991b1b');
+      head.textContent=ok?'Проверка: OK':'Проверка: ошибки '+((check&&check.total)||'');
+      if(repairRounds){head.textContent+='; исправлений: '+repairRounds;}
+      box.appendChild(head);
+      if(checkText){
+        var pre=document.createElement('pre');pre.style.cssText='margin:0;border-top:1px solid '+(ok?'#bbf7d0':'#fecaca')+';padding:7px 8px;font-size:11px;white-space:pre-wrap;word-break:break-word;color:#111827;background:rgba(255,255,255,.55)';pre.textContent=checkText;
+        box.appendChild(pre);
+      }
+      out.appendChild(box);
+    }
+    function renderChanges(changes,note,check,checkText,repairRounds){
       lastChanges=changes||[];
       out.innerHTML='';
       if(note){var n=document.createElement('div');n.style.cssText='color:#475569;font-size:12px;margin-bottom:6px;white-space:pre-wrap';n.textContent=note;out.appendChild(n);}
+      renderCheck(check,checkText,repairRounds||0);
       if(!lastChanges.length){var e=document.createElement('div');e.style.cssText='color:#94a3b8;font-size:12px';e.textContent='Модель не предложила объектов.';out.appendChild(e);apply.style.display='none';return;}
-      lastChanges.forEach(function(ch){
-        var wrap=document.createElement('div');wrap.style.cssText='margin-bottom:8px';
-        var h=document.createElement('div');h.style.cssText='font-weight:600;font-size:12px;color:#0f172a';h.textContent=(ch.kind||'')+': '+ch.path;
-        var pre=document.createElement('pre');pre.style.cssText='margin:2px 0 0;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:6px;font-size:11px;white-space:pre-wrap;word-break:break-word';pre.textContent=ch.newContent||'';
-        wrap.appendChild(h);wrap.appendChild(pre);out.appendChild(wrap);
+      lastChanges.forEach(function(ch,idx){
+        var wrap=document.createElement('div');
+        wrap.className='cfggen-change';
+        wrap.dataset.idx=String(idx);
+        wrap.style.cssText='margin-bottom:10px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;background:#fff';
+        var h=document.createElement('label');
+        h.style.cssText='display:flex;gap:8px;align-items:center;padding:7px 9px;background:#f8fafc;border-bottom:1px solid #e2e8f0;font-weight:600;font-size:12px;color:#0f172a;cursor:pointer';
+        var cb=document.createElement('input');
+        cb.type='checkbox';
+        cb.checked=true;
+        cb.className='cfggen-change-check';
+        cb.style.cssText='width:14px;height:14px;margin:0;flex:0 0 auto';
+        var title=document.createElement('span');
+        title.textContent=(ch.kind||'')+': '+ch.path;
+        title.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        h.appendChild(cb);h.appendChild(title);wrap.appendChild(h);
+        var grid=document.createElement('div');
+        grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0';
+        if(ch.oldContent){
+          var oldBox=document.createElement('div');
+          oldBox.style.cssText='padding:8px;border-right:1px solid #e2e8f0;min-width:0';
+          var oldLbl=document.createElement('div');
+          oldLbl.textContent='Было';
+          oldLbl.style.cssText='font-size:11px;color:#64748b;margin-bottom:4px';
+          var oldPre=document.createElement('pre');
+          oldPre.className='cfggen-old-content';
+          oldPre.style.cssText='margin:0;min-height:160px;max-height:320px;overflow:auto;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:6px;font-size:11px;white-space:pre-wrap;word-break:break-word';
+          oldPre.textContent=ch.oldContent||'';
+          oldBox.appendChild(oldLbl);oldBox.appendChild(oldPre);grid.appendChild(oldBox);
+        }
+        var newBox=document.createElement('div');
+        newBox.style.cssText='padding:8px;min-width:0';
+        var newLbl=document.createElement('div');
+        newLbl.textContent='Будет';
+        newLbl.style.cssText='font-size:11px;color:#64748b;margin-bottom:4px';
+        var ta=document.createElement('textarea');
+        ta.className='cfggen-new-content';
+        ta.value=ch.newContent||'';
+        ta.spellcheck=false;
+        ta.style.cssText='width:100%;box-sizing:border-box;min-height:180px;max-height:420px;resize:vertical;background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;padding:6px;font-size:11px;line-height:1.35;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;overflow:auto';
+        newBox.appendChild(newLbl);newBox.appendChild(ta);grid.appendChild(newBox);
+        wrap.appendChild(grid);out.appendChild(wrap);
       });
       apply.style.display='';
+    }
+    function selectedChanges(){
+      var selected=[];
+      out.querySelectorAll('.cfggen-change').forEach(function(card){
+        var idx=Number(card.dataset.idx||'-1');
+        var src=lastChanges&&lastChanges[idx];
+        if(!src)return;
+        var cb=card.querySelector('.cfggen-change-check');
+        if(cb&&!cb.checked)return;
+        var ta=card.querySelector('.cfggen-new-content');
+        var ch={path:src.path,kind:src.kind,newContent:ta?ta.value:(src.newContent||'')};
+        if(src.oldContent)ch.oldContent=src.oldContent;
+        selected.push(ch);
+      });
+      return selected;
+    }
+    function genNote(text,trace){
+      var note=text||'';
+      if(trace&&trace.length){
+        note += (note?'\n\n':'')+'Tool trace:\n' + trace.map(function(t){
+          return '- '+t.name+(t.isError?' [error]':'')+': '+(t.result||'');
+        }).join('\n');
+      }
+      return note;
     }
     send.addEventListener('click',function(){
       var p=prompt.value.trim();if(!p){msg.textContent='Введите описание';msg.style.color='#c00';return;}
@@ -4100,20 +4176,32 @@ document.querySelectorAll('details.cfg-tree').forEach(function(d){
       fetch('/bases/'+base+'/configurator/ai-generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:p})})
         .then(function(r){return r.json();})
         .then(function(d){
-          if(d&&d.ok){msg.textContent='Модель: '+(d.model||'');msg.style.color='#16a34a';renderChanges(d.changes,d.text);}
-          else{msg.textContent='Ошибка';msg.style.color='#c00';renderChanges((d&&d.changes)||[],(d&&d.error)||'Ошибка');}
+          if(d&&d.ok){msg.textContent='Модель: '+(d.model||'');msg.style.color='#16a34a';renderChanges(d.changes,genNote(d.text,d.toolTrace),d.check,d.checkText,d.repairRounds);}
+          else{msg.textContent='Ошибка';msg.style.color='#c00';renderChanges((d&&d.changes)||[],genNote((d&&d.error)||'Ошибка',d&&d.toolTrace),d&&d.check,d&&d.checkText,d&&d.repairRounds);}
         })
         .catch(function(){msg.textContent='Ошибка сети';msg.style.color='#c00';})
         .finally(function(){send.disabled=false;});
     });
     apply.addEventListener('click',function(){
       if(!lastChanges||!lastChanges.length)return;
+      var changes=selectedChanges();
+      if(!changes.length){msg.textContent='Выберите хотя бы один файл';msg.style.color='#c00';return;}
       msg.textContent='Применение…';msg.style.color='#666';apply.disabled=true;
-      fetch('/bases/'+base+'/configurator/ai-apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({changes:lastChanges})})
+      fetch('/bases/'+base+'/configurator/ai-apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({changes:changes})})
         .then(function(r){return r.json();})
         .then(function(d){
-          if(d&&d.ok){msg.textContent='Применено объектов: '+d.applied+'. Выполните миграцию базы, чтобы создать таблицы. Обновление…';msg.style.color='#16a34a';setTimeout(function(){location.reload();},1800);}
-          else{msg.textContent=(d&&d.error)||'Ошибка применения';msg.style.color='#c00';}
+          if(d&&d.ok){
+            var suffix=d.check&&d.check.ok?' Проверка: OK.':'';
+            var versions=d.beforeVersion&&d.afterVersion?' Snapshot: '+d.beforeVersion+' → '+d.afterVersion+'.':'';
+            msg.textContent='Применено файлов: '+d.applied+'.'+suffix+versions+' Выполните миграцию базы, чтобы создать таблицы. Обновление…';msg.style.color='#16a34a';setTimeout(function(){location.reload();},1800);
+          }
+          else{
+            msg.textContent=(d&&d.error)||'Ошибка применения';msg.style.color='#c00';
+            if(d&&d.check&&d.check.issues){
+              var note='Ошибки check:\n'+d.check.issues.slice(0,8).map(function(i){return '- '+(i.file||'')+' '+(i.code?'['+i.code+'] ':'')+i.message;}).join('\n');
+              renderChanges(changes,note,d.check);
+            }
+          }
         })
         .catch(function(){msg.textContent='Ошибка сети';msg.style.color='#c00';})
         .finally(function(){apply.disabled=false;});

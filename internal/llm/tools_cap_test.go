@@ -55,6 +55,29 @@ func TestRunWithToolsCapReached(t *testing.T) {
 	}
 }
 
+func TestRunWithToolsUsesConfiguredMaxToolRounds(t *testing.T) {
+	var reqCount int64
+	srv := capServer(t, &reqCount)
+	defer srv.Close()
+
+	cfg := Config{
+		Enabled:       true,
+		Endpoints:     []Endpoint{{Name: "ep", Kind: KindAnthropic, BaseURL: srv.URL, APIKey: "k"}},
+		Models:        []Model{{Name: "m", Endpoint: "ep"}},
+		Profiles:      []Profile{{Task: "чат", Models: []string{"m"}}},
+		MaxToolRounds: 3,
+	}
+	r := New(cfg, nil)
+	_, err := r.RunWithTools(context.Background(), "чат", ChatRequest{Messages: []Message{UserText("начни")}},
+		[]Tool{{Name: "нет_конца"}}, func(context.Context, ToolCall) ToolResult { return ToolResult{Content: "dummy"} })
+	if err == nil || !strings.Contains(err.Error(), "(3)") {
+		t.Fatalf("expected configured max rounds error, got %v", err)
+	}
+	if got := atomic.LoadInt64(&reqCount); got != 3 {
+		t.Fatalf("ожидалось 3 запроса к серверу, получено %d", got)
+	}
+}
+
 // TestRunContextCancelAbortsChain проверяет, что уже отменённый контекст
 // вызывающего не вызывает перебор всей цепочки моделей (Fix 2).
 func TestRunContextCancelAbortsChain(t *testing.T) {
