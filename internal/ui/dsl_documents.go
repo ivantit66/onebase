@@ -511,6 +511,12 @@ func (w *docWriter) post() error {
 	w.ensureSelfRef()
 	mc := runtime.NewMovementsCollector(w.entity.Name, w.obj.ID)
 	setPeriodFromFields(mc, w.entity, w.obj.Fields)
+	// Дата запрета проведения (свёртка базы, план 74).
+	if mc.Period != nil {
+		if lock, ok := w.s.store.GetPostingLockDate(ctx); ok && storage.PostingFrozen(lock, *mc.Period) {
+			return storage.PostingFrozenError(lock)
+		}
+	}
 	if errMsg, _ := w.s.runOnPostCtx(ctx, w.obj, mc); errMsg != "" {
 		return fmt.Errorf("%s", errMsg)
 	}

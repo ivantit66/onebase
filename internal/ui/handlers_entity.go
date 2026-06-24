@@ -953,6 +953,13 @@ func (s *Server) postDocument(w http.ResponseWriter, r *http.Request) {
 	setPeriodFromFields(mc, entity, obj.Fields)
 
 	docURL := "/ui/" + strings.ToLower(string(entity.Kind)) + "/" + entity.Name + "/" + id.String()
+	// Дата запрета проведения (свёртка базы, план 74).
+	if mc.Period != nil {
+		if lock, ok := s.store.GetPostingLockDate(r.Context()); ok && storage.PostingFrozen(lock, *mc.Period) {
+			http.Redirect(w, r, docURL+"?posting_error="+url.QueryEscape(storage.PostingFrozenError(lock).Error()), http.StatusSeeOther)
+			return
+		}
+	}
 	if errMsg, _ := s.runOnPostCtx(r.Context(), obj, mc); errMsg != "" {
 		http.Redirect(w, r, docURL+"?posting_error="+url.QueryEscape(errMsg), http.StatusSeeOther)
 		return

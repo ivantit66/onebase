@@ -962,5 +962,6 @@
   "Недопустимое имя обработки": "Invalid processor name",
   "Недопустимое имя файла печатной формы": "Invalid print form file name",
   "Ошибка сохранения логотипа": "Logo save error",
-  "Ошибка удаления логотипа": "Logo delete error"
+  "Ошибка удаления логотипа": "Logo delete error",
+  "Свёртка базы": "Database rollup"
 }

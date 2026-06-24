@@ -202,6 +202,14 @@ func (s *Service) Save(ctx context.Context, req SaveRequest) (SaveResult, error)
 			return SaveResult{ID: req.ID, DSLError: storage.ErrPostingDeletionMarked.Error()}, nil
 		}
 	}
+	// Дата запрета проведения (свёртка базы, план 74): документ свёрнутого
+	// периода нельзя провести/перепровести — иначе движения вернутся и дадут
+	// двойной счёт с опорными остатками. Проверяем по дате, которую проводим.
+	if isPosting && mc.Period != nil {
+		if lock, ok := s.Store.GetPostingLockDate(ctx); ok && storage.PostingFrozen(lock, *mc.Period) {
+			return SaveResult{ID: req.ID, DSLError: storage.PostingFrozenError(lock).Error()}, nil
+		}
+	}
 	hookName := "OnWrite"
 	if isPosting {
 		hookName = "OnPost"

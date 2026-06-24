@@ -200,13 +200,29 @@ type TileView struct {
 	FieldsSet bool
 }
 
+// Виды регистра накопления (план 74). Балансовый (остатки) — по умолчанию;
+// оборотный нельзя сворачивать в остаток, поэтому свёртка его не предлагает.
+const (
+	RegisterKindBalance  = "balance"
+	RegisterKindTurnover = "turnover"
+)
+
 type Register struct {
-	Name       string
-	Title      string
-	Titles     map[string]string
+	Name   string
+	Title  string
+	Titles map[string]string
+	// Kind — вид регистра: "" / RegisterKindBalance (остатки, по умолчанию) или
+	// RegisterKindTurnover (обороты). Оборотный регистр накапливает обороты за
+	// период; свернуть его в один остаток нельзя — свёртка (план 74) его минует.
+	Kind       string
 	Dimensions []Field // form the grouping key for balances
 	Resources  []Field // accumulated (summed with sign based on movement type)
 	Attributes []Field // extra data, stored but not aggregated
+}
+
+// IsTurnover сообщает, что регистр оборотный (его нельзя сворачивать в остаток).
+func (r *Register) IsTurnover() bool {
+	return r.Kind == RegisterKindTurnover
 }
 
 // DisplayName возвращает заголовок регистра накопления с учётом языка.

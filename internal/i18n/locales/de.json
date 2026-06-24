@@ -828,5 +828,6 @@
   "Рабочее место кассира (РМК)": "Kassenarbeitsplatz (POS)",
   "Настройки агента оборудования": "Geräteagent-Einstellungen",
   "onebase — Информационные базы": "onebase — Informationsdatenbanken",
-  "Файл базы": "Datenbankdatei"
+  "Файл базы": "Datenbankdatei",
+  "Свёртка базы": "Datenbank-Rollup"
 }

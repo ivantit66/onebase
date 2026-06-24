@@ -150,9 +150,21 @@ type rawRegister struct {
 	Name       string            `yaml:"name"`
 	Title      string            `yaml:"title"`
 	Titles     map[string]string `yaml:"titles"`
+	Kind       string            `yaml:"kind"` // balance (по умолчанию) | turnover/обороты
 	Dimensions []rawField        `yaml:"dimensions"`
 	Resources  []rawField        `yaml:"resources"`
 	Attributes []rawField        `yaml:"attributes"`
+}
+
+// normalizeRegisterKind приводит вид регистра к каноническому значению.
+// Принимает русские и английские синонимы; всё неизвестное — балансовый.
+func normalizeRegisterKind(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "turnover", "обороты", "оборотный", "оборотов":
+		return RegisterKindTurnover
+	default:
+		return RegisterKindBalance
+	}
 }
 
 func LoadRegisterFile(path string) (*Register, error) {
@@ -167,7 +179,7 @@ func LoadRegisterFile(path string) (*Register, error) {
 	if raw.Name == "" {
 		return nil, fmt.Errorf("%s: missing name", path)
 	}
-	reg := &Register{Name: raw.Name, Title: raw.Title, Titles: raw.Titles}
+	reg := &Register{Name: raw.Name, Title: raw.Title, Titles: raw.Titles, Kind: normalizeRegisterKind(raw.Kind)}
 	for _, rf := range raw.Dimensions {
 		reg.Dimensions = append(reg.Dimensions, parseField(rf))
 	}

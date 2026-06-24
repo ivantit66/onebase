@@ -100,6 +100,12 @@ func (db *DB) OrphanMovements(ctx context.Context, registers []*metadata.Registe
 		rows.Close()
 
 		for _, rt := range recTypes {
+			// Опорные движения свёртки (план 74) — не сироты: у них нет
+			// документа-регистратора по замыслу. Пропускаем, иначе «Очистка
+			// регистров» предложила бы удалить опорные остатки.
+			if rt.recType == RollupRecorderType {
+				continue
+			}
 			tbl, exists := entityTable[strings.ToLower(rt.recType)]
 			var count int
 			if !exists {
@@ -142,6 +148,9 @@ func (db *DB) DeleteOrphanMovements(ctx context.Context, registers []*metadata.R
 
 		d := db.dialect
 		for _, recType := range types {
+			if recType == RollupRecorderType {
+				continue // опорные движения свёртки — не сироты (план 74)
+			}
 			tbl, exists := entityTable[strings.ToLower(recType)]
 			var sql string
 			if !exists {
