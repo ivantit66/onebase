@@ -261,6 +261,8 @@ docker compose -f loadtest/docker-compose.yml run --rm --service-ports \
 5. Обновить k6-профили под реальные пользовательские сценарии проекта.
 6. За reverse proxy/HTTPS выставлять cookie только по защищенному каналу.
 
+Развёрнутый план работ зафиксирован в `Plans/76-multi-user-scale-readiness.md`.
+
 ## Источники в коде
 
 - `internal/auth/users.go`

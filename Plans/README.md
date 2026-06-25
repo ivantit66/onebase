@@ -16,26 +16,27 @@
 > готовы; C3 (рантайм-настройки, план **70**) уже реализован в коде.
 > Ранее (2026-06-16): **44** (субконто), **39** (виджеты подсистем),
 > **57** (ИИ-конфигуратор, этапы 0–3) — тоже реализованы, хотя были помечены ⬜.
+> Сверка 2026-06-25: **43.2** (graceful shutdown scheduler), **60A** (UI истории
+> конфигурации), **65** (richtext), **74** (AI/dev tools 2.0) фактически закрыты.
 
 ## Текущий приоритет, 2026-06-25
 
 Источник: [`current-priority-2026-06-25.md`](current-priority-2026-06-25.md).
 
-1. **Смерджить готовые инфраструктурные PR:** #202 (`onebase lint`, `slog`) и
-   #203 (graceful shutdown scheduler). Оба PR зелёные, mergeable, локальная
-   проверка их объединения проходит `go test ./...`.
-2. **Стабилизационный спринт: lint-clean shipped examples/templates.** Новый
+1. **Стабилизационный спринт: lint-clean shipped examples/templates.** Новый
    `onebase lint` показывает предупреждения в поставляемых конфигурациях; до
    включения общего lint-gate нужно привести examples/templates к нулю
    предупреждений или явно поддержать нужные YAML-алиасы.
+2. **План 76:** готовность к многопользовательской нагрузке. Первый срез:
+   REST RBAC, лимиты/пагинация REST list, атомарная optimistic locking запись,
+   индексы под табличные части/списки и server-side reference picker.
 3. **План 34 F3:** автодоступ к полям ссылок (`this.X.Y`, `Стр.X.Y`). Это
    закрывает разрыв между ожидаемой 1С-подобной моделью и текущим обходным
    `ЗначениеРеквизитаОбъекта(...)`.
-4. **План 74:** `onebase fmt` и общий `aicontract` после стабилизации схемы
-   YAML/DSL.
-5. **План 60B:** marketplace конфигураций. Часть A (история/diff/rollback/UI)
+4. **План 60B:** marketplace конфигураций. Часть A (история/diff/rollback/UI)
    уже реализована; marketplace лучше делать после lint-clean examples/templates.
-6. **План 26:** REST API v2 — при наличии конкретного внешнего потребителя.
+5. **План 26:** REST API v2 после guardrails из плана 76, чтобы v2 сразу
+   наследовал RBAC, токены, пагинацию, OpenAPI и лимиты.
 
 Ниже по очереди: `55` этап 3 (inline-JS из `ui/templates.go`) делать при
 следующей работе с этим фронтом; `46` store wrapper и остатки i18n/PWA — скорее
@@ -65,6 +66,7 @@
 | 38 | [38-fill-on-based.md](38-fill-on-based.md) | Ввод на основании (ОбработкаЗаполнения) | ✅ Реализовано |
 | 50 | [50-deletion-mark-posting.md](50-deletion-mark-posting.md) | Пометка на удаление ↔ проведение (issue #36) | ✅ Реализовано |
 | 69 | [69-config-authorship.md](69-config-authorship.md) | Авторство и лицензирование конфигураций (author/copyright/license) | ✅ Реализовано |
+| 65 | [65-richtext.md](65-richtext.md) | RichText-поле: HTML с картинками, Quill, санитайзер, печать | ✅ Реализовано |
 
 ## Планы развития (roadmap)
 
@@ -121,6 +123,7 @@
 | 39 | [39-subsystem-home-pages.md](39-subsystem-home-pages.md) | Виджеты главной страницы по подсистемам | ~0.5 дня | ✅ Реализовано |
 | 45 | [45-mobile-pwa.md](45-mobile-pwa.md) | Мобильный доступ: адаптивная вёрстка + PWA | 3–4 дня | 🟡 Реализовано + правки по ревью (PWA публичны, авто-версия кэша SW, a11y); визуальная проверка на устройстве — приёмка |
 | 46 | [46-pwa-store-wrapper.md](46-pwa-store-wrapper.md) | Публикация PWA в App Store / Google Play (TWA/Capacitor) | 1–4 дня | ⬜ Не начато (опционально, поверх 45) |
+| 65 | [65-richtext.md](65-richtext.md) | RichText-поле: HTML с картинками, Quill, санитайзер, вывод в печать | 3–4 дня | ✅ Реализовано |
 | 66 | [66-pages.md](66-pages.md) | Страницы: произвольные представления на DSL (структурные блоки, открываются из меню, ссылки на объекты базы) | 2–3 дня | ✅ Реализовано |
 
 ### Направление Е — Корректность учёта
@@ -133,7 +136,7 @@
 
 | № | Файл | Фича | Эстимейт | Статус |
 |---|---|---|---|---|
-| 43 | [43-audit-techdebt.md](43-audit-techdebt.md) | Техдолг по итогам аудита: покрытие непротестированных пакетов, полный graceful shutdown, единый slog, раскол монолитов | 12–18 дней | 🟡 CI/race/coverage, `slog`, `onebase lint` и graceful shutdown закрыты; остаток — точечное покрытие `ui`/`launcher`/`mcp`/`widget` и раскол монолитов |
+| 43 | [43-audit-techdebt.md](43-audit-techdebt.md) | Техдолг по итогам аудита: покрытие непротестированных пакетов, полный graceful shutdown, единый slog, раскол монолитов | 12–18 дней | 🟡 CI/race/coverage, `slog`, `onebase lint`, debugger/processor coverage и graceful shutdown закрыты; остаток — точечное покрытие `ui`/`launcher`/`mcp`/`widget` и раскол монолитов |
 
 ### Направление З — ИИ для бизнеса
 
@@ -156,6 +159,7 @@
 | 56 | [56-techdebt-ci-observability.md](56-techdebt-ci-observability.md) | CI с `-race`/coverage, `golangci-lint`, RBAC вложений, slog + `/metrics`, `onebase lint`, чистка репозитория | 5.5–7.5 дней | ✅ Реализовано |
 | 62 | [62-network-safety-switch.md](62-network-safety-switch.md) | Предохранитель сети: галочка `net.enabled` лочит хуки/HTTP/сервисы/email; сброс при restore | 0.5 дня | ✅ Реализовано |
 | 67 | [67-exec-command.md](67-exec-command.md) | Выполнение команд ОС из DSL (`ВыполнитьКоманду`) за флагом `AllowExec` (выкл. по умолчанию, без shell, таймаут, аудит) | 1–1.5 дня | ✅ Реализовано |
+| 76 | [76-multi-user-scale-readiness.md](76-multi-user-scale-readiness.md) | Готовность к 100+ активным пользователям: REST RBAC, лимиты, индексы, reference picker, атомарная запись, observability и путь к горизонтальному масштабированию | 2–4 недели по этапам | ⬜ Запланировано |
 
 ### Направление Г — Интеграции и экосистема (продолжение)
 
