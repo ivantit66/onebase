@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/ivantit66/onebase/internal/api"
 	"github.com/ivantit66/onebase/internal/auth"
@@ -244,7 +245,11 @@ func runDev(cmd *cobra.Command, _ []string) error {
 
 	schedCtx, schedCancel := context.WithCancel(ctx)
 	defer schedCancel()
-	go sched.Start(schedCtx)
+	schedDone := make(chan struct{})
+	go func() {
+		defer close(schedDone)
+		sched.Start(schedCtx)
+	}()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -260,7 +265,10 @@ func runDev(cmd *cobra.Command, _ []string) error {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	schedCancel()
-	_ = srv.Shutdown(ctx)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+	_ = srv.Shutdown(shutdownCtx)
 	wg.Wait()
+	<-schedDone
 	return nil
 }

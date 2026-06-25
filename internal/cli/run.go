@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/ivantit66/onebase/internal/api"
 	"github.com/ivantit66/onebase/internal/auth"
@@ -448,7 +449,11 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	schedCtx, schedCancel := context.WithCancel(ctx)
 	defer schedCancel()
-	go sched.Start(schedCtx)
+	schedDone := make(chan struct{})
+	go func() {
+		defer close(schedDone)
+		sched.Start(schedCtx)
+	}()
 
 	fmt.Fprintf(os.Stdout, "onebase running on %s:%d\n", host, port)
 	quit := make(chan os.Signal, 1)
@@ -460,5 +465,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	}()
 	<-quit
 	schedCancel()
-	return srv.Shutdown(ctx)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+	err = srv.Shutdown(shutdownCtx)
+	<-schedDone
+	return err
 }
