@@ -87,20 +87,50 @@ func dayStart(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
 }
 
-// selectRollupRegs отбирает из всех регистров только включённые в свёртку
-// (по имени, регистронезависимо).
-func selectRollupRegs(all []*metadata.Register, names []string) []*metadata.Register {
+func rollupNameKey(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func selectedRollupNameSet(kind string, names []string) (map[string]bool, error) {
 	want := make(map[string]bool, len(names))
 	for _, n := range names {
-		want[strings.ToLower(n)] = true
+		key := rollupNameKey(n)
+		if key == "" {
+			return nil, fmt.Errorf("%s: пустое имя", kind)
+		}
+		want[key] = true
+	}
+	return want, nil
+}
+
+// selectRollupRegs отбирает из всех регистров только включённые в свёртку
+// (по имени, регистронезависимо). Оборотные регистры отклоняются явно: их
+// нельзя сворачивать в остаток.
+func selectRollupRegs(all []*metadata.Register, names []string) ([]*metadata.Register, error) {
+	want, err := selectedRollupNameSet("регистр накопления", names)
+	if err != nil {
+		return nil, err
+	}
+	byName := make(map[string]*metadata.Register, len(all))
+	for _, reg := range all {
+		byName[rollupNameKey(reg.Name)] = reg
+	}
+	for _, n := range names {
+		reg, ok := byName[rollupNameKey(n)]
+		if !ok {
+			return nil, fmt.Errorf("регистр накопления %q не найден", strings.TrimSpace(n))
+		}
+		if reg.IsTurnover() {
+			return nil, fmt.Errorf("регистр накопления %q оборотный: его нельзя сворачивать", reg.Name)
+		}
 	}
 	var out []*metadata.Register
 	for _, reg := range all {
-		if want[strings.ToLower(reg.Name)] {
+		if want[rollupNameKey(reg.Name)] {
 			out = append(out, reg)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // RollupPreview считает, что сделает свёртка, ничего не записывая (для UI-мастера
@@ -108,7 +138,19 @@ func selectRollupRegs(all []*metadata.Register, names []string) []*metadata.Regi
 func (db *DB) RollupPreview(ctx context.Context, regs []*metadata.Register, ents []*metadata.Entity, accountRegs []*metadata.AccountRegister, infoRegs []*metadata.InfoRegister, opts RollupOptions) (RollupReport, error) {
 	cutoff := dayStart(opts.Date)
 	rep := RollupReport{Cutoff: cutoff, Preview: true}
-	for _, reg := range selectRollupRegs(regs, opts.Registers) {
+	included, err := selectRollupRegs(regs, opts.Registers)
+	if err != nil {
+		return rep, err
+	}
+	includedAcc, err := selectRollupAccountRegs(accountRegs, opts.AccountRegisters)
+	if err != nil {
+		return rep, err
+	}
+	includedInfo, err := selectRollupInfoRegs(infoRegs, opts.InfoRegisters)
+	if err != nil {
+		return rep, err
+	}
+	for _, reg := range included {
 		folded, err := db.countMovementsBefore(ctx, reg.Name, cutoff)
 		if err != nil {
 			return rep, err
@@ -121,14 +163,14 @@ func (db *DB) RollupPreview(ctx context.Context, regs []*metadata.Register, ents
 			Name: reg.Name, FoldedMovements: folded, OpeningRows: len(open),
 		})
 	}
-	for _, ar := range selectRollupAccountRegs(accountRegs, opts.AccountRegisters) {
+	for _, ar := range includedAcc {
 		r, _, err := db.accountRegReport(ctx, ar, cutoff)
 		if err != nil {
 			return rep, err
 		}
 		rep.AccountRegisters = append(rep.AccountRegisters, r)
 	}
-	for _, ir := range selectRollupInfoRegs(infoRegs, opts.InfoRegisters) {
+	for _, ir := range includedInfo {
 		r, err := db.infoRegTrimReport(ctx, ir, cutoff)
 		if err != nil {
 			return rep, err
@@ -227,16 +269,25 @@ func (db *DB) countDanglingRefs(ctx context.Context, ents []*metadata.Entity, cu
 // Rollup выполняет свёртку базы в одной транзакции с пост-чеком «остатки до ==
 // остатки после»: при расхождении — откат и ошибка.
 func (db *DB) Rollup(ctx context.Context, regs []*metadata.Register, ents []*metadata.Entity, accountRegs []*metadata.AccountRegister, infoRegs []*metadata.InfoRegister, opts RollupOptions) (RollupReport, error) {
+	cutoff := dayStart(opts.Date)
+	included, err := selectRollupRegs(regs, opts.Registers)
+	if err != nil {
+		return RollupReport{Cutoff: cutoff}, err
+	}
+	includedAcc, err := selectRollupAccountRegs(accountRegs, opts.AccountRegisters)
+	if err != nil {
+		return RollupReport{Cutoff: cutoff}, err
+	}
+	includedInfo, err := selectRollupInfoRegs(infoRegs, opts.InfoRegisters)
+	if err != nil {
+		return RollupReport{Cutoff: cutoff}, err
+	}
 	if err := db.EnsureRollupTable(ctx); err != nil {
 		return RollupReport{}, err
 	}
-	cutoff := dayStart(opts.Date)
-	included := selectRollupRegs(regs, opts.Registers)
-	includedAcc := selectRollupAccountRegs(accountRegs, opts.AccountRegisters)
-	includedInfo := selectRollupInfoRegs(infoRegs, opts.InfoRegisters)
 	rep := RollupReport{Cutoff: cutoff}
 
-	err := db.WithTx(ctx, func(ctx context.Context) error {
+	err = db.WithTx(ctx, func(ctx context.Context) error {
 		if opts.DeleteDocuments {
 			// Жёсткий гейт по повисшим ссылкам: отказываем, если на удаляемые
 			// документы ссылаются СОХРАНЯЕМЫЕ записи (иначе ссылки повиснут).
@@ -587,18 +638,27 @@ func (db *DB) logRollup(ctx context.Context, cutoff time.Time, regs []*metadata.
 
 // selectRollupAccountRegs отбирает регистры бухгалтерии по именам (как
 // selectRollupRegs для накопления).
-func selectRollupAccountRegs(all []*metadata.AccountRegister, names []string) []*metadata.AccountRegister {
-	want := make(map[string]bool, len(names))
+func selectRollupAccountRegs(all []*metadata.AccountRegister, names []string) ([]*metadata.AccountRegister, error) {
+	want, err := selectedRollupNameSet("регистр бухгалтерии", names)
+	if err != nil {
+		return nil, err
+	}
+	byName := make(map[string]*metadata.AccountRegister, len(all))
+	for _, ar := range all {
+		byName[rollupNameKey(ar.Name)] = ar
+	}
 	for _, n := range names {
-		want[strings.ToLower(n)] = true
+		if _, ok := byName[rollupNameKey(n)]; !ok {
+			return nil, fmt.Errorf("регистр бухгалтерии %q не найден", strings.TrimSpace(n))
+		}
 	}
 	var out []*metadata.AccountRegister
 	for _, ar := range all {
-		if want[strings.ToLower(ar.Name)] {
+		if want[rollupNameKey(ar.Name)] {
 			out = append(out, ar)
 		}
 	}
-	return out
+	return out, nil
 }
 
 const rollupAuxAccountKey = "rollup.aux_account"
@@ -826,18 +886,27 @@ func accountBalancesEqual(before, after []map[string]any, ar *metadata.AccountRe
 // включается только явным перечислением регистров.
 
 // selectRollupInfoRegs отбирает регистры сведений по именам (как selectRollupRegs).
-func selectRollupInfoRegs(all []*metadata.InfoRegister, names []string) []*metadata.InfoRegister {
-	want := make(map[string]bool, len(names))
+func selectRollupInfoRegs(all []*metadata.InfoRegister, names []string) ([]*metadata.InfoRegister, error) {
+	want, err := selectedRollupNameSet("регистр сведений", names)
+	if err != nil {
+		return nil, err
+	}
+	byName := make(map[string]*metadata.InfoRegister, len(all))
+	for _, ir := range all {
+		byName[rollupNameKey(ir.Name)] = ir
+	}
 	for _, n := range names {
-		want[strings.ToLower(n)] = true
+		if _, ok := byName[rollupNameKey(n)]; !ok {
+			return nil, fmt.Errorf("регистр сведений %q не найден", strings.TrimSpace(n))
+		}
 	}
 	var out []*metadata.InfoRegister
 	for _, ir := range all {
-		if want[strings.ToLower(ir.Name)] {
+		if want[rollupNameKey(ir.Name)] {
 			out = append(out, ir)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // infoTrimCounts считает по периодическому регистру: сколько строк до cutoff

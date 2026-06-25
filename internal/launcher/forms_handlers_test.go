@@ -126,6 +126,77 @@ func TestDeleteManagedFormDBKeepsSimilarName(t *testing.T) {
 	}
 }
 
+func TestDeleteManagedFormFSKeepsSimilarName(t *testing.T) {
+	dir := t.TempDir()
+	formDir := filepath.Join(dir, "forms", "заказ")
+	if err := os.MkdirAll(filepath.Join(formDir, "main", "_resources"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, body := range map[string]string{
+		filepath.Join(formDir, "main.form.yaml"):              "form:\n  name: main\n",
+		filepath.Join(formDir, "main.form.os"):                "Процедура X()\nКонецПроцедуры\n",
+		filepath.Join(formDir, "main", "_resources", "a.bin"): "res",
+		filepath.Join(formDir, "main2.form.yaml"):             "form:\n  name: main2\n",
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	base := &Base{Path: dir, ConfigSource: "file"}
+	req := httptest.NewRequest("POST", "/forms/delete", nil)
+	if err := deleteManagedForm(req, base, "Заказ", "main"); err != nil {
+		t.Fatalf("deleteManagedForm: %v", err)
+	}
+
+	for _, p := range []string{
+		filepath.Join(formDir, "main.form.yaml"),
+		filepath.Join(formDir, "main.form.os"),
+		filepath.Join(formDir, "main", "_resources", "a.bin"),
+	} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("%s should be deleted, stat err=%v", p, err)
+		}
+	}
+	if content, err := os.ReadFile(filepath.Join(formDir, "main2.form.yaml")); err != nil || !strings.Contains(string(content), "main2") {
+		t.Fatalf("similar form main2 should stay: err=%v content=%q", err, content)
+	}
+}
+
+func TestDeleteManagedFormFSRejectsPathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	for path, body := range map[string]string{
+		filepath.Join(dir, "victim.form.yaml"): "keep yaml",
+		filepath.Join(dir, "victim.form.os"):   "keep os",
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "victim"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "victim", "keep.txt"), []byte("keep dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	base := &Base{Path: dir, ConfigSource: "file"}
+	req := httptest.NewRequest("POST", "/forms/delete", nil)
+	if err := deleteManagedForm(req, base, "..", "victim"); err == nil {
+		t.Fatalf("deleteManagedForm accepted path traversal")
+	}
+
+	for _, p := range []string{
+		filepath.Join(dir, "victim.form.yaml"),
+		filepath.Join(dir, "victim.form.os"),
+		filepath.Join(dir, "victim", "keep.txt"),
+	} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s should remain after rejected traversal: %v", p, err)
+		}
+	}
+}
+
 // extractFormKindFromYAML — точечный тест маленького helper'а.
 func TestExtractFormKindFromYAML(t *testing.T) {
 	cases := []struct {

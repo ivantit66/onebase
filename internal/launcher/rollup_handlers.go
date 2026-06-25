@@ -31,14 +31,15 @@ func (h *handler) cfgAdminRollup(w http.ResponseWriter, r *http.Request) {
 	// Чек-лист регистров накопления (по умолчанию все включены).
 	regRows := ""
 	for _, reg := range proj.Registers {
-		checked, suffix := "checked", ""
+		attrs, suffix := "checked", ""
 		if reg.IsTurnover() {
-			checked, suffix = "", ` <span style="color:#b45309;font-size:11px">(оборотный — не сворачивается)</span>`
+			attrs = "disabled"
+			suffix = ` <span style="color:#b45309;font-size:11px">(оборотный — не сворачивается)</span>`
 		}
 		regRows += fmt.Sprintf(
 			`<label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:3px 0">
 			   <input type="checkbox" class="rb-reg" value="%s" %s> %s%s</label>`,
-			escHTML(reg.Name), checked, escHTML(reg.DisplayName(lang)), suffix)
+			escHTML(reg.Name), attrs, escHTML(reg.DisplayName(lang)), suffix)
 	}
 	if regRows == "" {
 		regRows = `<div style="color:#999;font-size:12px">В конфигурации нет регистров накопления.</div>`
@@ -98,7 +99,7 @@ func (h *handler) cfgAdminRollup(w http.ResponseWriter, r *http.Request) {
 	  </label>
 
 	  <div style="font-size:13px;font-weight:600;margin:6px 0 4px">Регистры накопления</div>
-	  <div style="font-size:11px;color:#888;margin-bottom:6px">Снимите оборотные регистры — их нельзя сворачивать в остаток.</div>
+	  <div style="font-size:11px;color:#888;margin-bottom:6px">Оборотные регистры недоступны для выбора — их нельзя сворачивать в остаток.</div>
 	  <div style="max-height:200px;overflow:auto;border:1px solid #e2e8f0;border-radius:4px;padding:6px 10px;background:#fff">` + regRows + `</div>
 ` + accBlock + infoBlock + `
 	  <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:12px">

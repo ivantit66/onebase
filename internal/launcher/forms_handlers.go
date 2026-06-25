@@ -588,13 +588,34 @@ func deleteManagedForm(r *http.Request, b *Base, entity, name string) error {
 			Message:     "delete managed form " + entity + "." + name,
 		})
 	}
-	yp, op := formFiles(b, entity, name)
-	_ = os.Remove(yp)
-	_ = os.Remove(op)
+	entityLower := strings.ToLower(entity)
+	nameLower := strings.ToLower(name)
+	yp, err := configdb.SafeJoin(b.Path, fmt.Sprintf("forms/%s/%s.form.yaml", entityLower, nameLower))
+	if err != nil {
+		return err
+	}
+	op, err := configdb.SafeJoin(b.Path, fmt.Sprintf("forms/%s/%s.form.os", entityLower, nameLower))
+	if err != nil {
+		return err
+	}
+	removeFile := func(path string) error {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if err := removeFile(yp); err != nil {
+		return err
+	}
+	if err := removeFile(op); err != nil {
+		return err
+	}
 	// _resources/ соседним каталогом — удаляем рекурсивно если есть
-	resDir := filepath.Join(filepath.Dir(yp), strings.ToLower(name))
-	_ = os.RemoveAll(resDir)
-	return nil
+	resDir, err := configdb.SafeJoin(b.Path, fmt.Sprintf("forms/%s/%s", entityLower, nameLower))
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(resDir)
 }
 
 // configuratorFormsValidate — POST YAML, возвращает JSON со списком warnings.

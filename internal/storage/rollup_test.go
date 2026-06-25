@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -156,6 +157,41 @@ func TestRollup_FoldsAccumulationRegister(t *testing.T) {
 	}
 }
 
+func TestRollup_RejectsTurnoverRegister(t *testing.T) {
+	ctx, db := rollupTestDB(t)
+	reg := &metadata.Register{
+		Name:       "ОборотыПродаж",
+		Kind:       metadata.RegisterKindTurnover,
+		Dimensions: []metadata.Field{{Name: "Товар", Type: metadata.FieldTypeString}},
+		Resources:  []metadata.Field{{Name: "Количество", Type: metadata.FieldTypeNumber}},
+	}
+	if err := db.MigrateRegisters(ctx, []*metadata.Register{reg}); err != nil {
+		t.Fatalf("MigrateRegisters: %v", err)
+	}
+	d := mustDate(t, "2025-01-10")
+	if err := db.WriteMovements(ctx, reg.Name, "Продажа", uuid.New(),
+		[]map[string]any{{"Товар": "Молоко", "Количество": 10, "ВидДвижения": "Приход"}}, reg, &d); err != nil {
+		t.Fatalf("WriteMovements: %v", err)
+	}
+
+	opts := RollupOptions{Date: mustDate(t, "2025-03-01"), Registers: []string{"ОборотыПродаж"}}
+	if _, err := db.RollupPreview(ctx, []*metadata.Register{reg}, nil, nil, nil, opts); err == nil || !strings.Contains(err.Error(), "оборот") {
+		t.Fatalf("RollupPreview err = %v, want turnover rejection", err)
+	}
+	if _, err := db.Rollup(ctx, []*metadata.Register{reg}, nil, nil, nil, opts); err == nil || !strings.Contains(err.Error(), "оборот") {
+		t.Fatalf("Rollup err = %v, want turnover rejection", err)
+	}
+
+	var total int
+	db.QueryRow(ctx, "SELECT COUNT(*) FROM "+metadata.RegisterTableName(reg.Name)).Scan(&total)
+	if total != 1 {
+		t.Fatalf("turnover movements changed: rows=%d, want 1", total)
+	}
+	if _, ok := db.GetPostingLockDate(ctx); ok {
+		t.Fatalf("posting lock should not be set after rejected rollup")
+	}
+}
+
 func rollupDocEntity() *metadata.Entity {
 	return &metadata.Entity{
 		Name:    "РасходТовара",
@@ -254,6 +290,34 @@ func TestRollup_DeleteDocuments(t *testing.T) {
 	db.QueryRow(ctx, "SELECT COUNT(*) FROM "+metadata.TableName(doc.Name)).Scan(&left)
 	if left != 1 {
 		t.Errorf("осталось документов=%d, ждали 1", left)
+	}
+}
+
+func TestRollup_RejectsUnknownRegisterBeforeDocumentPolicy(t *testing.T) {
+	ctx, db := rollupTestDB(t)
+	doc := rollupDocEntity()
+	if err := db.Migrate(ctx, []*metadata.Entity{doc}); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, err := db.WriteCatalogRecord(ctx, doc, "", map[string]any{"Дата": mustDate(t, "2025-01-15"), "Сумма": 100}); err != nil {
+		t.Fatalf("WriteCatalogRecord: %v", err)
+	}
+
+	opts := RollupOptions{Date: mustDate(t, "2025-03-01"), Registers: []string{"НетТакогоРегистра"}, DeleteDocuments: true}
+	if _, err := db.RollupPreview(ctx, nil, []*metadata.Entity{doc}, nil, nil, opts); err == nil || !strings.Contains(err.Error(), "не найден") {
+		t.Fatalf("RollupPreview err = %v, want unknown register rejection", err)
+	}
+	if _, err := db.Rollup(ctx, nil, []*metadata.Entity{doc}, nil, nil, opts); err == nil || !strings.Contains(err.Error(), "не найден") {
+		t.Fatalf("Rollup err = %v, want unknown register rejection", err)
+	}
+
+	var left int
+	db.QueryRow(ctx, "SELECT COUNT(*) FROM "+metadata.TableName(doc.Name)).Scan(&left)
+	if left != 1 {
+		t.Fatalf("document policy ran after invalid selection: documents left=%d, want 1", left)
+	}
+	if _, ok := db.GetPostingLockDate(ctx); ok {
+		t.Fatalf("posting lock should not be set after invalid selection")
 	}
 }
 
