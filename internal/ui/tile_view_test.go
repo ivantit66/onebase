@@ -78,3 +78,72 @@ func TestResolveTileViewExplicitEmptyFields(t *testing.T) {
 		t.Fatalf("явный пустой fields не должен подставлять автополя, got %+v", view.Fields)
 	}
 }
+
+// resolveListColumns: без tile_view — все поля; с набором — Заголовок,
+// Подзаголовок и выбранные поля (без картинки и невыбранных) (#216).
+func TestResolveListColumns(t *testing.T) {
+	ent := &metadata.Entity{
+		Name: "Товар",
+		Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{
+			{Name: "Наименование", Type: metadata.FieldTypeString},
+			{Name: "Артикул", Type: metadata.FieldTypeString},
+			{Name: "Фото", Type: metadata.FieldTypeImage},
+			{Name: "Цена", Type: metadata.FieldTypeNumber},
+			{Name: "Остаток", Type: metadata.FieldTypeNumber},
+			{Name: "Скрыто", Type: metadata.FieldTypeString},
+		},
+	}
+	if got := resolveListColumns(ent); len(got) != len(ent.Fields) {
+		t.Fatalf("без конфигурации ожидались все поля (%d), got %d", len(ent.Fields), len(got))
+	}
+
+	ent.TileView = &metadata.TileView{
+		Image:    "Фото",
+		Title:    "Артикул",
+		Subtitle: "Наименование",
+		Fields:   []string{"Цена", "Остаток"},
+	}
+	var names []string
+	for _, f := range resolveListColumns(ent) {
+		names = append(names, f.Name)
+	}
+	want := "Артикул,Наименование,Цена,Остаток"
+	if strings.Join(names, ",") != want {
+		t.Fatalf("колонки списка = %v, ожидалось %q", names, want)
+	}
+}
+
+// Табличный режим списка (страницы/лента) теперь уважает tile_view.fields:
+// выбранные колонки показываются, невыбранные — нет (#216).
+func TestPageList_ListViewHonorsTileFields(t *testing.T) {
+	ent := &metadata.Entity{
+		Name: "Товар",
+		Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{
+			{Name: "Наименование", Type: metadata.FieldTypeString},
+			{Name: "Артикул", Type: metadata.FieldTypeString},
+			{Name: "Цена", Type: metadata.FieldTypeNumber},
+			{Name: "Скрыто", Type: metadata.FieldTypeString},
+		},
+		TileView: &metadata.TileView{Title: "Артикул", Fields: []string{"Цена"}},
+	}
+	html := renderPageList(t, map[string]any{
+		"Entity":           ent,
+		"Rows":             []map[string]any{{"id": "1", "Наименование": "Кофе", "Артикул": "A-1", "Цена": 100, "Скрыто": "secret"}},
+		"Params":           storage.ListParams{},
+		"RefFilterOptions": map[string]any{},
+		"Lang":             "ru",
+		"Total":            1, "Page": 1, "TotalPages": 1,
+	})
+	for _, want := range []string{"Артикул", "Цена", "A-1"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("список не содержит выбранную колонку/значение %q", want)
+		}
+	}
+	for _, unwanted := range []string{"Кофе", "secret"} {
+		if strings.Contains(html, unwanted) {
+			t.Errorf("список показал значение невыбранной колонки: %q", unwanted)
+		}
+	}
+}

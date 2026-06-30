@@ -66,6 +66,40 @@ func resolveTileView(entity *metadata.Entity) tileViewRender {
 	return out
 }
 
+// resolveListColumns возвращает набор колонок для табличных режимов списка
+// (страницы/лента/дерево). Если в плитке явно задан набор реквизитов
+// (tile_view.fields), тот же набор применяется и к таблице: Заголовок,
+// Подзаголовок и выбранные поля. Иначе показываем все поля сущности — как
+// раньше. Это устраняет расхождение, когда выбор реквизитов влиял только на
+// плитку, а таблица/лента/дерево печатали всё (#216).
+func resolveListColumns(entity *metadata.Entity) []metadata.Field {
+	if entity == nil {
+		return nil
+	}
+	tv := entity.TileView
+	// Тот же критерий «набор задан», что и в resolveTileView: явный fields: []
+	// (FieldsSet) ИЛИ непустой список. Иначе — все поля, как раньше.
+	if tv == nil || (!tv.FieldsSet && len(tv.Fields) == 0) {
+		return entity.Fields
+	}
+	view := resolveTileView(entity)
+	cols := make([]metadata.Field, 0, len(view.Fields)+2)
+	seen := map[string]bool{}
+	add := func(f *metadata.Field) {
+		if f == nil || seen[f.Name] {
+			return
+		}
+		seen[f.Name] = true
+		cols = append(cols, *f)
+	}
+	add(view.TitleField)
+	add(view.SubtitleField)
+	for i := range view.Fields {
+		add(&view.Fields[i])
+	}
+	return cols
+}
+
 func fieldPtr(f metadata.Field) *metadata.Field {
 	ff := f
 	return &ff

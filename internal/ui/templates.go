@@ -52,9 +52,10 @@ func templateFuncs(bundle *i18n.Bundle) template.FuncMap {
 			}
 			return fmt.Sprintf("%v", v)
 		},
-		"isRef":    func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "reference:") },
-		"isEnum":   func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "enum:") },
-		"tileView": resolveTileView,
+		"isRef":       func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "reference:") },
+		"isEnum":      func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "enum:") },
+		"tileView":    resolveTileView,
+		"listColumns": resolveListColumns,
 		"hasValue": func(v any) bool {
 			if v == nil {
 				return false
@@ -1300,7 +1301,7 @@ const tplList = `
 {{if .TreeRows}}
 <div style="overflow-x:auto">
 <table><thead><tr>
-  {{range .Entity.Fields}}<th>{{.DisplayName $.Lang}}</th>{{end}}
+  {{range listColumns .Entity}}<th>{{.DisplayName $.Lang}}</th>{{end}}
   <th style="width:90px"></th>
 </tr></thead><tbody>
 {{range .TreeRows}}{{$row := .}}{{$isFolder := index $row "is_folder"}}{{$depth := index $row "_depth"}}
@@ -1324,7 +1325,7 @@ const tplList = `
   data-activity-hide-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/activity?active=0"
   data-activity-show-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/activity?active=1"
   data-open-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}{{if $.CurrentSubsystem}}?subsystem={{$.CurrentSubsystem}}{{end}}">
-  {{range $.Entity.Fields}}
+  {{range listColumns $.Entity}}
     {{if eq .Name "Наименование"}}
       <td>
         <span style="display:inline-block;width:{{mul (int $depth) 20}}px"></span>
@@ -1407,7 +1408,7 @@ const tplList = `
 <div style="overflow-x:auto">
 <table><thead><tr>
   {{if eq (str .Entity.Kind) "document"}}<th style="width:36px">✓</th>{{end}}
-  {{range .Entity.Fields}}
+  {{range listColumns .Entity}}
   <th>
     <a href="?sort={{.Name}}&dir={{nextDir $params .Name}}{{filterQuery $params}}">
       {{.DisplayName $.Lang}} {{sortIcon $params .Name}}
@@ -1440,7 +1441,7 @@ const tplList = `
       {{if index $row "posted"}}<span style="color:#16a34a;font-weight:700" title="{{t $.Lang "Проведён"}}">✓</span>{{else}}<span style="color:#94a3b8" title="{{t $.Lang "Не проведён"}}">—</span>{{end}}
     </td>
   {{end}}
-  {{range $.Entity.Fields}}
+  {{range listColumns $.Entity}}
     {{if eq (str .Type) "date"}}<td style="white-space:nowrap">{{fmtDate (index $row .Name)}}</td>
     {{else if isImage (str .Type)}}<td>{{$iv := index $row .Name}}{{if $iv}}<img src="/ui/_image/{{$iv}}" style="height:34px;width:34px;object-fit:cover;border-radius:5px;vertical-align:middle" alt="">{{else}}<span style="color:#cbd5e1">—</span>{{end}}</td>
     {{else if isRichText (str .Type)}}<td style="white-space:nowrap;color:#64748b">{{richPlain (index $row .Name)}}</td>
