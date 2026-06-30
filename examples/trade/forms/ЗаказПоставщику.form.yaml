@@ -72,6 +72,7 @@ elements:
             title:
               ru: "Товары"
             data_path: Объект.Товары
+            auto_sum: true
           - kind: ГруппаФормы
             name: ГруппаИтоги
             title:

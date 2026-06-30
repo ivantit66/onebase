@@ -132,6 +132,7 @@ elements:
                   en: "Lines"
                   de: "Positionen"
                 data_path: Объект.Строки
+                auto_sum: true
               - kind: Кнопка
                 name: КнопкаПересчитать
                 title:

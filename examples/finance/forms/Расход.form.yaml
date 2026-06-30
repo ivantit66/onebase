@@ -91,6 +91,7 @@ elements:
                 title:
                   ru: "Строки"
                 data_path: Объект.Строки
+                auto_sum: true
               - kind: Кнопка
                 name: КнопкаПересчитать
                 title:

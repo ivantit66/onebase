@@ -114,6 +114,7 @@ elements:
                   ru: "Товары"
                   en: "Items"
                 data_path: Объект.Товары
+                auto_sum: true
               - kind: Кнопка
                 name: КнопкаПересчитать
                 title:

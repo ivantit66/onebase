@@ -206,6 +206,7 @@ elements:
                   en: "Products and services"
                   de: "Produkte und Dienstleistungen"
                 data_path: Объект.ТоварыУслуги
+                auto_sum: true
               - kind: Кнопка
                 name: КнопкаПересчитать
                 title:

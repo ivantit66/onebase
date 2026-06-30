@@ -167,3 +167,65 @@ func TestManagedFormGridRowEventAttrs(t *testing.T) {
 		t.Error("рендер грида не содержит передачу контекста изменённой ячейки")
 	}
 }
+
+// AutoSum на элементе ТЧ → грид получает data-sg-autosum; без флага — нет.
+// Иначе обычная ТЧ с колонками Цена/Количество/Сумма связывалась бы сама (#215.1).
+func TestManagedFormGridAutoSumAttr(t *testing.T) {
+	render := func(autoSum bool) string {
+		form := &metadata.FormModule{
+			Name:       "ФормаОбъекта",
+			Kind:       "object",
+			EntityName: "Заказ",
+			LayoutKind: metadata.FormLayoutManaged,
+			Title:      map[string]string{"ru": "Заказ"},
+			Elements: []*metadata.FormElement{{
+				Kind:     metadata.FormElementTablePart,
+				Name:     "ЭлементТовары",
+				TitleMap: map[string]string{"ru": "Товары"},
+				DataPath: "Объект.Товары",
+				AutoSum:  autoSum,
+			}},
+		}
+		ent := &metadata.Entity{
+			Name: "Заказ",
+			Kind: metadata.KindDocument,
+			TableParts: []metadata.TablePart{{
+				Name: "Товары",
+				Fields: []metadata.Field{
+					{Name: "Количество", Type: "number"},
+					{Name: "Цена", Type: "number"},
+					{Name: "Сумма", Type: "number"},
+				},
+			}},
+			Forms: []*metadata.FormModule{form},
+		}
+		data := map[string]any{
+			"Entity":        ent,
+			"Form":          form,
+			"IsNew":         true,
+			"Values":        map[string]string{},
+			"RefOptions":    map[string]any{},
+			"EnumOptions":   map[string]any{},
+			"ChoiceOptions": map[string]any{},
+			"TPRefOptions":  map[string]any{},
+			"TPEnumLabels":  map[string]map[string]map[string]string{},
+			"TPEnumOrder":   map[string]map[string][]string{},
+			"TPRefMeta":     map[string]any{},
+			"TablePartRows": map[string][]map[string]any{"Товары": {}},
+			"User":          nil,
+			"Lang":          "ru",
+		}
+		var buf bytes.Buffer
+		if err := tmpl.ExecuteTemplate(&buf, "page-managed-form", data); err != nil {
+			t.Fatalf("ExecuteTemplate: %v", err)
+		}
+		return buf.String()
+	}
+
+	if html := render(true); !strings.Contains(html, `data-sg-autosum="1"`) {
+		t.Error("нет data-sg-autosum при auto_sum: true")
+	}
+	if html := render(false); strings.Contains(html, `data-sg-autosum="1"`) {
+		t.Error("data-sg-autosum появился без auto_sum")
+	}
+}

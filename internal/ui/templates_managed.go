@@ -183,6 +183,7 @@ const tplManagedForm = `
        data-sg-el="{{$el.Name}}"
        {{if $el.ReadOnly}}data-sg-ro="1"{{end}}
        {{if hasHandler $el "ПриИзменении"}}data-sg-recalc="1"{{end}}
+       {{if $el.AutoSum}}data-sg-autosum="1"{{end}}
        {{if hasHandler $el "ПриДобавленииСтроки"}}data-sg-rowadd="1"{{end}}
        {{if hasHandler $el "ПриУдаленииСтроки"}}data-sg-rowdel="1"{{end}}
        data-sg-cols='[{{range $i, $f := $tpMeta.Fields}}{{if $i}},{{end}}{"id":"{{$f.Name}}","name":"{{$f.Name}}","type":"{{$f.Type}}"{{if $f.RefEntity}},"ref":"{{$f.RefEntity}}"{{end}}{{if isEnum (str $f.Type)}},"enum":true{{end}}}{{end}}]'
@@ -1601,11 +1602,12 @@ function addVtRow(vtName, fields) {
       grid.invalidate(); grid.render();
     });
 
-    // Клиентский авторасчёт «как в старой таблице»: Сумма = Количество × Цена.
+    // Клиентский авторасчёт Сумма = Количество × Цена — ТОЛЬКО при явном opt-in
+    // (data-sg-autosum ← auto_sum: true у ТЧ в форме). Без флага обычная ТЧ с
+    // колонками Цена/Количество/Сумма больше НЕ связывается автоматически (#215.1).
     // Колонки определяем ПО ИМЕНИ (а не «ровно 3 числовые»), чтобы работало и
-    // когда в ТЧ есть доп. числовые колонки (НДС и т.п.). Это мгновенная
-    // подсказка по основной колонке; полный пересчёт (НДС, итоги шапки —
-    // decimal) делает сервер по кнопке «Пересчитать»/при записи/проведении.
+    // когда есть доп. числовые колонки (НДС и т.п.). Это мгновенная подсказка;
+    // точный пересчёт (НДС, итоги — decimal) делает сервер при записи/проведении.
     function num(v) { var n = Number(String(v == null ? "" : v).replace(/\s/g, "").replace(",", ".")); return isNaN(n) ? 0 : n; }
     function findColId(variants) {
       for (var i = 0; i < colsRaw.length; i++) {
@@ -1614,9 +1616,10 @@ function addVtRow(vtName, fields) {
       }
       return null;
     }
-    var colQty = findColId(["количество", "кол-во", "колво", "кол", "quantity", "qty"]);
-    var colPrice = findColId(["цена", "price"]);
-    var colSum = findColId(["сумма", "amount", "sum"]);
+    var autoSum = div.getAttribute("data-sg-autosum") === "1";
+    var colQty = autoSum ? findColId(["количество", "кол-во", "колво", "кол", "quantity", "qty"]) : null;
+    var colPrice = autoSum ? findColId(["цена", "price"]) : null;
+    var colSum = autoSum ? findColId(["сумма", "amount", "sum"]) : null;
     grid.onCellChange.subscribe(function(e, args) {
       window._obFormDirty = true;
       if (colQty && colPrice && colSum && args && args.item && args.cell != null) {

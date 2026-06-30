@@ -59,6 +59,7 @@ elements:
         title:
           ru: "Товары к оприходованию"
         data_path: Объект.Товары
+        auto_sum: true
       - kind: ПолеВвода
         name: ПолеКомментарий
         title:
