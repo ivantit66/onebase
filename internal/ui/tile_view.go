@@ -100,6 +100,18 @@ func resolveListColumns(entity *metadata.Entity) []metadata.Field {
 	return cols
 }
 
+func isTreeListColumn(cols []metadata.Field, idx int) bool {
+	if idx < 0 || idx >= len(cols) {
+		return false
+	}
+	for _, col := range cols {
+		if col.Name == "Наименование" {
+			return cols[idx].Name == "Наименование"
+		}
+	}
+	return idx == 0
+}
+
 func fieldPtr(f metadata.Field) *metadata.Field {
 	ff := f
 	return &ff

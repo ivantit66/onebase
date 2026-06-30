@@ -56,6 +56,7 @@ func templateFuncs(bundle *i18n.Bundle) template.FuncMap {
 		"isEnum":      func(t any) bool { return strings.HasPrefix(fmt.Sprintf("%v", t), "enum:") },
 		"tileView":    resolveTileView,
 		"listColumns": resolveListColumns,
+		"treeColumn":  isTreeListColumn,
 		"hasValue": func(v any) bool {
 			if v == nil {
 				return false
@@ -1299,9 +1300,10 @@ const tplList = `
 {{if .TreeView}}
 {{/* ===== TREE VIEW ===== */}}
 {{if .TreeRows}}
+{{$treeCols := listColumns .Entity}}
 <div style="overflow-x:auto">
 <table><thead><tr>
-  {{range listColumns .Entity}}<th>{{.DisplayName $.Lang}}</th>{{end}}
+  {{range $treeCols}}<th>{{.DisplayName $.Lang}}</th>{{end}}
   <th style="width:90px"></th>
 </tr></thead><tbody>
 {{range .TreeRows}}{{$row := .}}{{$isFolder := index $row "is_folder"}}{{$depth := index $row "_depth"}}
@@ -1325,8 +1327,8 @@ const tplList = `
   data-activity-hide-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/activity?active=0"
   data-activity-show-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}/activity?active=1"
   data-open-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}/{{index $row "id"}}{{if $.CurrentSubsystem}}?subsystem={{$.CurrentSubsystem}}{{end}}">
-  {{range listColumns $.Entity}}
-    {{if eq .Name "Наименование"}}
+  {{range $i, $col := $treeCols}}
+    {{if treeColumn $treeCols $i}}
       <td>
         <span style="display:inline-block;width:{{mul (int $depth) 20}}px"></span>
         {{if $isFolder}}
@@ -1334,12 +1336,12 @@ const tplList = `
             style="background:none;border:none;cursor:pointer;padding:0 2px;font-size:13px">▼</button>
           📁
         {{else}}📄{{end}}
-        {{index $row .Name}}{{if index $row "_is_predefined"}} <span title="{{t $.Lang "Предопределённый"}}" style="color:#f59e0b;font-size:11px">★</span>{{end}}
+        {{if eq (str $col.Type) "date"}}{{fmtDate (index $row $col.Name)}}{{else if isRichText (str $col.Type)}}{{richPlain (index $row $col.Name)}}{{else if isEnum (str $col.Type)}}{{enumLabel $.EnumLabels $col.Name (str (index $row $col.Name))}}{{else}}{{fmtCell (index $row $col.Name)}}{{end}}{{if index $row "_is_predefined"}} <span title="{{t $.Lang "Предопределённый"}}" style="color:#f59e0b;font-size:11px">★</span>{{end}}
       </td>
-    {{else if eq (str .Type) "date"}}<td>{{fmtDate (index $row .Name)}}</td>
-    {{else if isRichText (str .Type)}}<td style="color:#64748b">{{richPlain (index $row .Name)}}</td>
-    {{else if isEnum (str .Type)}}<td>{{enumLabel $.EnumLabels .Name (str (index $row .Name))}}</td>
-    {{else}}<td>{{fmtCell (index $row .Name)}}</td>{{end}}
+    {{else if eq (str $col.Type) "date"}}<td>{{fmtDate (index $row $col.Name)}}</td>
+    {{else if isRichText (str $col.Type)}}<td style="color:#64748b">{{richPlain (index $row $col.Name)}}</td>
+    {{else if isEnum (str $col.Type)}}<td>{{enumLabel $.EnumLabels $col.Name (str (index $row $col.Name))}}</td>
+    {{else}}<td>{{fmtCell (index $row $col.Name)}}</td>{{end}}
   {{end}}
   <td>
     {{if $isFolder}}

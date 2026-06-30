@@ -147,3 +147,37 @@ func TestPageList_ListViewHonorsTileFields(t *testing.T) {
 		}
 	}
 }
+
+func TestPageList_TreeViewKeepsToggleWhenNameHiddenByTileFields(t *testing.T) {
+	ent := &metadata.Entity{
+		Name:         "Товар",
+		Kind:         metadata.KindCatalog,
+		Hierarchical: true,
+		Fields: []metadata.Field{
+			{Name: "Наименование", Type: metadata.FieldTypeString},
+			{Name: "Артикул", Type: metadata.FieldTypeString},
+			{Name: "Цена", Type: metadata.FieldTypeNumber},
+			{Name: "Скрыто", Type: metadata.FieldTypeString},
+		},
+		TileView: &metadata.TileView{Title: "Артикул", Fields: []string{"Цена"}},
+	}
+	html := renderPageList(t, map[string]any{
+		"Entity":           ent,
+		"TreeView":         true,
+		"TreeRows":         []map[string]any{{"id": "1", "is_folder": true, "_depth": 0, "Наименование": "Кофе", "Артикул": "A-1", "Цена": 100, "Скрыто": "secret"}},
+		"Params":           storage.ListParams{},
+		"RefFilterOptions": map[string]any{},
+		"Lang":             "ru",
+		"Total":            1, "Page": 1, "TotalPages": 1,
+	})
+	for _, want := range []string{`class="tree-toggle"`, "Артикул", "Цена", "A-1", "100"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("дерево не содержит %q", want)
+		}
+	}
+	for _, unwanted := range []string{"Кофе", "secret"} {
+		if strings.Contains(html, unwanted) {
+			t.Errorf("дерево показало значение невыбранной колонки: %q", unwanted)
+		}
+	}
+}
