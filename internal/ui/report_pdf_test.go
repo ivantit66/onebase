@@ -47,8 +47,8 @@ func TestBuildReportSheet_StructureAndPDF(t *testing.T) {
 	}
 }
 
-// reportPDF-маршрут отдаёт реальный бинарный PDF с корректными заголовками.
-func TestReportPDF_EndpointReturnsPDF(t *testing.T) {
+func newReportExportTestServer(t *testing.T, rep *reportpkg.Report) *Server {
+	t.Helper()
 	ctx := context.Background()
 	db, err := storage.ConnectSQLite(ctx, filepath.Join(t.TempDir(), "rpdf.db"))
 	if err != nil {
@@ -62,10 +62,15 @@ func TestReportPDF_EndpointReturnsPDF(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rep := &reportpkg.Report{Name: "Тест", Query: "ВЫБРАТЬ 1 КАК Номер, 2 КАК Сумма"}
 	registry := runtime.NewRegistry()
 	registry.Load(runtime.LoadOptions{Reports: []*reportpkg.Report{rep}})
-	s := &Server{store: db, reg: registry}
+	return &Server{store: db, reg: registry}
+}
+
+// reportPDF-маршрут отдаёт реальный бинарный PDF с корректными заголовками.
+func TestReportPDF_EndpointReturnsPDF(t *testing.T) {
+	rep := &reportpkg.Report{Name: "Тест", Query: "ВЫБРАТЬ 1 КАК Номер, 2 КАК Сумма"}
+	s := newReportExportTestServer(t, rep)
 
 	r := reqWithChi("GET", "/ui/report/Тест/pdf", url.Values{}, map[string]string{"name": "Тест"})
 	w := httptest.NewRecorder()
@@ -82,6 +87,22 @@ func TestReportPDF_EndpointReturnsPDF(t *testing.T) {
 	}
 	if cd := w.Header().Get("Content-Disposition"); !strings.Contains(cd, ".pdf") {
 		t.Errorf("Content-Disposition без .pdf: %q", cd)
+	}
+}
+
+func TestReportExcel_InvalidQueryKeepsCompileErrorStatus(t *testing.T) {
+	rep := &reportpkg.Report{Name: "Битый", Query: "ВЫБРАТЬ Ном ИЗ РегистрНакопления.Неизвестный.Остатки()"}
+	s := newReportExportTestServer(t, rep)
+
+	r := reqWithChi("GET", "/ui/report/Битый/excel", url.Values{}, map[string]string{"name": "Битый"})
+	w := httptest.NewRecorder()
+	s.reportExcel(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("ожидался 400 для ошибки компиляции запроса, получен %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "query compile error") {
+		t.Errorf("ответ должен сохранить прежний префикс ошибки Excel: %q", w.Body.String())
 	}
 }
 

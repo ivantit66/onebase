@@ -390,6 +390,28 @@ func (s *Server) loadReportRefOpts(ctx context.Context, params []reportpkg.Param
 	return opts
 }
 
+type reportExportError struct {
+	status int
+	prefix string
+	err    error
+}
+
+func (e *reportExportError) Error() string {
+	return e.err.Error()
+}
+
+func newReportExportError(status int, prefix string, err error) error {
+	return &reportExportError{status: status, prefix: prefix, err: err}
+}
+
+func (s *Server) writeReportExportError(w http.ResponseWriter, r *http.Request, err error) {
+	if ee, ok := err.(*reportExportError); ok {
+		http.Error(w, ee.prefix+": "+s.errText(r, ee.err), ee.status)
+		return
+	}
+	http.Error(w, "report export error: "+s.errText(r, err), http.StatusInternalServerError)
+}
+
 // reportExcel runs a report query with GET params and returns XLSX.
 // reportExportRows вычисляет табличные данные отчёта для выгрузки (Excel/PDF):
 // заголовки и строки с учётом эффективной компоновки (план 70), кросс-таблицы
@@ -434,11 +456,11 @@ func (s *Server) reportExportRows(r *http.Request, rep *reportpkg.Report) (heade
 		Dialect:     s.store.Dialect(),
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, newReportExportError(http.StatusBadRequest, "query compile error", err)
 	}
 	data, cols, err := s.store.RunQuery(r.Context(), compiled.SQL, compiled.Args)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, newReportExportError(http.StatusInternalServerError, "query error", err)
 	}
 	detailLinkCol := ""
 	if comp != nil {
@@ -458,14 +480,14 @@ func (s *Server) reportExportRows(r *http.Request, rep *reportpkg.Report) (heade
 		if len(comp.Columns) > 0 {
 			cr, cerr := compose.ComposeCross(data, *comp, ev)
 			if cerr != nil {
-				return nil, nil, cerr
+				return nil, nil, newReportExportError(http.StatusInternalServerError, "compose error", cerr)
 			}
 			h, xr := crossSheetRows(cr, comp)
 			return h, xr, nil
 		}
 		res, cerr := compose.Compose(data, *comp, ev)
 		if cerr != nil {
-			return nil, nil, cerr
+			return nil, nil, newReportExportError(http.StatusInternalServerError, "compose error", cerr)
 		}
 		h, xr := composedRows(res, comp)
 		return h, xr, nil
@@ -493,7 +515,7 @@ func (s *Server) reportExcel(w http.ResponseWriter, r *http.Request) {
 	}
 	headers, rows, err := s.reportExportRows(r, rep)
 	if err != nil {
-		http.Error(w, "report export error: "+s.errText(r, err), 500)
+		s.writeReportExportError(w, r, err)
 		return
 	}
 	data, err := excel.ExportList(headers, rows)

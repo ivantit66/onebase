@@ -22,7 +22,7 @@ func (s *Server) reportPDF(w http.ResponseWriter, r *http.Request) {
 	}
 	headers, rows, err := s.reportExportRows(r, rep)
 	if err != nil {
-		http.Error(w, "report export error: "+s.errText(r, err), 500)
+		s.writeReportExportError(w, r, err)
 		return
 	}
 	doc := buildReportSheet(reportDisplayTitle(rep, s.resolveLang(r)), headers, rows)
