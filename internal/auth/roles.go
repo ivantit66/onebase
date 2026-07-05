@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
@@ -33,6 +34,20 @@ type Role struct {
 	Permissions Permission `yaml:"permissions"`
 }
 
+func (p *Permission) UnmarshalYAML(value *yaml.Node) error {
+	type plain Permission
+	var canonical plain
+	if err := value.Decode(&canonical); err != nil {
+		return err
+	}
+	parsed := normalizePermission(Permission(canonical))
+	if value.Kind == yaml.MappingNode {
+		parsed = mergePermissions(parsed, permissionFromYAMLMap(value))
+	}
+	*p = parsed
+	return nil
+}
+
 // Has reports whether the user has permission for (kind, entity, op).
 // kind: "catalog"|"document"|"register"|"inforeg"|"report"|"processor"
 // op:   "read"|"write"|"delete"|"post"|"unpost"|"run"
@@ -51,7 +66,7 @@ func (u *User) Has(kind, entity, op string) bool {
 				return true
 			}
 			for _, allowed := range r.Permissions.Processors[entity] {
-				if allowed == op {
+				if permissionOpMatches(allowed, op) {
 					return true
 				}
 			}
@@ -73,12 +88,149 @@ func (u *User) Has(kind, entity, op string) bool {
 			m = r.Permissions.Reports
 		}
 		for _, allowed := range m[entity] {
-			if allowed == op {
+			if permissionOpMatches(allowed, op) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func permissionOpMatches(allowed, op string) bool {
+	for _, item := range splitPermissionOps(allowed) {
+		if strings.EqualFold(item, op) {
+			return true
+		}
+	}
+	return false
+}
+
+func splitPermissionOps(raw string) []string {
+	parts := strings.Split(raw, ",")
+	ops := make([]string, 0, len(parts))
+	for _, part := range parts {
+		op := strings.ToLower(strings.TrimSpace(part))
+		if op != "" {
+			ops = append(ops, op)
+		}
+	}
+	return ops
+}
+
+func normalizePermission(p Permission) Permission {
+	return Permission{
+		AIDataAccess: p.AIDataAccess,
+		Catalogs:     normalizePermissionMap(p.Catalogs),
+		Documents:    normalizePermissionMap(p.Documents),
+		Registers:    normalizePermissionMap(p.Registers),
+		InfoRegs:     normalizePermissionMap(p.InfoRegs),
+		Reports:      normalizePermissionMap(p.Reports),
+		Processors:   normalizePermissionMap(p.Processors),
+	}
+}
+
+func normalizePermissionMap(m map[string][]string) map[string][]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string][]string, len(m))
+	for entity, ops := range m {
+		seen := make(map[string]bool, len(ops))
+		for _, raw := range ops {
+			for _, op := range splitPermissionOps(raw) {
+				if seen[op] {
+					continue
+				}
+				out[entity] = append(out[entity], op)
+				seen[op] = true
+			}
+		}
+	}
+	return out
+}
+
+func mergePermissions(dst, src Permission) Permission {
+	if src.AIDataAccess {
+		dst.AIDataAccess = true
+	}
+	dst.Catalogs = mergePermissionMap(dst.Catalogs, src.Catalogs)
+	dst.Documents = mergePermissionMap(dst.Documents, src.Documents)
+	dst.Registers = mergePermissionMap(dst.Registers, src.Registers)
+	dst.InfoRegs = mergePermissionMap(dst.InfoRegs, src.InfoRegs)
+	dst.Reports = mergePermissionMap(dst.Reports, src.Reports)
+	dst.Processors = mergePermissionMap(dst.Processors, src.Processors)
+	return normalizePermission(dst)
+}
+
+func mergePermissionMap(dst, src map[string][]string) map[string][]string {
+	if src == nil {
+		return dst
+	}
+	if dst == nil {
+		dst = make(map[string][]string, len(src))
+	}
+	for entity, ops := range src {
+		dst[entity] = append(dst[entity], ops...)
+	}
+	return dst
+}
+
+func permissionFromYAMLMap(node *yaml.Node) Permission {
+	var p Permission
+	if node == nil || node.Kind != yaml.MappingNode {
+		return p
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := node.Content[i].Value
+		value := node.Content[i+1]
+		switch {
+		case permissionBoolKey(key):
+			if b, ok := yamlBool(value); ok {
+				p.AIDataAccess = p.AIDataAccess || b
+			}
+		case permissionWrapperKey(key):
+			p = mergePermissions(p, permissionFromYAMLMap(value))
+		default:
+			if kind := permissionKindFromKey(key); kind != "" {
+				setPermissionMap(&p, kind, decodeYAMLPermissionMap(value))
+			}
+		}
+	}
+	return normalizePermission(p)
+}
+
+func decodeYAMLPermissionMap(node *yaml.Node) map[string][]string {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	out := make(map[string][]string, len(node.Content)/2)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		entity := node.Content[i].Value
+		value := node.Content[i+1]
+		switch value.Kind {
+		case yaml.SequenceNode:
+			for _, item := range value.Content {
+				out[entity] = append(out[entity], splitPermissionOps(item.Value)...)
+			}
+		case yaml.ScalarNode:
+			out[entity] = append(out[entity], splitPermissionOps(value.Value)...)
+		}
+	}
+	return normalizePermissionMap(out)
+}
+
+func yamlBool(node *yaml.Node) (bool, bool) {
+	if node == nil || node.Kind != yaml.ScalarNode {
+		return false, false
+	}
+	switch strings.ToLower(strings.TrimSpace(node.Value)) {
+	case "true", "1", "yes", "y", "да", "истина":
+		return true, true
+	case "false", "0", "no", "n", "нет", "ложь":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 // AllowsAIDataAccess reports whether the user may receive AI chat data tools
@@ -304,6 +456,7 @@ func LoadRolesYAML(dir string) ([]*Role, error) {
 
 // marshalPermissions converts Permission to JSON string.
 func marshalPermissions(p Permission) (string, error) {
+	p = normalizePermission(p)
 	type permJSON struct {
 		AIDataAccess bool                `json:"ai_data_access,omitempty"`
 		Catalogs     map[string][]string `json:"catalogs,omitempty"`
@@ -333,25 +486,133 @@ func unmarshalPermissions(data []byte) Permission {
 	if len(data) == 0 {
 		return Permission{}
 	}
-	var raw struct {
-		AIDataAccess bool                `json:"ai_data_access"`
-		Catalogs     map[string][]string `json:"catalogs"`
-		Documents    map[string][]string `json:"documents"`
-		Registers    map[string][]string `json:"registers"`
-		InfoRegs     map[string][]string `json:"inforegs"`
-		Reports      map[string][]string `json:"reports"`
-		Processors   map[string][]string `json:"processors"`
-	}
+	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return Permission{}
 	}
-	return Permission{
-		AIDataAccess: raw.AIDataAccess,
-		Catalogs:     raw.Catalogs,
-		Documents:    raw.Documents,
-		Registers:    raw.Registers,
-		InfoRegs:     raw.InfoRegs,
-		Reports:      raw.Reports,
-		Processors:   raw.Processors,
+	return normalizePermission(permissionFromJSONMap(raw))
+}
+
+func permissionFromJSONMap(raw map[string]json.RawMessage) Permission {
+	var p Permission
+	for key, value := range raw {
+		switch {
+		case permissionBoolKey(key):
+			var b bool
+			if err := json.Unmarshal(value, &b); err == nil && b {
+				p.AIDataAccess = true
+			}
+		case permissionWrapperKey(key):
+			var nested map[string]json.RawMessage
+			if err := json.Unmarshal(value, &nested); err == nil {
+				p = mergePermissions(p, permissionFromJSONMap(nested))
+			}
+		default:
+			if kind := permissionKindFromKey(key); kind != "" {
+				if m, ok := decodeJSONPermissionMap(value); ok {
+					setPermissionMap(&p, kind, m)
+				}
+			}
+		}
 	}
+	return normalizePermission(p)
+}
+
+func decodeJSONPermissionMap(data json.RawMessage) (map[string][]string, bool) {
+	if strings.EqualFold(strings.TrimSpace(string(data)), "null") {
+		return nil, true
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, false
+	}
+	out := make(map[string][]string, len(raw))
+	for entity, value := range raw {
+		out[entity] = append(out[entity], decodeJSONPermissionOps(value)...)
+	}
+	return normalizePermissionMap(out), true
+}
+
+func decodeJSONPermissionOps(data json.RawMessage) []string {
+	var list []string
+	if err := json.Unmarshal(data, &list); err == nil {
+		var out []string
+		for _, raw := range list {
+			out = append(out, splitPermissionOps(raw)...)
+		}
+		return out
+	}
+	var single string
+	if err := json.Unmarshal(data, &single); err == nil {
+		return splitPermissionOps(single)
+	}
+	return nil
+}
+
+func setPermissionMap(p *Permission, kind string, m map[string][]string) {
+	switch kind {
+	case "catalog":
+		p.Catalogs = mergePermissionMap(p.Catalogs, m)
+	case "document":
+		p.Documents = mergePermissionMap(p.Documents, m)
+	case "register":
+		p.Registers = mergePermissionMap(p.Registers, m)
+	case "inforeg":
+		p.InfoRegs = mergePermissionMap(p.InfoRegs, m)
+	case "report":
+		p.Reports = mergePermissionMap(p.Reports, m)
+	case "processor":
+		p.Processors = mergePermissionMap(p.Processors, m)
+	}
+}
+
+func permissionBoolKey(key string) bool {
+	switch normalizePermissionKey(key) {
+	case "aidataaccess", "aiдоступкданным", "доступкданнымии":
+		return true
+	default:
+		return false
+	}
+}
+
+func permissionWrapperKey(key string) bool {
+	switch normalizePermissionKey(key) {
+	case "permissions", "permission", "policies", "policy", "политики", "права":
+		return true
+	default:
+		return false
+	}
+}
+
+func permissionKindFromKey(key string) string {
+	switch normalizePermissionKey(key) {
+	case "catalog", "catalogs", "справочник", "справочники":
+		return "catalog"
+	case "document", "documents", "документ", "документы":
+		return "document"
+	case "register", "registers", "accumulationregister", "accumulationregisters",
+		"регистр", "регистры", "регистрнакопления", "регистрынакопления", "регистрынакоплений",
+		"регистрынакопленияибухгалтерии":
+		return "register"
+	case "inforeg", "inforegs", "inforegister", "inforegisters", "informationregister", "informationregisters",
+		"регистрсведений", "регистрысведений", "регистрысведения":
+		return "inforeg"
+	case "report", "reports", "отчет", "отчеты":
+		return "report"
+	case "processor", "processors", "обработка", "обработки":
+		return "processor"
+	default:
+		return ""
+	}
+}
+
+func normalizePermissionKey(key string) string {
+	key = strings.ToLower(strings.ReplaceAll(key, "ё", "е"))
+	var b strings.Builder
+	for _, r := range key {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

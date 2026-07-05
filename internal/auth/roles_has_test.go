@@ -61,6 +61,59 @@ func TestUserHas(t *testing.T) {
 	}
 }
 
+func TestUserHas_CommaSeparatedOperations(t *testing.T) {
+	u := &User{Roles: []*Role{{
+		Permissions: Permission{
+			Documents:  map[string][]string{"ВходящееПисьмо": {"read,write", "post, unpost"}},
+			Processors: map[string][]string{"Заполнить": {"run"}},
+		},
+	}}}
+
+	for _, op := range []string{"read", "write", "post", "unpost"} {
+		if !u.Has("document", "ВходящееПисьмо", op) {
+			t.Fatalf("document permission %q from comma-separated token must pass", op)
+		}
+	}
+	if u.Has("document", "ВходящееПисьмо", "delete") {
+		t.Fatal("delete was not granted")
+	}
+	if !u.Has("processor", "Заполнить", "run") {
+		t.Fatal("processor run permission must still pass")
+	}
+}
+
+func TestUnmarshalPermissions_LegacyRussianKeys(t *testing.T) {
+	p := unmarshalPermissions([]byte(`{
+		"Политики": {
+			"Справочники": {"ПользователиСЭД": ["read"]},
+			"Документы": {"ВходящееПисьмо": ["read,write"], "ИсходящееПисьмо": "read"},
+			"Регистры": {"ДвиженияДокументов": ["read"]},
+			"РегистрыСведений": {"НастройкиПользователей": ["read, write"]},
+			"Отчёты": {"ЖурналПисем": ["run"]},
+			"Обработки": {"ЗаполнитьДемо": ["run"]}
+		}
+	}`))
+
+	u := &User{Roles: []*Role{{Permissions: p}}}
+	cases := []struct {
+		kind, entity, op string
+	}{
+		{"catalog", "ПользователиСЭД", "read"},
+		{"document", "ВходящееПисьмо", "read"},
+		{"document", "ВходящееПисьмо", "write"},
+		{"document", "ИсходящееПисьмо", "read"},
+		{"register", "ДвиженияДокументов", "read"},
+		{"inforeg", "НастройкиПользователей", "write"},
+		{"report", "ЖурналПисем", "run"},
+		{"processor", "ЗаполнитьДемо", "run"},
+	}
+	for _, c := range cases {
+		if !u.Has(c.kind, c.entity, c.op) {
+			t.Fatalf("legacy permission %s/%s/%s must pass; parsed=%+v", c.kind, c.entity, c.op, p)
+		}
+	}
+}
+
 func TestUserAllowsAIDataAccess(t *testing.T) {
 	if (&User{}).AllowsAIDataAccess() {
 		t.Fatal("user without explicit AI data access must be denied")
