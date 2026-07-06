@@ -222,6 +222,39 @@ func TestStartIsolated_BrowserNotFound(t *testing.T) {
 	}
 }
 
+// Лаунчер усыновляет базу, запущенную не им (прежний экземпляр после
+// пересборки exe): порт занят, /health отвечает — это не «порт занят», а
+// живая база.
+func TestStartIsolated_AdoptsUntrackedRunningBase(t *testing.T) {
+	fb := &fakeBrowser{}
+	h, b := newIsolatedFixture(t, fb)
+	delete(h.runner.procs, b.ID) // этим лаунчером база не запускалась
+
+	rec := startIsolatedReq(t, h, b.ID)
+	if rec.Code != 200 {
+		t.Fatalf("живую базу надо усыновлять, а не отвечать «порт занят»: %d %s", rec.Code, rec.Body.String())
+	}
+	if fb.calls != 1 {
+		t.Fatalf("окно должно открыться, вызовов браузера: %d", fb.calls)
+	}
+}
+
+func TestStart_AdoptsUntrackedRunningBase(t *testing.T) {
+	h, b := newIsolatedFixture(t, &fakeBrowser{})
+	delete(h.runner.procs, b.ID)
+
+	req := httptest.NewRequest("POST", "/bases/"+b.ID+"/start", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", b.ID)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+	h.start(rec, req)
+
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"url"`) {
+		t.Fatalf("ожидался url усыновлённой базы: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestStartIsolated_UnknownBase(t *testing.T) {
 	fb := &fakeBrowser{}
 	h, _ := newIsolatedFixture(t, fb)

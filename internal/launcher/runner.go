@@ -270,6 +270,20 @@ func (r *Runner) IsRunning(baseID string) bool {
 	return ok
 }
 
+// Healthy сообщает, отвечает ли на порту базы её /health — то есть база уже
+// работает, даже если запущена не этим экземпляром лаунчера (прежний
+// экземпляр, пересборка exe, ручной запуск). Используется для «усыновления»
+// живой базы вместо ошибки «порт занят».
+func (r *Runner) Healthy(base *Base) bool {
+	client := &http.Client{Timeout: 1500 * time.Millisecond}
+	resp, err := client.Get(fmt.Sprintf("http://localhost:%d/health", base.Port))
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
 func (r *Runner) BaseURL(base *Base) string {
 	return fmt.Sprintf("http://localhost:%d", base.Port)
 }
@@ -304,8 +318,13 @@ func (r *Runner) MigrateBase(ctx context.Context, base *Base) (string, error) {
 // Restart останавливает базу (если запущена), дожидается освобождения порта и
 // запускает её заново. Используется, чтобы запущенная сессия Предприятия
 // подхватила изменения конфигурации без ручного захода в лаунчер.
+// Базы, запущенные прежним экземпляром лаунчера, в procs не числятся —
+// добиваем процесс на порту, иначе Start упрётся в «порт занят».
 func (r *Runner) Restart(base *Base) error {
 	r.Stop(base.ID)
+	if !portFree(base.Port) {
+		killByPort(base.Port)
+	}
 	waitPortFree(base.Port, 3*time.Second)
 	return r.Start(base)
 }

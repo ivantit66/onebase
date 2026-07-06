@@ -131,7 +131,7 @@ func (h *handler) index(w http.ResponseWriter, r *http.Request) {
 	var selected *baseVM
 	vms := make([]*baseVM, 0, len(bases))
 	for _, b := range bases {
-		vm := &baseVM{Base: b, Running: h.runner.IsRunning(b.ID), BaseURL: h.runner.BaseURL(b)}
+		vm := &baseVM{Base: b, Running: h.baseRunning(b), BaseURL: h.runner.BaseURL(b)}
 		loadAppInfo(b, vm)
 		vms = append(vms, vm)
 		if b.ID == selID {
@@ -342,6 +342,16 @@ func (h *handler) move(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/?sel="+id, http.StatusFound)
 }
 
+// baseRunning: база запущена этим лаунчером ИЛИ уже отвечает на своём порту
+// (запущена прежним экземпляром лаунчера — например, после пересборки exe).
+// Живую базу «усыновляем», а не требуем убивать вручную из-за «порт занят».
+func (h *handler) baseRunning(b *Base) bool {
+	if h.runner.IsRunning(b.ID) {
+		return true
+	}
+	return !portFree(b.Port) && h.runner.Healthy(b)
+}
+
 func (h *handler) start(w http.ResponseWriter, r *http.Request) {
 	b, err := h.store.Get(chi.URLParam(r, "id"))
 	if err != nil {
@@ -350,7 +360,7 @@ func (h *handler) start(w http.ResponseWriter, r *http.Request) {
 	}
 	lang := resolveLang(r)
 
-	if !h.runner.IsRunning(b.ID) {
+	if !h.baseRunning(b) {
 		if b.DBType != "sqlite" {
 			if err := storage.EnsureDatabase(r.Context(), b.DB); err != nil {
 				writeJSON(w, 500, map[string]any{"error": tr(lang, "Не удалось создать БД") + ": " + err.Error()})
@@ -386,7 +396,7 @@ func (h *handler) startIsolated(w http.ResponseWriter, r *http.Request) {
 	}
 	lang := resolveLang(r)
 
-	if !h.runner.IsRunning(b.ID) {
+	if !h.baseRunning(b) {
 		if b.DBType != "sqlite" {
 			if err := storage.EnsureDatabase(r.Context(), b.DB); err != nil {
 				writeJSON(w, 500, map[string]any{"error": tr(lang, "Не удалось создать БД") + ": " + err.Error()})
@@ -442,6 +452,13 @@ func (h *handler) cleanProfiles(w http.ResponseWriter, r *http.Request) {
 func (h *handler) stop(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	h.runner.Stop(id)
+	// Усыновлённая база (запущена прежним экземпляром лаунчера) в procs не
+	// числится — по явному «Остановить» добиваем процесс на её порту, как
+	// это уже делает «Стоп всё».
+	if b, err := h.store.Get(id); err == nil && !portFree(b.Port) {
+		killByPort(b.Port)
+		waitPortFree(b.Port, 3*time.Second)
+	}
 	http.Redirect(w, r, "/?sel="+id, http.StatusFound)
 }
 
@@ -533,7 +550,7 @@ func (h *handler) configuratorLaunchState(w http.ResponseWriter, r *http.Request
 		}
 	}
 	writeJSON(w, 200, map[string]any{
-		"running":       h.runner.IsRunning(b.ID),
+		"running":       h.baseRunning(b),
 		"configChanged": configChanged,
 	})
 }
