@@ -115,6 +115,17 @@ func withUser(r *http.Request, u *auth.User) *http.Request {
 	return r.WithContext(auth.ContextWithUser(r.Context(), u))
 }
 
+func apiUser(login string, permissions auth.Permission) *auth.User {
+	return &auth.User{
+		ID:    "u-" + login,
+		Login: login,
+		Roles: []*auth.Role{{
+			Name:        "role-" + login,
+			Permissions: permissions,
+		}},
+	}
+}
+
 // БЫЛО (до миграции): POST /catalogs/X с OnWrite, который зовёт Сообщить(),
 // падал с 422 «неизвестная функция Сообщить». СТАЛО: success + сообщение
 // возвращается в JSON.
@@ -185,6 +196,41 @@ func TestAPI_RBAC_DeniesCreateWithoutWrite(t *testing.T) {
 	}
 }
 
+func TestAPI_RBAC_DeniesListAndGetWithoutRead(t *testing.T) {
+	cat := &metadata.Entity{
+		Name: "Товар",
+		Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{
+			{Name: "Наименование", Type: metadata.FieldTypeString},
+		},
+	}
+	h, ctx := newAPITestHandler(t, []*metadata.Entity{cat}, nil)
+	id := uuid.New()
+	if err := h.store.Upsert(ctx, "Товар", id, map[string]any{"Наименование": "Молоток"}, cat); err != nil {
+		t.Fatal(err)
+	}
+	user := apiUser("writer", auth.Permission{
+		Catalogs: map[string][]string{"Товар": {"write"}},
+	})
+
+	listReq := reqWithEntity("GET", "/catalogs/Товар", nil, map[string]string{"entity": "Товар"}, nil)
+	listReq = withUser(listReq, user)
+	listRec := httptest.NewRecorder()
+	h.listObjects(metadata.KindCatalog).ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusForbidden {
+		t.Fatalf("list: expected 403, got %d: %s", listRec.Code, listRec.Body.String())
+	}
+
+	getReq := reqWithEntity("GET", "/catalogs/Товар/"+id.String(), nil,
+		map[string]string{"entity": "Товар", "id": id.String()}, nil)
+	getReq = withUser(getReq, user)
+	getRec := httptest.NewRecorder()
+	h.getObject(metadata.KindCatalog).ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusForbidden {
+		t.Fatalf("get: expected 403, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+}
+
 func TestAPI_RBAC_UpdatePostActionRequiresPost(t *testing.T) {
 	doc := &metadata.Entity{
 		Name:    "Поступление",
@@ -214,6 +260,91 @@ func TestAPI_RBAC_UpdatePostActionRequiresPost(t *testing.T) {
 	r = withUser(r, user)
 	w := httptest.NewRecorder()
 	h.updateObject(metadata.KindDocument).ServeHTTP(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPI_RBAC_DeniesDeleteWithoutDelete(t *testing.T) {
+	cat := &metadata.Entity{
+		Name: "Товар",
+		Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{
+			{Name: "Наименование", Type: metadata.FieldTypeString},
+		},
+	}
+	h, ctx := newAPITestHandler(t, []*metadata.Entity{cat}, nil)
+	id := uuid.New()
+	if err := h.store.Upsert(ctx, "Товар", id, map[string]any{"Наименование": "Молоток"}, cat); err != nil {
+		t.Fatal(err)
+	}
+	user := apiUser("writer", auth.Permission{
+		Catalogs: map[string][]string{"Товар": {"read", "write"}},
+	})
+
+	r := reqWithEntity("DELETE", "/catalogs/Товар/"+id.String(), nil,
+		map[string]string{"entity": "Товар", "id": id.String()}, nil)
+	r = withUser(r, user)
+	w := httptest.NewRecorder()
+	h.deleteObject(metadata.KindCatalog).ServeHTTP(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+	if _, err := h.store.GetByID(ctx, "Товар", id, cat); err != nil {
+		t.Fatalf("object was deleted despite missing delete permission: %v", err)
+	}
+}
+
+func TestAPI_RBAC_PostDocumentRequiresPost(t *testing.T) {
+	doc := &metadata.Entity{
+		Name:    "Поступление",
+		Kind:    metadata.KindDocument,
+		Posting: true,
+		Fields:  []metadata.Field{{Name: "Номер", Type: metadata.FieldTypeString}},
+	}
+	h, ctx := newAPITestHandler(t, []*metadata.Entity{doc}, nil)
+	id := uuid.New()
+	if err := h.store.Upsert(ctx, "Поступление", id, map[string]any{"Номер": "1"}, doc); err != nil {
+		t.Fatal(err)
+	}
+	user := apiUser("writer", auth.Permission{
+		Documents: map[string][]string{"Поступление": {"read", "write"}},
+	})
+
+	r := reqWithEntity("POST", "/documents/Поступление/"+id.String()+"/post", nil,
+		map[string]string{"entity": "Поступление", "id": id.String()}, nil)
+	r = withUser(r, user)
+	w := httptest.NewRecorder()
+	h.postDocument().ServeHTTP(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPI_RBAC_PostDocumentWithBodyRequiresWrite(t *testing.T) {
+	doc := &metadata.Entity{
+		Name:    "Поступление",
+		Kind:    metadata.KindDocument,
+		Posting: true,
+		Fields:  []metadata.Field{{Name: "Номер", Type: metadata.FieldTypeString}},
+	}
+	h, ctx := newAPITestHandler(t, []*metadata.Entity{doc}, nil)
+	id := uuid.New()
+	if err := h.store.Upsert(ctx, "Поступление", id, map[string]any{"Номер": "1"}, doc); err != nil {
+		t.Fatal(err)
+	}
+	user := apiUser("poster", auth.Permission{
+		Documents: map[string][]string{"Поступление": {"read", "post"}},
+	})
+
+	r := reqWithEntity("POST", "/documents/Поступление/"+id.String()+"/post", []byte(`{"Номер":"2"}`),
+		map[string]string{"entity": "Поступление", "id": id.String()}, nil)
+	r = withUser(r, user)
+	w := httptest.NewRecorder()
+	h.postDocument().ServeHTTP(w, r)
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
