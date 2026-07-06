@@ -441,6 +441,9 @@ func (db *DB) Migrate(ctx context.Context, entities []*metadata.Entity) error {
 				return fmt.Errorf("migrate %s hierarchy: %w", e.Name, err)
 			}
 		}
+		if err := db.ensureEntityIndexes(ctx, e); err != nil {
+			return fmt.Errorf("migrate %s indexes: %w", e.Name, err)
+		}
 		for _, tp := range e.TableParts {
 			if _, err := db.Exec(ctx, CreateTablePartSQL(d, e, tp)); err != nil {
 				return fmt.Errorf("migrate %s.%s: %w", e.Name, tp.Name, err)
@@ -451,12 +454,47 @@ func (db *DB) Migrate(ctx context.Context, entities []*metadata.Entity) error {
 					return fmt.Errorf("migrate %s.%s.%s: %w", e.Name, tp.Name, f.Name, err)
 				}
 			}
+			if _, err := db.Exec(ctx, CreateTablePartParentIndexSQL(e.Name, tp.Name)); err != nil {
+				return fmt.Errorf("migrate %s.%s parent index: %w", e.Name, tp.Name, err)
+			}
 		}
 	}
 	if err := db.SyncAllPredefined(ctx, entities); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	return nil
+}
+
+func (db *DB) ensureEntityIndexes(ctx context.Context, e *metadata.Entity) error {
+	table := metadata.TableName(e.Name)
+	for _, idx := range e.Indexes {
+		cols, err := entityIndexColumns(e, idx)
+		if err != nil {
+			return err
+		}
+		if _, err := db.Exec(ctx, CreateEntityIndexSQL(table, cols, idx.Unique)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func entityIndexColumns(e *metadata.Entity, idx metadata.IndexSpec) ([]string, error) {
+	cols := make([]string, 0, len(idx.Fields))
+	for _, name := range idx.Fields {
+		var found *metadata.Field
+		for i := range e.Fields {
+			if e.Fields[i].Name == name {
+				found = &e.Fields[i]
+				break
+			}
+		}
+		if found == nil {
+			return nil, fmt.Errorf("index references unknown field %s", name)
+		}
+		cols = append(cols, metadata.ColumnName(*found))
+	}
+	return cols, nil
 }
 
 // orderByDependency sorts entities so referenced entities come before referencing ones.

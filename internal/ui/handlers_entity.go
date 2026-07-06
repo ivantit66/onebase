@@ -20,6 +20,7 @@ import (
 	"github.com/ivantit66/onebase/internal/auth"
 	"github.com/ivantit66/onebase/internal/entityservice"
 	"github.com/ivantit66/onebase/internal/metadata"
+	"github.com/ivantit66/onebase/internal/richtext"
 	"github.com/ivantit66/onebase/internal/runtime"
 	"github.com/ivantit66/onebase/internal/storage"
 	"github.com/ivantit66/onebase/internal/webhook"
@@ -79,16 +80,21 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	s.resolveRefs(r.Context(), entity, rows)
 	markActivityRows(entity, rows)
 
-	// For tree view: fetch ALL items and build hierarchical order with depth info
+	// Tree view is lazy: render only root rows first, children are loaded by
+	// /ui/_tree-children/{entity} when the user expands a folder.
 	var treeRows []map[string]any
 	if treeView {
-		allRows, _ := s.store.List(r.Context(), entity.Name, entity, storage.ListParams{ActivityScope: metadata.ActivityScopeAll})
+		allRows, _ := s.store.List(r.Context(), entity.Name, entity, storage.ListParams{
+			ActivityScope: metadata.ActivityScopeAll,
+			ParentStr:     "root",
+			Limit:         storage.MaxListPageSize,
+		})
 		s.resolveRefs(r.Context(), entity, allRows)
 		markActivityRows(entity, allRows)
 		treeRows = buildCatalogTree(allRows)
 	}
 
-	refFilterOptions, _ := s.loadRefFilterOptions(r.Context(), entity)
+	refFilterOptions, _ := s.loadInitialRefFilterOptions(r.Context(), entity, params)
 
 	user := auth.UserFromContext(r.Context())
 	isAdmin := user == nil || user.IsAdmin
@@ -254,8 +260,6 @@ func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 	if !s.requirePerm(w, r, string(entity.Kind), entity.Name, "write") {
 		return
 	}
-	refOptions, _ := s.loadRefOptions(r.Context(), entity)
-	tpRefOpts, _ := s.loadTPRefOptions(r.Context(), entity)
 	lang := s.resolveLang(r)
 	enumOpts := s.loadEnumOptions(entity, lang)
 	tpEnumLabels := s.buildTPEnumLabels(entity, lang)
@@ -292,6 +296,8 @@ func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 			values["is_folder"] = "false"
 		}
 	}
+	refOptions, _ := s.loadInitialRefOptions(r.Context(), entity, values)
+	tpRefOpts, _ := s.loadInitialTPRefOptions(r.Context(), entity, tablePartRows)
 	s.renderEntityForm(w, r, "object", map[string]any{
 		"Entity":        entity,
 		"IsNew":         true,
@@ -469,22 +475,24 @@ func (s *Server) parseSubmitForm(w http.ResponseWriter, r *http.Request, entity 
 // серверный хук формы (ПередЗаписью/ПриЗаписи) отклонил запись через
 // ВызватьИсключение. Контекст совпадает с веткой DSLError в submit/submitEdit.
 func (s *Server) renderObjectFormError(w http.ResponseWriter, r *http.Request, entity *metadata.Entity, isNew bool, errMsg string, msgs []string, tpRows map[string][]map[string]any) {
-	refOptions, _ := s.loadRefOptions(r.Context(), entity)
-	tpRefOpts, _ := s.loadTPRefOptions(r.Context(), entity)
+	values := formValues(r, entity)
+	tablePartRows := serializeTablePartRowsForEntity(tpRows, entity)
+	refOptions, _ := s.loadInitialRefOptions(r.Context(), entity, values)
+	tpRefOpts, _ := s.loadInitialTPRefOptions(r.Context(), entity, tablePartRows)
 	lang := s.resolveLang(r)
 	data := map[string]any{
 		"Entity":        entity,
 		"IsNew":         isNew,
 		"Error":         errMsg,
 		"Messages":      msgs,
-		"Values":        formValues(r, entity),
+		"Values":        values,
 		"RefOptions":    refOptions,
 		"EnumOptions":   s.loadEnumOptions(entity, lang),
 		"TPRefOptions":  tpRefOpts,
 		"TPEnumLabels":  s.buildTPEnumLabels(entity, lang),
 		"TPEnumOrder":   s.buildTPEnumOrder(entity),
 		"TPRefMeta":     tpRefMeta(entity),
-		"TablePartRows": serializeTablePartRowsForEntity(tpRows, entity),
+		"TablePartRows": tablePartRows,
 	}
 	if isNew {
 		if entity.Hierarchical {
@@ -526,8 +534,10 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if result.DSLError != "" {
-		refOptions, _ := s.loadRefOptions(r.Context(), entity)
-		tpRefOpts, _ := s.loadTPRefOptions(r.Context(), entity)
+		values := formValues(r, entity)
+		tablePartRows := serializeTablePartRowsForEntity(tpRows, entity)
+		refOptions, _ := s.loadInitialRefOptions(r.Context(), entity, values)
+		tpRefOpts, _ := s.loadInitialTPRefOptions(r.Context(), entity, tablePartRows)
 		langErr := s.resolveLang(r)
 		var fOpts []map[string]any
 		if entity.Hierarchical {
@@ -538,7 +548,7 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 			"IsNew":        true,
 			"Error":        result.DSLError,
 			"Messages":     result.DSLMessages,
-			"Values":       formValues(r, entity),
+			"Values":       values,
 			"RefOptions":   refOptions,
 			"EnumOptions":  s.loadEnumOptions(entity, langErr),
 			"TPRefOptions": tpRefOpts,
@@ -549,7 +559,7 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 			// (EnrichTPRows мутирует слайсы on place). jsJSON сериализовал бы
 			// Ref как объект {UUID,Name,…} → грид показал бы «[object Object]».
 			// Нормализуем обратно к UUID-строкам, как в обработчике form-event.
-			"TablePartRows": serializeTablePartRowsForEntity(tpRows, entity),
+			"TablePartRows": tablePartRows,
 			"FolderOptions": fOpts,
 			"IsPopup":       r.FormValue("_popup") == "1",
 		})
@@ -606,6 +616,216 @@ func (s *Server) refOpenRedirect(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := strings.ToLower(string(ent.Kind))
 	http.Redirect(w, r, "/ui/"+kind+"/"+ent.Name+"/"+id, http.StatusFound)
+}
+
+func (s *Server) refOptionsJSON(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "entity")
+	ent := s.reg.GetEntity(name)
+	if ent == nil {
+		if decoded, err := url.PathUnescape(name); err == nil {
+			ent = s.reg.GetEntityBySlug(decoded)
+		}
+	}
+	if ent == nil {
+		http.Error(w, s.tr(s.resolveLang(r), "Сущность не найдена")+": "+name, http.StatusNotFound)
+		return
+	}
+	if !s.can(r, string(ent.Kind), ent.Name, "read") {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	limit := refPickerDefaultLimit
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = n
+	}
+	if limit > refPickerMaxLimit {
+		limit = refPickerMaxLimit
+	}
+	offset := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			http.Error(w, "invalid offset", http.StatusBadRequest)
+			return
+		}
+		offset = n
+	}
+	items, total, err := s.referenceOptionsPage(r.Context(), ent, r.URL.Query().Get("q"), limit, offset)
+	if err != nil {
+		http.Error(w, s.errText(r, err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"items":  items,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
+}
+
+type treeChildrenResponse struct {
+	Rows  []treeChildRow `json:"rows"`
+	Limit int            `json:"limit"`
+}
+
+type treeChildRow struct {
+	ID               string   `json:"id"`
+	ParentID         string   `json:"parent_id"`
+	Depth            int      `json:"depth"`
+	IsFolder         bool     `json:"is_folder"`
+	Predefined       bool     `json:"predefined"`
+	Posted           bool     `json:"posted"`
+	Marked           bool     `json:"marked"`
+	ActivityEnabled  bool     `json:"activity_enabled"`
+	ActivityInactive bool     `json:"activity_inactive"`
+	TreeCell         int      `json:"tree_cell"`
+	Cells            []string `json:"cells"`
+	OpenURL          string   `json:"open_url"`
+	FolderURL        string   `json:"folder_url"`
+	MarkURL          string   `json:"mark_url"`
+	DeleteURL        string   `json:"delete_url"`
+	UnpostURL        string   `json:"unpost_url"`
+	UnmarkURL        string   `json:"unmark_url"`
+	ActivityHideURL  string   `json:"activity_hide_url"`
+	ActivityShowURL  string   `json:"activity_show_url"`
+}
+
+func (s *Server) treeChildrenJSON(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "entity")
+	ent := s.reg.GetEntity(name)
+	if ent == nil {
+		if decoded, err := url.PathUnescape(name); err == nil {
+			ent = s.reg.GetEntityBySlug(decoded)
+		}
+	}
+	if ent == nil {
+		http.Error(w, s.tr(s.resolveLang(r), "Сущность не найдена")+": "+name, http.StatusNotFound)
+		return
+	}
+	if !ent.Hierarchical {
+		http.Error(w, "entity is not hierarchical", http.StatusBadRequest)
+		return
+	}
+	if !s.can(r, string(ent.Kind), ent.Name, "read") {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	parent := strings.TrimSpace(r.URL.Query().Get("parent"))
+	parentStr := parent
+	if parentStr == "" {
+		parentStr = "root"
+	} else if _, err := uuid.Parse(parentStr); err != nil {
+		http.Error(w, "invalid parent", http.StatusBadRequest)
+		return
+	}
+	parentDepth := -1
+	if raw := strings.TrimSpace(r.URL.Query().Get("depth")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			http.Error(w, "invalid depth", http.StatusBadRequest)
+			return
+		}
+		parentDepth = n
+	}
+	const limit = storage.MaxListPageSize
+	rows, err := s.store.List(r.Context(), ent.Name, ent, storage.ListParams{
+		ActivityScope: metadata.ActivityScopeAll,
+		ParentStr:     parentStr,
+		Limit:         limit,
+	})
+	if err != nil {
+		http.Error(w, s.errText(r, err), http.StatusInternalServerError)
+		return
+	}
+	s.resolveRefs(r.Context(), ent, rows)
+	markActivityRows(ent, rows)
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(treeChildrenResponse{
+		Rows:  s.treeChildRows(r, ent, rows, parentDepth+1),
+		Limit: limit,
+	})
+}
+
+func (s *Server) treeChildRows(r *http.Request, entity *metadata.Entity, rows []map[string]any, depth int) []treeChildRow {
+	cols := resolveListColumns(entity)
+	treeCell := 0
+	for i := range cols {
+		if isTreeListColumn(cols, i) {
+			treeCell = i
+			break
+		}
+	}
+	enumLabels := s.buildEnumLabels(entity, s.resolveLang(r))
+	base := "/ui/" + strings.ToLower(string(entity.Kind)) + "/" + strings.ToLower(entity.Name)
+	subsystem := strings.TrimSpace(r.URL.Query().Get("subsystem"))
+	subQS := ""
+	if subsystem != "" {
+		subQS = "subsystem=" + url.QueryEscape(subsystem)
+	}
+	out := make([]treeChildRow, 0, len(rows))
+	for _, row := range rows {
+		id := refValueString(row["id"])
+		folderURL := base + "?parent=" + url.QueryEscape(id)
+		openURL := base + "/" + url.PathEscape(id)
+		if subQS != "" {
+			folderURL += "&" + subQS
+			openURL += "?" + subQS
+		}
+		cells := make([]string, len(cols))
+		for i, col := range cols {
+			cells[i] = treeCellText(row[col.Name], col, enumLabels)
+		}
+		out = append(out, treeChildRow{
+			ID:               id,
+			ParentID:         refValueString(row["parent_id"]),
+			Depth:            depth,
+			IsFolder:         asBool(row["is_folder"]),
+			Predefined:       asBool(row["_is_predefined"]),
+			Posted:           asBool(row["posted"]),
+			Marked:           asBool(row["deletion_mark"]),
+			ActivityEnabled:  entity.Activity != nil,
+			ActivityInactive: asBool(row["_activity_inactive"]),
+			TreeCell:         treeCell,
+			Cells:            cells,
+			OpenURL:          openURL,
+			FolderURL:        folderURL,
+			MarkURL:          base + "/" + url.PathEscape(id) + "/delete?mark=1",
+			DeleteURL:        base + "/" + url.PathEscape(id) + "/delete",
+			UnpostURL:        base + "/" + url.PathEscape(id) + "/unpost",
+			UnmarkURL:        base + "/" + url.PathEscape(id) + "/delete?mark=0",
+			ActivityHideURL:  base + "/" + url.PathEscape(id) + "/activity?active=0",
+			ActivityShowURL:  base + "/" + url.PathEscape(id) + "/activity?active=1",
+		})
+	}
+	return out
+}
+
+func treeCellText(v any, f metadata.Field, enumLabels map[string]map[string]string) string {
+	if f.EnumName != "" {
+		val := fmt.Sprintf("%v", v)
+		if labels := enumLabels[f.Name]; labels != nil {
+			if label := labels[val]; label != "" {
+				return label
+			}
+		}
+		return val
+	}
+	if metadata.IsRichText(f.Type) {
+		text := richtext.Plaintext(fmt.Sprintf("%v", v))
+		runes := []rune(text)
+		if len(runes) > 100 {
+			return string(runes[:100]) + "…"
+		}
+		return text
+	}
+	return fmtReportCell(v)
 }
 
 // renderPopupSaved отдаёт минимальную HTML-страницу, которая через
@@ -704,8 +924,6 @@ func (s *Server) formEdit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	refOptions, _ := s.loadRefOptions(r.Context(), entity)
-	tpRefOpts, _ := s.loadTPRefOptions(r.Context(), entity)
 	langEdit := s.resolveLang(r)
 	enumOpts := s.loadEnumOptions(entity, langEdit)
 	tpEnumLabelsEdit := s.buildTPEnumLabels(entity, langEdit)
@@ -804,6 +1022,9 @@ func (s *Server) formEdit(w http.ResponseWriter, r *http.Request) {
 			vals["parent_id"] = fmt.Sprintf("%v", v)
 		}
 	}
+
+	refOptions, _ := s.loadInitialRefOptions(r.Context(), entity, vals)
+	tpRefOpts, _ := s.loadInitialTPRefOptions(r.Context(), entity, tpRows)
 
 	editUser := auth.UserFromContext(r.Context())
 	editIsAdmin := editUser == nil || editUser.IsAdmin
@@ -920,14 +1141,16 @@ func (s *Server) submitEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if result.DSLError != "" {
-		refOptions, _ := s.loadRefOptions(r.Context(), entity)
-		tpRefOpts2, _ := s.loadTPRefOptions(r.Context(), entity)
+		values := formValues(r, entity)
+		tablePartRows := serializeTablePartRowsForEntity(tpRows, entity)
+		refOptions, _ := s.loadInitialRefOptions(r.Context(), entity, values)
+		tpRefOpts2, _ := s.loadInitialTPRefOptions(r.Context(), entity, tablePartRows)
 		langSubmit := s.resolveLang(r)
 		s.renderEntityForm(w, r, "object", map[string]any{
 			"Entity":       entity,
 			"IsNew":        false,
 			"Error":        result.DSLError,
-			"Values":       formValues(r, entity),
+			"Values":       values,
 			"RefOptions":   refOptions,
 			"EnumOptions":  s.loadEnumOptions(entity, langSubmit),
 			"TPRefOptions": tpRefOpts2,
@@ -936,7 +1159,7 @@ func (s *Server) submitEdit(w http.ResponseWriter, r *http.Request) {
 			"TPRefMeta":    tpRefMeta(entity),
 			// См. submit: проведение могло обогатить tpRows до *Ref —
 			// сериализуем к UUID-строкам, иначе грид покажет «[object Object]».
-			"TablePartRows": serializeTablePartRowsForEntity(tpRows, entity),
+			"TablePartRows": tablePartRows,
 		})
 		return
 	}

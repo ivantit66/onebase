@@ -69,6 +69,7 @@ func (s *Server) journalList(w http.ResponseWriter, r *http.Request) {
 
 	// Load filter options for reference filters
 	filterOpts := make(map[string][]map[string]any)
+	filterRefEntities := make(map[string]string)
 	for _, jf := range j.Filters {
 		if !strings.HasPrefix(jf.Type, "reference:") {
 			continue
@@ -78,14 +79,12 @@ func (s *Server) journalList(w http.ResponseWriter, r *http.Request) {
 		if refEntity == nil {
 			continue
 		}
-		refRows, err := s.store.List(r.Context(), refEntity.Name, refEntity, storage.ListParams{})
+		refRows, err := s.initialReferenceOptions(r.Context(), refEntity, refOptionsFilter, []string{params.Filters[jf.Field].Value})
 		if err != nil {
 			continue
 		}
-		for _, row := range refRows {
-			row["_label"] = firstStringField(row, refEntity)
-		}
 		filterOpts[jf.Field] = refRows
+		filterRefEntities[jf.Field] = refName
 	}
 
 	// Compute column formats from entity metadata
@@ -109,6 +108,7 @@ func (s *Server) journalList(w http.ResponseWriter, r *http.Request) {
 		"Total":                  total,
 		"Params":                 params,
 		"FilterOptions":          filterOpts,
+		"FilterRefEntities":      filterRefEntities,
 		"ColFormats":             colFormats,
 		"Offset":                 offset,
 		"Limit":                  pageSize,

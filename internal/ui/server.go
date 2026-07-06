@@ -192,6 +192,10 @@ func (s *Server) Mount(r chi.Router) {
 	// Открытие карточки элемента справочника из picker'а (иконка-лупа):
 	// JS знает только имя сущности и id, kind резолвим на сервере.
 	r.Get("/ui/_ref-open/{entity}/{id}", s.refOpenRedirect)
+	// JSON-поиск ссылочных значений для server-side picker'а.
+	r.Get("/ui/_ref-options/{entity}", s.refOptionsJSON)
+	// Lazy-load детей узла иерархического справочника для tree-view.
+	r.Get("/ui/_tree-children/{entity}", s.treeChildrenJSON)
 	r.Get("/ui/{kind}/{entity}/{id}", s.formEdit)
 	r.Post("/ui/{kind}/{entity}/{id}", s.submitEdit)
 	// Рантайм событий управляемых форм (план 37, этап 8): обработчики

@@ -26,6 +26,9 @@ func Validate(entities []*Entity, enums []*Enum) error {
 		if err := validateActivity(e); err != nil {
 			return err
 		}
+		if err := validateIndexes(e); err != nil {
+			return err
+		}
 		for _, tp := range e.TableParts {
 			for _, f := range tp.Fields {
 				if IsRichText(f.Type) {
@@ -39,6 +42,20 @@ func Validate(entities []*Entity, enums []*Enum) error {
 		for _, src := range e.BasedOn {
 			if !entityNames[src] {
 				return fmt.Errorf("entity %s: based_on references unknown entity %s", e.Name, src)
+			}
+		}
+	}
+	return nil
+}
+
+func validateIndexes(e *Entity) error {
+	for i, idx := range e.Indexes {
+		if len(idx.Fields) == 0 {
+			return fmt.Errorf("entity %s: indexes[%d].fields is required", e.Name, i)
+		}
+		for _, name := range idx.Fields {
+			if findEntityField(e, name) == nil {
+				return fmt.Errorf("entity %s: index references unknown field %s", e.Name, name)
 			}
 		}
 	}

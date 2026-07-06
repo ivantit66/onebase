@@ -191,11 +191,16 @@ func tablePartYAMLSchema() *yamlLintSchema {
 	})
 }
 
+func indexYAMLSchema() *yamlLintSchema {
+	return obj("fields", "unique")
+}
+
 func entityYAMLSchema() *yamlLintSchema {
 	return with(obj("name", "title", "posting", "hierarchical", "hierarchy_kind", "list_form", "item_form", "based_on", "list_mode"), map[string]*yamlLintSchema{
 		"titles":     freeMap(),
 		"fields":     seq(fieldYAMLSchema()),
 		"tableparts": seq(tablePartYAMLSchema()),
+		"indexes":    seq(indexYAMLSchema()),
 		"numerator":  obj("prefix", "length", "period", "scope"),
 		"predefined": seq(with(obj("name"), map[string]*yamlLintSchema{"fields": freeMap()})),
 		"tile_view":  obj("image", "title", "subtitle", "fields"),

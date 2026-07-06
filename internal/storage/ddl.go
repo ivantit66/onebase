@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"crypto/sha1"
+	"fmt"
 	"strings"
 
 	"github.com/ivantit66/onebase/internal/metadata"
@@ -62,6 +64,29 @@ func CreateTablePartSQL(d Dialect, e *metadata.Entity, tp metadata.TablePart) st
 	}
 	sb.WriteString("\n)")
 	return sb.String()
+}
+
+func CreateEntityIndexSQL(table string, cols []string, unique bool) string {
+	prefix := "CREATE INDEX IF NOT EXISTS "
+	if unique {
+		prefix = "CREATE UNIQUE INDEX IF NOT EXISTS "
+	}
+	name := stableIndexName(table, cols, unique)
+	return prefix + name + " ON " + table + " (" + strings.Join(cols, ", ") + ")"
+}
+
+func CreateTablePartParentIndexSQL(entityName, tpName string) string {
+	table := metadata.TablePartTableName(entityName, tpName)
+	return CreateEntityIndexSQL(table, []string{"parent_id", "строка"}, false)
+}
+
+func stableIndexName(table string, cols []string, unique bool) string {
+	kind := "n"
+	if unique {
+		kind = "u"
+	}
+	sum := sha1.Sum([]byte(kind + "|" + table + "|" + strings.Join(cols, "|")))
+	return "idx_ob_" + fmt.Sprintf("%x", sum[:6])
 }
 
 func CreateTableSQL(d Dialect, e *metadata.Entity) string {

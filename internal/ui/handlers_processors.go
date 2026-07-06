@@ -42,7 +42,7 @@ func (s *Server) processorForm(w http.ResponseWriter, r *http.Request) {
 				paramValues[p.Name] = fmt.Sprintf("%v", paramDefaultValue(p.Default, p.Type))
 			}
 		}
-		refOpts, _ := s.loadRefOptions(r.Context(), virtEntity)
+		refOpts, _ := s.loadInitialRefOptions(r.Context(), virtEntity, paramValues)
 		enumOpts := s.loadEnumOptions(virtEntity, s.resolveLang(r))
 		for k, v := range processorEnumOptions(proc) {
 			enumOpts[k] = v
@@ -74,16 +74,17 @@ func (s *Server) processorForm(w http.ResponseWriter, r *http.Request) {
 			paramValues[p.Name] = paramDefaultValue(p.Default, p.Type)
 		}
 	}
-	refOpts := s.loadProcessorRefOpts(r.Context(), proc.Params)
+	refOpts := s.loadProcessorRefOpts(r.Context(), proc.Params, paramValues)
 	s.render(w, r, "page-processor", map[string]any{
-		"Processor":   proc,
-		"ParamValues": paramValues,
-		"RefOptions":  refOpts,
+		"Processor":          proc,
+		"ParamValues":        paramValues,
+		"RefOptions":         refOpts,
+		"ProcessorRefEntity": processorRefEntities(proc.Params),
 	})
 }
 
 // loadProcessorRefOpts returns select options for reference-typed processor params.
-func (s *Server) loadProcessorRefOpts(ctx context.Context, params []processorpkg.Param) map[string][]map[string]any {
+func (s *Server) loadProcessorRefOpts(ctx context.Context, params []processorpkg.Param, values map[string]any) map[string][]map[string]any {
 	opts := make(map[string][]map[string]any)
 	for _, p := range params {
 		if !strings.HasPrefix(p.Type, "reference:") {
@@ -94,13 +95,23 @@ func (s *Server) loadProcessorRefOpts(ctx context.Context, params []processorpkg
 		if entity == nil {
 			continue
 		}
-		rows, err := s.referenceOptions(ctx, entity, refOptionsChoice)
+		rows, err := s.initialReferenceOptions(ctx, entity, refOptionsChoice, []string{refValueString(values[p.Name])})
 		if err != nil {
 			continue
 		}
 		opts[p.Name] = rows
 	}
 	return opts
+}
+
+func processorRefEntities(params []processorpkg.Param) map[string]string {
+	out := make(map[string]string)
+	for _, p := range params {
+		if strings.HasPrefix(p.Type, "reference:") {
+			out[p.Name] = strings.TrimPrefix(p.Type, "reference:")
+		}
+	}
+	return out
 }
 
 // paramDefaultValue приводит значение default из YAML обработки к виду,
@@ -164,12 +175,13 @@ func (s *Server) processorRun(w http.ResponseWriter, r *http.Request) {
 		if proc.ManagedForm() != nil {
 			s.renderProcessorManagedResult(w, r, proc, paramValues, nil, runErr)
 		} else {
-			refOpts := s.loadProcessorRefOpts(r.Context(), proc.Params)
+			refOpts := s.loadProcessorRefOpts(r.Context(), proc.Params, paramValues)
 			s.render(w, r, "page-processor", map[string]any{
-				"Processor":   proc,
-				"ParamValues": paramValues,
-				"RefOptions":  refOpts,
-				"RunError":    runErr,
+				"Processor":          proc,
+				"ParamValues":        paramValues,
+				"RefOptions":         refOpts,
+				"ProcessorRefEntity": processorRefEntities(proc.Params),
+				"RunError":           runErr,
 			})
 		}
 		return
@@ -203,14 +215,15 @@ func (s *Server) processorRun(w http.ResponseWriter, r *http.Request) {
 	if proc.ManagedForm() != nil {
 		s.renderProcessorManagedResult(w, r, proc, paramValues, messages, runErr)
 	} else {
-		refOpts := s.loadProcessorRefOpts(r.Context(), proc.Params)
+		refOpts := s.loadProcessorRefOpts(r.Context(), proc.Params, paramValues)
 		s.render(w, r, "page-processor", map[string]any{
-			"Processor":   proc,
-			"ParamValues": paramValues,
-			"RefOptions":  refOpts,
-			"Messages":    messages,
-			"RunError":    runErr,
-			"Ran":         true,
+			"Processor":          proc,
+			"ParamValues":        paramValues,
+			"RefOptions":         refOpts,
+			"ProcessorRefEntity": processorRefEntities(proc.Params),
+			"Messages":           messages,
+			"RunError":           runErr,
+			"Ran":                true,
 		})
 	}
 }
@@ -218,14 +231,14 @@ func (s *Server) processorRun(w http.ResponseWriter, r *http.Request) {
 // renderProcessorManagedResult renders processor results via managed form template.
 func (s *Server) renderProcessorManagedResult(w http.ResponseWriter, r *http.Request, proc *processorpkg.Processor, paramValues map[string]any, messages []string, runErr string) {
 	virtEntity := processorVirtualEntity(proc)
-	refOpts, _ := s.loadRefOptions(r.Context(), virtEntity)
-	enumOpts := s.loadEnumOptions(virtEntity, s.resolveLang(r))
-	for k, v := range processorEnumOptions(proc) {
-		enumOpts[k] = v
-	}
 	strValues := make(map[string]string, len(paramValues))
 	for k, v := range paramValues {
 		strValues[k] = fmt.Sprintf("%v", v)
+	}
+	refOpts, _ := s.loadInitialRefOptions(r.Context(), virtEntity, strValues)
+	enumOpts := s.loadEnumOptions(virtEntity, s.resolveLang(r))
+	for k, v := range processorEnumOptions(proc) {
+		enumOpts[k] = v
 	}
 	data := map[string]any{
 		"Entity":        virtEntity,

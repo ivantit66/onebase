@@ -25,7 +25,7 @@ func TestRefPickerDoesNotInjectOptionLabelAsHTML(t *testing.T) {
 	}
 	for _, want := range []string{
 		`item.textContent = opts[i].label`,
-		`item.textContent=opts[j].label`,
+		`opt.textContent = label`,
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("ref picker should write option label through textContent: missing %q", want)

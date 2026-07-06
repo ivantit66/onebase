@@ -59,7 +59,7 @@ func (s *Server) reportForm(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "page-report", map[string]any{
 		"Report":         rep,
 		"ParamValues":    map[string]any{},
-		"ReportParams":   s.buildReportParams(r.Context(), s.resolveLang(r), rep.Params),
+		"ReportParams":   s.buildReportParams(r.Context(), s.resolveLang(r), rep.Params, map[string]any{}),
 		"ActiveVariant":  r.FormValue("__variant"),
 		"ReportPresets":  presets,
 		"ActivePresetID": activePresetID,
@@ -151,7 +151,7 @@ func (s *Server) runReport(w http.ResponseWriter, r *http.Request, rep *reportpk
 		AccountRegs: s.reg.AccountRegisters(),
 		Dialect:     s.store.Dialect(),
 	})
-	reportParams := s.buildReportParams(r.Context(), s.resolveLang(r), rep.Params)
+	reportParams := s.buildReportParams(r.Context(), s.resolveLang(r), rep.Params, paramValues)
 	if err != nil {
 		s.render(w, r, "page-report", map[string]any{
 			"Report":             rep,
@@ -391,8 +391,8 @@ type reportParamUI struct {
 	RefEntity string
 }
 
-// buildReportParams builds UI-ready param descriptors, loading reference options inline.
-func (s *Server) buildReportParams(ctx context.Context, lang string, params []reportpkg.Param) []reportParamUI {
+// buildReportParams builds UI-ready param descriptors with bounded reference options.
+func (s *Server) buildReportParams(ctx context.Context, lang string, params []reportpkg.Param, values map[string]any) []reportParamUI {
 	out := make([]reportParamUI, 0, len(params))
 	for _, p := range params {
 		ui := reportParamUI{
@@ -415,11 +415,7 @@ func (s *Server) buildReportParams(ctx context.Context, lang string, params []re
 			entityName := strings.TrimPrefix(p.Type, "reference:")
 			ui.RefEntity = entityName
 			if entity := s.reg.GetEntity(entityName); entity != nil {
-				rows, _ := s.store.List(ctx, entity.Name, entity, storage.ListParams{})
-				rows = filterOutFolders(rows)
-				for _, row := range rows {
-					row["_label"] = firstStringField(row, entity)
-				}
+				rows, _ := s.initialReferenceOptions(ctx, entity, refOptionsChoice, []string{refValueString(values[p.Name])})
 				ui.Opts = rows
 			}
 		}
@@ -428,7 +424,7 @@ func (s *Server) buildReportParams(ctx context.Context, lang string, params []re
 	return out
 }
 
-// loadReportRefOpts returns select options for report params with type "reference:EntityName".
+// loadReportRefOpts returns bounded select options for report params with type "reference:EntityName".
 func (s *Server) loadReportRefOpts(ctx context.Context, params []reportpkg.Param) map[string][]map[string]any {
 	opts := make(map[string][]map[string]any)
 	for _, p := range params {
@@ -440,13 +436,9 @@ func (s *Server) loadReportRefOpts(ctx context.Context, params []reportpkg.Param
 		if entity == nil {
 			continue
 		}
-		rows, err := s.store.List(ctx, entity.Name, entity, storage.ListParams{})
+		rows, err := s.initialReferenceOptions(ctx, entity, refOptionsChoice, nil)
 		if err != nil {
 			continue
-		}
-		rows = filterOutFolders(rows)
-		for _, row := range rows {
-			row["_label"] = firstStringField(row, entity)
 		}
 		opts[p.Name] = rows
 	}

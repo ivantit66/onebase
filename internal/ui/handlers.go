@@ -122,8 +122,13 @@ const (
 	refOptionsFilter
 )
 
+const (
+	refPickerDefaultLimit = 50
+	refPickerMaxLimit     = 100
+)
+
 func (s *Server) refListParamsForMode(refEntity *metadata.Entity, mode refOptionsMode) storage.ListParams {
-	params := storage.ListParams{}
+	params := storage.ListParams{ExcludeFolders: true}
 	if mode == refOptionsChoice && refEntity != nil && refEntity.Activity != nil && refEntity.Activity.HideFromChoice {
 		params.ActivityScope = metadata.ActivityScopeActive
 	}
@@ -131,10 +136,21 @@ func (s *Server) refListParamsForMode(refEntity *metadata.Entity, mode refOption
 }
 
 func (s *Server) referenceOptions(ctx context.Context, refEntity *metadata.Entity, mode refOptionsMode) ([]map[string]any, error) {
+	return s.referenceOptionsWithParams(ctx, refEntity, mode, storage.ListParams{})
+}
+
+func (s *Server) referenceOptionsWithParams(ctx context.Context, refEntity *metadata.Entity, mode refOptionsMode, extra storage.ListParams) ([]map[string]any, error) {
 	if refEntity == nil {
 		return nil, nil
 	}
-	rows, err := s.store.List(ctx, refEntity.Name, refEntity, s.refListParamsForMode(refEntity, mode))
+	params := s.refListParamsForMode(refEntity, mode)
+	params.Filters = extra.Filters
+	params.Search = extra.Search
+	params.Sort = extra.Sort
+	params.Dir = extra.Dir
+	params.Limit = extra.Limit
+	params.Offset = extra.Offset
+	rows, err := s.store.List(ctx, refEntity.Name, refEntity, params)
 	if err != nil {
 		return nil, err
 	}
@@ -143,6 +159,36 @@ func (s *Server) referenceOptions(ctx context.Context, refEntity *metadata.Entit
 		row["_label"] = firstStringField(row, refEntity)
 	}
 	return rows, nil
+}
+
+func (s *Server) referenceOptionsPage(ctx context.Context, refEntity *metadata.Entity, search string, limit, offset int) ([]map[string]any, int, error) {
+	if refEntity == nil {
+		return nil, 0, nil
+	}
+	params := storage.ListParams{
+		Search: strings.TrimSpace(search),
+		Limit:  limit,
+		Offset: offset,
+	}
+	rows, err := s.referenceOptionsWithParams(ctx, refEntity, refOptionsChoice, params)
+	if err != nil {
+		return nil, 0, err
+	}
+	countParams := s.refListParamsForMode(refEntity, refOptionsChoice)
+	countParams.Search = strings.TrimSpace(search)
+	total, err := s.store.CountList(ctx, refEntity.Name, refEntity, countParams)
+	if err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
+}
+
+func (s *Server) initialReferenceOptions(ctx context.Context, refEntity *metadata.Entity, mode refOptionsMode, selected []string) ([]map[string]any, error) {
+	rows, err := s.referenceOptionsWithParams(ctx, refEntity, mode, storage.ListParams{Limit: refPickerDefaultLimit})
+	if err != nil {
+		return nil, err
+	}
+	return s.appendSelectedRefOptions(ctx, rows, refEntity, selected), nil
 }
 
 func (s *Server) loadRefOptions(ctx context.Context, entity *metadata.Entity) (map[string][]map[string]any, error) {
@@ -177,6 +223,48 @@ func (s *Server) loadRefOptionsWithMode(ctx context.Context, entity *metadata.En
 	return opts, nil
 }
 
+func (s *Server) loadInitialRefOptions(ctx context.Context, entity *metadata.Entity, values map[string]string) (map[string][]map[string]any, error) {
+	opts := make(map[string][]map[string]any)
+	for _, f := range entity.Fields {
+		if f.RefEntity == "" {
+			continue
+		}
+		if f.RefEntity == "_users" {
+			opts[f.Name] = s.usersForSelection(ctx)
+			continue
+		}
+		refEntity := s.reg.GetEntity(f.RefEntity)
+		if refEntity == nil {
+			continue
+		}
+		rows, err := s.initialReferenceOptions(ctx, refEntity, refOptionsChoice, []string{values[f.Name]})
+		if err != nil {
+			return nil, err
+		}
+		opts[f.Name] = rows
+	}
+	return opts, nil
+}
+
+func (s *Server) loadInitialRefFilterOptions(ctx context.Context, entity *metadata.Entity, params storage.ListParams) (map[string][]map[string]any, error) {
+	opts := make(map[string][]map[string]any)
+	for _, f := range entity.Fields {
+		if f.RefEntity == "" {
+			continue
+		}
+		refEntity := s.reg.GetEntity(f.RefEntity)
+		if refEntity == nil {
+			continue
+		}
+		rows, err := s.initialReferenceOptions(ctx, refEntity, refOptionsFilter, []string{params.Filters[f.Name].Value})
+		if err != nil {
+			return nil, err
+		}
+		opts[f.Name] = rows
+	}
+	return opts, nil
+}
+
 // loadTPRefOptions returns select options for reference fields in all table parts.
 // Result: tpName → fieldName → [{id, _label, ...}]
 func (s *Server) loadTPRefOptions(ctx context.Context, entity *metadata.Entity) (map[string]map[string][]map[string]any, error) {
@@ -203,6 +291,81 @@ func (s *Server) loadTPRefOptions(ctx context.Context, entity *metadata.Entity) 
 		result[tp.Name] = tpOpts
 	}
 	return result, nil
+}
+
+func (s *Server) loadInitialTPRefOptions(ctx context.Context, entity *metadata.Entity, tpRows map[string][]map[string]any) (map[string]map[string][]map[string]any, error) {
+	result := make(map[string]map[string][]map[string]any)
+	for _, tp := range entity.TableParts {
+		tpOpts := make(map[string][]map[string]any)
+		for _, f := range tp.Fields {
+			if f.RefEntity == "" {
+				continue
+			}
+			tpOpts[f.Name] = []map[string]any{}
+			refEntity := s.reg.GetEntity(f.RefEntity)
+			if refEntity == nil {
+				continue
+			}
+			rows, err := s.initialReferenceOptions(ctx, refEntity, refOptionsChoice, selectedTPRefIDs(tpRows[tp.Name], f.Name))
+			if err != nil {
+				continue
+			}
+			tpOpts[f.Name] = rows
+		}
+		result[tp.Name] = tpOpts
+	}
+	return result, nil
+}
+
+func selectedTPRefIDs(rows []map[string]any, field string) []string {
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		id := refValueString(row[field])
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func refValueString(v any) string {
+	if v == nil {
+		return ""
+	}
+	if ref, ok := v.(interface{ GetRefUUID() string }); ok {
+		return ref.GetRefUUID()
+	}
+	if id, ok := v.(uuid.UUID); ok {
+		return id.String()
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", v))
+}
+
+func (s *Server) appendSelectedRefOptions(ctx context.Context, rows []map[string]any, refEntity *metadata.Entity, selected []string) []map[string]any {
+	seen := make(map[string]bool, len(rows)+len(selected))
+	for _, row := range rows {
+		if id := refValueString(row["id"]); id != "" {
+			seen[id] = true
+		}
+	}
+	for _, idStr := range selected {
+		idStr = strings.TrimSpace(idStr)
+		if idStr == "" || seen[idStr] {
+			continue
+		}
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			continue
+		}
+		row, err := s.store.GetByID(ctx, refEntity.Name, id, refEntity)
+		if err != nil || row == nil {
+			continue
+		}
+		row["_label"] = firstStringField(row, refEntity)
+		rows = append(rows, row)
+		seen[idStr] = true
+	}
+	return rows
 }
 
 // resolveRegisterRows enriches register movement rows with human-readable values:

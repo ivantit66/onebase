@@ -91,6 +91,23 @@ activity:
 	}
 }
 
+func TestLintYAML_IndexesKeyKnown(t *testing.T) {
+	dir := t.TempDir()
+	mkFile(t, filepath.Join(dir, "catalogs", "товар.yaml"), `name: Товар
+fields:
+  - name: Артикул
+    type: string
+indexes:
+  - fields: [Артикул]
+    unique: true
+`)
+	for _, is := range CheckLintYAML(dir) {
+		if is.Code == "metadata.unvalidated-key" {
+			t.Fatalf("блок indexes должен быть известен линту, получено: %+v", is)
+		}
+	}
+}
+
 func TestLintYAML_JournalConditionalKnown(t *testing.T) {
 	dir := t.TempDir()
 	mkFile(t, filepath.Join(dir, "journals", "ж.yaml"), `name: Ж

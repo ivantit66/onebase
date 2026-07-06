@@ -38,7 +38,7 @@ func (s *Server) registerMovements(w http.ResponseWriter, r *http.Request) {
 		"Register":   reg,
 		"Rows":       rows,
 		"Filter":     filterFormValues(r, reg.Dimensions),
-		"RefOpts":    s.loadRefOpts(r.Context(), reg.Dimensions),
+		"RefOpts":    s.loadRefOpts(r.Context(), reg.Dimensions, filterFormValues(r, reg.Dimensions)),
 		"HasFilters": !flt.IsEmpty(),
 	})
 }
@@ -65,7 +65,7 @@ func (s *Server) registerBalances(w http.ResponseWriter, r *http.Request) {
 		"Register":   reg,
 		"Rows":       rows,
 		"Filter":     filterFormValues(r, reg.Dimensions),
-		"RefOpts":    s.loadRefOpts(r.Context(), reg.Dimensions),
+		"RefOpts":    s.loadRefOpts(r.Context(), reg.Dimensions, filterFormValues(r, reg.Dimensions)),
 		"HasFilters": !flt.IsEmpty(),
 	})
 }
@@ -129,7 +129,7 @@ func filterFormValues(r *http.Request, fields []metadata.Field) map[string]strin
 // loadRefOpts загружает опции [{id,_label}] для ссылочных измерений (обобщение
 // loadInfoRegRefOpts на произвольный набор полей; используется и для регистров
 // накопления, и для регистров сведений). #45.
-func (s *Server) loadRefOpts(ctx context.Context, fields []metadata.Field) map[string][]map[string]any {
+func (s *Server) loadRefOpts(ctx context.Context, fields []metadata.Field, values map[string]string) map[string][]map[string]any {
 	opts := make(map[string][]map[string]any)
 	for _, f := range fields {
 		if f.RefEntity == "" {
@@ -140,15 +140,11 @@ func (s *Server) loadRefOpts(ctx context.Context, fields []metadata.Field) map[s
 		if refEntity == nil {
 			continue
 		}
-		rows, err := s.store.List(ctx, f.RefEntity, refEntity, storage.ListParams{})
+		rows, err := s.initialReferenceOptions(ctx, refEntity, refOptionsFilter, []string{values[f.Name]})
 		if err != nil {
 			continue
 		}
-		for _, row := range filterOutFolders(rows) {
-			id, _ := row["id"].(string)
-			label := firstStringField(row, refEntity)
-			opts[f.Name] = append(opts[f.Name], map[string]any{"id": id, "_label": label})
-		}
+		opts[f.Name] = rows
 	}
 	return opts
 }
@@ -243,13 +239,13 @@ func (s *Server) infoRegList(w http.ResponseWriter, r *http.Request) {
 		"InfoReg":    ir,
 		"Rows":       rows,
 		"Filter":     filterFormValues(r, ir.Dimensions),
-		"RefOpts":    s.loadRefOpts(r.Context(), ir.Dimensions),
+		"RefOpts":    s.loadRefOpts(r.Context(), ir.Dimensions, filterFormValues(r, ir.Dimensions)),
 		"HasFilters": !flt.IsEmpty(),
 	})
 }
 
-func (s *Server) loadInfoRegRefOpts(ctx context.Context, ir *metadata.InfoRegister) map[string][]map[string]any {
-	return s.loadRefOpts(ctx, ir.Dimensions)
+func (s *Server) loadInfoRegRefOpts(ctx context.Context, ir *metadata.InfoRegister, values map[string]string) map[string][]map[string]any {
+	return s.loadRefOpts(ctx, ir.Dimensions, values)
 }
 
 func (s *Server) infoRegForm(w http.ResponseWriter, r *http.Request) {
@@ -265,7 +261,7 @@ func (s *Server) infoRegForm(w http.ResponseWriter, r *http.Request) {
 		"InfoReg": ir,
 		"Values":  map[string]string{"period": now},
 		"Error":   "",
-		"RefOpts": s.loadInfoRegRefOpts(r.Context(), ir),
+		"RefOpts": s.loadInfoRegRefOpts(r.Context(), ir, map[string]string{}),
 	})
 }
 
@@ -287,7 +283,7 @@ func (s *Server) infoRegSubmit(w http.ResponseWriter, r *http.Request) {
 				"InfoReg": ir,
 				"Values":  formValuesFromRequest(r, ir),
 				"Error":   "Период обязателен для периодического регистра",
-				"RefOpts": s.loadInfoRegRefOpts(r.Context(), ir),
+				"RefOpts": s.loadInfoRegRefOpts(r.Context(), ir, formValuesFromRequest(r, ir)),
 			})
 			return
 		}
@@ -302,7 +298,7 @@ func (s *Server) infoRegSubmit(w http.ResponseWriter, r *http.Request) {
 				"InfoReg": ir,
 				"Values":  formValuesFromRequest(r, ir),
 				"Error":   "Неверный формат даты периода",
-				"RefOpts": s.loadInfoRegRefOpts(r.Context(), ir),
+				"RefOpts": s.loadInfoRegRefOpts(r.Context(), ir, formValuesFromRequest(r, ir)),
 			})
 			return
 		}
@@ -316,7 +312,7 @@ func (s *Server) infoRegSubmit(w http.ResponseWriter, r *http.Request) {
 			"InfoReg": ir,
 			"Values":  formValuesFromRequest(r, ir),
 			"Error":   err.Error(),
-			"RefOpts": s.loadInfoRegRefOpts(r.Context(), ir),
+			"RefOpts": s.loadInfoRegRefOpts(r.Context(), ir, formValuesFromRequest(r, ir)),
 		})
 		return
 	}
@@ -403,12 +399,9 @@ func (s *Server) constantsList(w http.ResponseWriter, r *http.Request) {
 		if refEntity == nil {
 			continue
 		}
-		rows, err := s.store.List(r.Context(), refEntity.Name, refEntity, storage.ListParams{})
+		rows, err := s.initialReferenceOptions(r.Context(), refEntity, refOptionsChoice, []string{valStrs[c.Name]})
 		if err != nil {
 			continue
-		}
-		for _, row := range rows {
-			row["_label"] = firstStringField(row, refEntity)
 		}
 		refOpts[c.Name] = rows
 	}

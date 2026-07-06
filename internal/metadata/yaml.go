@@ -43,12 +43,18 @@ type rawActivity struct {
 	HideFromChoice *bool  `yaml:"hide_from_choice"`
 }
 
+type rawIndex struct {
+	Fields []string `yaml:"fields"`
+	Unique bool     `yaml:"unique"`
+}
+
 type rawEntity struct {
 	Name          string            `yaml:"name"`
 	Title         string            `yaml:"title"`
 	Titles        map[string]string `yaml:"titles"`
 	Fields        []rawField        `yaml:"fields"`
 	TableParts    []rawTablePart    `yaml:"tableparts"`
+	Indexes       []rawIndex        `yaml:"indexes"`
 	Posting       bool              `yaml:"posting"`
 	Numerator     *rawNumerator     `yaml:"numerator"`
 	Predefined    []rawPredefined   `yaml:"predefined"`
@@ -137,6 +143,12 @@ func LoadFile(path string, kind Kind) (*Entity, error) {
 	}
 	for _, rf := range raw.Fields {
 		e.Fields = append(e.Fields, parseField(rf))
+	}
+	for _, ri := range raw.Indexes {
+		idx := IndexSpec{Fields: trimStringList(ri.Fields), Unique: ri.Unique}
+		if len(idx.Fields) > 0 {
+			e.Indexes = append(e.Indexes, idx)
+		}
 	}
 	for _, rtp := range raw.TableParts {
 		tp := TablePart{Name: rtp.Name, Title: rtp.Title, Titles: rtp.Titles}

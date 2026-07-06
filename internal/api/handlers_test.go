@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/ivantit66/onebase/internal/auth"
 	"github.com/ivantit66/onebase/internal/dsl/ast"
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
 	"github.com/ivantit66/onebase/internal/dsl/lexer"
@@ -110,6 +111,10 @@ func reqWithEntity(method, target string, body []byte, params map[string]string,
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 }
 
+func withUser(r *http.Request, u *auth.User) *http.Request {
+	return r.WithContext(auth.ContextWithUser(r.Context(), u))
+}
+
 // БЫЛО (до миграции): POST /catalogs/X с OnWrite, который зовёт Сообщить(),
 // падал с 422 «неизвестная функция Сообщить». СТАЛО: success + сообщение
 // возвращается в JSON.
@@ -146,6 +151,164 @@ func TestAPI_Create_OnWriteHasDSLVars(t *testing.T) {
 	}
 	if len(resp.Messages) != 1 || !strings.Contains(resp.Messages[0], "Молоток") {
 		t.Errorf("Сообщения не вернулись: %v", resp.Messages)
+	}
+}
+
+func TestAPI_RBAC_DeniesCreateWithoutWrite(t *testing.T) {
+	cat := &metadata.Entity{
+		Name: "Товар",
+		Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{
+			{Name: "Наименование", Type: metadata.FieldTypeString},
+		},
+	}
+	h, _ := newAPITestHandler(t, []*metadata.Entity{cat}, nil)
+	user := &auth.User{
+		ID:    "u1",
+		Login: "reader",
+		Roles: []*auth.Role{{
+			Name: "Читатель",
+			Permissions: auth.Permission{
+				Catalogs: map[string][]string{"Товар": {"read"}},
+			},
+		}},
+	}
+
+	body := []byte(`{"Наименование": "Молоток"}`)
+	r := reqWithEntity("POST", "/catalogs/Товар", body, map[string]string{"entity": "Товар"}, nil)
+	r = withUser(r, user)
+	w := httptest.NewRecorder()
+	h.createObject(metadata.KindCatalog).ServeHTTP(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPI_RBAC_UpdatePostActionRequiresPost(t *testing.T) {
+	doc := &metadata.Entity{
+		Name:    "Поступление",
+		Kind:    metadata.KindDocument,
+		Posting: true,
+		Fields:  []metadata.Field{{Name: "Номер", Type: metadata.FieldTypeString}},
+	}
+	h, ctx := newAPITestHandler(t, []*metadata.Entity{doc}, nil)
+	id := uuid.New()
+	if err := h.store.Upsert(ctx, "Поступление", id, map[string]any{"Номер": "1"}, doc); err != nil {
+		t.Fatal(err)
+	}
+	user := &auth.User{
+		ID:    "u1",
+		Login: "writer",
+		Roles: []*auth.Role{{
+			Name: "Писатель",
+			Permissions: auth.Permission{
+				Documents: map[string][]string{"Поступление": {"read", "write"}},
+			},
+		}},
+	}
+
+	body := []byte(`{"Номер":"2","__action":"post"}`)
+	r := reqWithEntity("PUT", "/documents/Поступление/"+id.String(), body,
+		map[string]string{"entity": "Поступление", "id": id.String()}, nil)
+	r = withUser(r, user)
+	w := httptest.NewRecorder()
+	h.updateObject(metadata.KindDocument).ServeHTTP(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPI_List_DefaultLimitAndHeaders(t *testing.T) {
+	cat := &metadata.Entity{
+		Name: "Товар",
+		Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{
+			{Name: "Наименование", Type: metadata.FieldTypeString},
+		},
+	}
+	h, ctx := newAPITestHandler(t, []*metadata.Entity{cat}, nil)
+	for i := 0; i < restDefaultLimit+5; i++ {
+		id := uuid.New()
+		if err := h.store.Upsert(ctx, "Товар", id, map[string]any{"Наименование": "Товар"}, cat); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	r := reqWithEntity("GET", "/catalogs/Товар", nil, map[string]string{"entity": "Товар"}, nil)
+	w := httptest.NewRecorder()
+	h.listObjects(metadata.KindCatalog).ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("X-Total-Count"); got != "105" {
+		t.Fatalf("X-Total-Count = %q, want 105", got)
+	}
+	if got := w.Header().Get("X-Limit"); got != "100" {
+		t.Fatalf("X-Limit = %q, want 100", got)
+	}
+	if got := w.Header().Get("X-Offset"); got != "0" {
+		t.Fatalf("X-Offset = %q, want 0", got)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != restDefaultLimit {
+		t.Fatalf("len(rows) = %d, want %d", len(rows), restDefaultLimit)
+	}
+}
+
+func TestAPI_List_LimitIsCappedAndOffsetApplied(t *testing.T) {
+	cat := &metadata.Entity{
+		Name: "Товар",
+		Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{
+			{Name: "Наименование", Type: metadata.FieldTypeString},
+		},
+	}
+	h, ctx := newAPITestHandler(t, []*metadata.Entity{cat}, nil)
+	for i := 0; i < 3; i++ {
+		id := uuid.New()
+		if err := h.store.Upsert(ctx, "Товар", id, map[string]any{"Наименование": "Товар"}, cat); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	r := reqWithEntity("GET", "/catalogs/Товар?limit=5000&offset=1", nil, map[string]string{"entity": "Товар"}, nil)
+	w := httptest.NewRecorder()
+	h.listObjects(metadata.KindCatalog).ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("X-Limit"); got != "1000" {
+		t.Fatalf("X-Limit = %q, want 1000", got)
+	}
+	if got := w.Header().Get("X-Offset"); got != "1" {
+		t.Fatalf("X-Offset = %q, want 1", got)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("len(rows) = %d, want 2", len(rows))
+	}
+}
+
+func TestAPI_List_InvalidLimit(t *testing.T) {
+	cat := &metadata.Entity{Name: "Товар", Kind: metadata.KindCatalog}
+	h, _ := newAPITestHandler(t, []*metadata.Entity{cat}, nil)
+
+	r := reqWithEntity("GET", "/catalogs/Товар?limit=0", nil, map[string]string{"entity": "Товар"}, nil)
+	w := httptest.NewRecorder()
+	h.listObjects(metadata.KindCatalog).ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

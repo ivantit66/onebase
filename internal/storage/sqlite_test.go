@@ -252,6 +252,118 @@ func TestSQLiteMigrateMinimal(t *testing.T) {
 	}
 }
 
+func TestSQLiteMigrateCreatesEntityAndTablePartIndexes(t *testing.T) {
+	ctx := context.Background()
+	db, err := ConnectSQLite(ctx, filepath.Join(t.TempDir(), "indexes.db"))
+	if err != nil {
+		t.Fatalf("ConnectSQLite: %v", err)
+	}
+	defer db.Close()
+
+	cat := &metadata.Entity{
+		Name: "Counterparty",
+		Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{
+			{Name: "INN", Type: metadata.FieldTypeString},
+		},
+		Indexes: []metadata.IndexSpec{{Fields: []string{"INN"}, Unique: true}},
+	}
+	doc := &metadata.Entity{
+		Name: "Invoice",
+		Kind: metadata.KindDocument,
+		Fields: []metadata.Field{
+			{Name: "Date", Type: metadata.FieldTypeDate},
+			{Name: "Counterparty", Type: "reference:Counterparty", RefEntity: "Counterparty"},
+		},
+		Indexes: []metadata.IndexSpec{{Fields: []string{"Counterparty", "Date"}}},
+		TableParts: []metadata.TablePart{{
+			Name:   "Rows",
+			Fields: []metadata.Field{{Name: "Qty", Type: metadata.FieldTypeNumber}},
+		}},
+	}
+	if err := db.Migrate(ctx, []*metadata.Entity{cat, doc}); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	uniqueName := stableIndexName("counterparty", []string{"inn"}, true)
+	if !sqliteIndexExists(t, db, "counterparty", uniqueName, true, []string{"inn"}) {
+		t.Fatalf("unique index %s on counterparty(inn) not found", uniqueName)
+	}
+	docIndexName := stableIndexName("invoice", []string{"counterparty_id", "date"}, false)
+	if !sqliteIndexExists(t, db, "invoice", docIndexName, false, []string{"counterparty_id", "date"}) {
+		t.Fatalf("index %s on invoice(counterparty_id,date) not found", docIndexName)
+	}
+	tpTable := metadata.TablePartTableName("Invoice", "Rows")
+	tpIndexName := stableIndexName(tpTable, []string{"parent_id", "строка"}, false)
+	if !sqliteIndexExists(t, db, tpTable, tpIndexName, false, []string{"parent_id", "строка"}) {
+		t.Fatalf("tablepart index %s on %s(parent_id,строка) not found", tpIndexName, tpTable)
+	}
+}
+
+func sqliteIndexExists(t *testing.T, db *DB, table, index string, unique bool, wantCols []string) bool {
+	t.Helper()
+	rows, err := db.Query(context.Background(), "PRAGMA index_list("+sqliteIdent(table)+")")
+	if err != nil {
+		t.Fatalf("index_list %s: %v", table, err)
+	}
+	found := false
+	for rows.Next() {
+		var seq int
+		var name, origin string
+		var uniqueInt, partial int
+		if err := rows.Scan(&seq, &name, &uniqueInt, &origin, &partial); err != nil {
+			t.Fatalf("scan index_list: %v", err)
+		}
+		if name == index {
+			if (uniqueInt == 1) != unique {
+				t.Fatalf("index %s unique = %v, want %v", index, uniqueInt == 1, unique)
+			}
+			found = true
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		t.Fatalf("index_list rows: %v", err)
+	}
+	rows.Close()
+	if !found {
+		return false
+	}
+	cols := sqliteIndexColumns(t, db, index)
+	if len(cols) != len(wantCols) {
+		t.Fatalf("index %s columns = %v, want %v", index, cols, wantCols)
+	}
+	for i := range cols {
+		if cols[i] != wantCols[i] {
+			t.Fatalf("index %s columns = %v, want %v", index, cols, wantCols)
+		}
+	}
+	return true
+}
+
+func sqliteIndexColumns(t *testing.T, db *DB, index string) []string {
+	t.Helper()
+	rows, err := db.Query(context.Background(), "PRAGMA index_info("+sqliteIdent(index)+")")
+	if err != nil {
+		t.Fatalf("index_info %s: %v", index, err)
+	}
+	defer rows.Close()
+	var cols []string
+	for rows.Next() {
+		var seqno, cid int
+		var name string
+		if err := rows.Scan(&seqno, &cid, &name); err != nil {
+			t.Fatalf("scan index_info: %v", err)
+		}
+		cols = append(cols, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("index_info rows: %v", err)
+	}
+	return cols
+}
+
 // TestSQLiteCyrillicCaseInsensitive проверяет, что отбор и полнотекстовый
 // поиск по кириллице регистронезависимы на SQLite. Встроенная LOWER() в
 // SQLite приводит к нижнему регистру только ASCII — без ob_lower (см. init в

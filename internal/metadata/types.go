@@ -167,6 +167,14 @@ type ActivityConfig struct {
 	HideFromChoice bool
 }
 
+// IndexSpec describes a DB index requested by configuration metadata.
+// Fields are entity field names as written in YAML. Storage maps them to
+// physical column names, including `_id` suffixes for references.
+type IndexSpec struct {
+	Fields []string
+	Unique bool
+}
+
 type Entity struct {
 	Name string
 	// Title — человекочитаемое представление (аналог «Синонима» в 1С).
@@ -179,6 +187,7 @@ type Entity struct {
 	Kind       Kind
 	Fields     []Field
 	TableParts []TablePart
+	Indexes    []IndexSpec
 	// Posting enables 1C-style posting semantics: movements are written only
 	// when the document is explicitly posted, not on every save.
 	Posting       bool

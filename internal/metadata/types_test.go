@@ -135,6 +135,50 @@ fields:
 	}
 }
 
+func TestLoadFile_Indexes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cat.yaml")
+	yaml := `name: Контрагенты
+fields:
+  - name: ИНН
+    type: string
+  - name: КПП
+    type: string
+indexes:
+  - fields: [ИНН]
+    unique: true
+  - fields: [ИНН, КПП]
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e, err := LoadFile(path, KindCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(e.Indexes) != 2 {
+		t.Fatalf("Indexes len = %d, want 2", len(e.Indexes))
+	}
+	if !e.Indexes[0].Unique || len(e.Indexes[0].Fields) != 1 || e.Indexes[0].Fields[0] != "ИНН" {
+		t.Fatalf("first index = %+v, want unique [ИНН]", e.Indexes[0])
+	}
+	if e.Indexes[1].Unique || len(e.Indexes[1].Fields) != 2 {
+		t.Fatalf("second index = %+v, want non-unique [ИНН КПП]", e.Indexes[1])
+	}
+}
+
+func TestValidate_IndexUnknownField(t *testing.T) {
+	entities := []*Entity{{
+		Name:    "Контрагенты",
+		Kind:    KindCatalog,
+		Fields:  []Field{{Name: "ИНН", Type: FieldTypeString}},
+		Indexes: []IndexSpec{{Fields: []string{"КПП"}}},
+	}}
+	if err := Validate(entities, nil); err == nil {
+		t.Fatal("Validate должен был отклонить индекс по неизвестному полю")
+	}
+}
+
 func TestValidate_BasedOnUnknown(t *testing.T) {
 	entities := []*Entity{
 		{Name: "ВозвратОтПокупателя", Kind: KindDocument, BasedOn: []string{"НесуществующийТип"}},

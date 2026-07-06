@@ -11,11 +11,18 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/ivantit66/onebase/internal/auth"
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
 	"github.com/ivantit66/onebase/internal/entityservice"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/runtime"
 	"github.com/ivantit66/onebase/internal/storage"
+)
+
+const (
+	restDefaultLimit = 100
+	restMaxLimit     = 1000
+	restMaxBodyBytes = 50 * 1024 * 1024
 )
 
 type handler struct {
@@ -37,9 +44,9 @@ type handler struct {
 //	  "__action": "post"
 //	}
 type createUpdateBody struct {
-	Fields        map[string]any                  `json:"-"`
-	TablePartRows map[string][]map[string]any     `json:"__tableparts,omitempty"`
-	Action        string                          `json:"__action,omitempty"`
+	Fields        map[string]any              `json:"-"`
+	TablePartRows map[string][]map[string]any `json:"__tableparts,omitempty"`
+	Action        string                      `json:"__action,omitempty"`
 }
 
 // decodeBody парсит JSON в createUpdateBody, отделяя служебные ключи (__tableparts,
@@ -73,18 +80,20 @@ func decodeBody(r *http.Request) (createUpdateBody, error) {
 
 func (h *handler) createObject(kind metadata.Kind) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		entityName := chi.URLParam(r, "entity")
-		if len(entityName) > 0 {
-			entityName = capitalize(entityName)
-		}
-		entity := h.reg.GetEntity(entityName)
-		if entity == nil {
-			writeError(w, http.StatusNotFound, "unknown entity: "+entityName, "", 0)
+		entity, entityName, ok := h.entityFromRoute(w, r, kind)
+		if !ok {
 			return
 		}
+		if !requireRESTPerm(w, r, kind, entityName, "write") {
+			return
+		}
+		limitRESTBody(w, r)
 		body, err := decodeBody(r)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error(), "", 0)
+			writeDecodeError(w, err)
+			return
+		}
+		if kind == metadata.KindDocument && isPostAction(body.Action) && !requireRESTPerm(w, r, kind, entityName, "post") {
 			return
 		}
 
@@ -128,10 +137,11 @@ func (h *handler) createObject(kind metadata.Kind) http.HandlerFunc {
 
 func (h *handler) getObject(kind metadata.Kind) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		entityName := capitalize(chi.URLParam(r, "entity"))
-		entity := h.reg.GetEntity(entityName)
-		if entity == nil {
-			writeError(w, http.StatusNotFound, "unknown entity: "+entityName, "", 0)
+		entity, entityName, ok := h.entityFromRoute(w, r, kind)
+		if !ok {
+			return
+		}
+		if !requireRESTPerm(w, r, kind, entityName, "read") {
 			return
 		}
 		idStr := chi.URLParam(r, "id")
@@ -152,24 +162,31 @@ func (h *handler) getObject(kind metadata.Kind) http.HandlerFunc {
 
 func (h *handler) listObjects(kind metadata.Kind) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		entityName := capitalize(chi.URLParam(r, "entity"))
-		entity := h.reg.GetEntity(entityName)
-		if entity == nil {
-			writeError(w, http.StatusNotFound, "unknown entity: "+entityName, "", 0)
+		entity, entityName, ok := h.entityFromRoute(w, r, kind)
+		if !ok {
 			return
 		}
-		params := storage.ListParams{Filters: parseRestFilters(r)}
-		if s := r.URL.Query().Get("sort"); s != "" {
-			params.Sort = s
+		if !requireRESTPerm(w, r, kind, entityName, "read") {
+			return
 		}
-		if d := r.URL.Query().Get("dir"); d != "" {
-			params.Dir = d
+		params, err := parseRestListParams(r)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error(), "", 0)
+			return
 		}
 		rows, err := h.store.List(r.Context(), entityName, entity, params)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error(), "", 0)
 			return
 		}
+		total, err := h.store.CountList(r.Context(), entityName, entity, params)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error(), "", 0)
+			return
+		}
+		w.Header().Set("X-Total-Count", strconv.Itoa(total))
+		w.Header().Set("X-Limit", strconv.Itoa(params.Limit))
+		w.Header().Set("X-Offset", strconv.Itoa(params.Offset))
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(rows)
 	}
@@ -177,10 +194,11 @@ func (h *handler) listObjects(kind metadata.Kind) http.HandlerFunc {
 
 func (h *handler) updateObject(kind metadata.Kind) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		entityName := capitalize(chi.URLParam(r, "entity"))
-		entity := h.reg.GetEntity(entityName)
-		if entity == nil {
-			writeError(w, http.StatusNotFound, "unknown entity: "+entityName, "", 0)
+		entity, entityName, ok := h.entityFromRoute(w, r, kind)
+		if !ok {
+			return
+		}
+		if !requireRESTPerm(w, r, kind, entityName, "write") {
 			return
 		}
 		id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -188,9 +206,13 @@ func (h *handler) updateObject(kind metadata.Kind) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid id", "", 0)
 			return
 		}
+		limitRESTBody(w, r)
 		body, err := decodeBody(r)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error(), "", 0)
+			writeDecodeError(w, err)
+			return
+		}
+		if kind == metadata.KindDocument && isPostAction(body.Action) && !requireRESTPerm(w, r, kind, entityName, "post") {
 			return
 		}
 
@@ -236,9 +258,11 @@ func (h *handler) updateObject(kind metadata.Kind) http.HandlerFunc {
 
 func (h *handler) deleteObject(kind metadata.Kind) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		entityName := capitalize(chi.URLParam(r, "entity"))
-		if h.reg.GetEntity(entityName) == nil {
-			writeError(w, http.StatusNotFound, "unknown entity: "+entityName, "", 0)
+		_, entityName, ok := h.entityFromRoute(w, r, kind)
+		if !ok {
+			return
+		}
+		if !requireRESTPerm(w, r, kind, entityName, "delete") {
 			return
 		}
 		id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -274,14 +298,15 @@ func (h *handler) deleteObject(kind metadata.Kind) http.HandlerFunc {
 // аналогично UI «Записать и провести»).
 func (h *handler) postDocument() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		entityName := capitalize(chi.URLParam(r, "entity"))
-		entity := h.reg.GetEntity(entityName)
-		if entity == nil {
-			writeError(w, http.StatusNotFound, "unknown entity: "+entityName, "", 0)
+		entity, entityName, ok := h.entityFromRoute(w, r, metadata.KindDocument)
+		if !ok {
 			return
 		}
 		if !entity.Posting {
 			writeError(w, http.StatusBadRequest, "entity is not postable: "+entityName, "", 0)
+			return
+		}
+		if !requireRESTPerm(w, r, metadata.KindDocument, entityName, "post") {
 			return
 		}
 		id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -296,9 +321,13 @@ func (h *handler) postDocument() http.HandlerFunc {
 		var fields map[string]any
 		var tpRows map[string][]map[string]any
 		if r.ContentLength > 0 {
+			if !requireRESTPerm(w, r, metadata.KindDocument, entityName, "write") {
+				return
+			}
+			limitRESTBody(w, r)
 			body, decErr := decodeBody(r)
 			if decErr != nil {
-				writeError(w, http.StatusBadRequest, "invalid JSON: "+decErr.Error(), "", 0)
+				writeDecodeError(w, decErr)
 				return
 			}
 			fields = body.Fields
@@ -350,6 +379,54 @@ func (h *handler) postDocument() http.HandlerFunc {
 	}
 }
 
+func (h *handler) entityFromRoute(w http.ResponseWriter, r *http.Request, kind metadata.Kind) (*metadata.Entity, string, bool) {
+	entityName := capitalize(chi.URLParam(r, "entity"))
+	entity := h.reg.GetEntity(entityName)
+	if entity == nil || entity.Kind != kind {
+		writeError(w, http.StatusNotFound, "unknown entity: "+entityName, "", 0)
+		return nil, entityName, false
+	}
+	return entity, entityName, true
+}
+
+func requireRESTPerm(w http.ResponseWriter, r *http.Request, kind metadata.Kind, entity, op string) bool {
+	if canREST(r.Context(), string(kind), entity, op) {
+		return true
+	}
+	writeError(w, http.StatusForbidden, "forbidden", "", 0)
+	return false
+}
+
+func canREST(ctx context.Context, kind, entity, op string) bool {
+	u := auth.UserFromContext(ctx)
+	if u == nil {
+		return true
+	}
+	return u.Has(kind, entity, op)
+}
+
+func isPostAction(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "post", "post_and_close":
+		return true
+	default:
+		return false
+	}
+}
+
+func limitRESTBody(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, restMaxBodyBytes)
+}
+
+func writeDecodeError(w http.ResponseWriter, err error) {
+	var maxErr *http.MaxBytesError
+	if errors.As(err, &maxErr) {
+		writeError(w, http.StatusRequestEntityTooLarge, "request body too large", "", 0)
+		return
+	}
+	writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error(), "", 0)
+}
+
 // generateAutoNumber генерирует номер документа для API так же, как UI: при
 // наличии Numerator-конфига использует его (ComputePeriodKey + NextNumber +
 // FormatNumber), иначе откатывается на простой NextNum с дополнением нулями.
@@ -384,6 +461,56 @@ func parseRestFilters(r *http.Request) map[string]storage.FilterValue {
 		}
 	}
 	return filters
+}
+
+func parseRestListParams(r *http.Request) (storage.ListParams, error) {
+	q := r.URL.Query()
+	limit, err := parsePositiveInt(q.Get("limit"), restDefaultLimit)
+	if err != nil {
+		return storage.ListParams{}, errors.New("invalid limit")
+	}
+	if limit > restMaxLimit {
+		limit = restMaxLimit
+	}
+	offset, err := parseNonNegativeInt(q.Get("offset"), 0)
+	if err != nil {
+		return storage.ListParams{}, errors.New("invalid offset")
+	}
+	params := storage.ListParams{
+		Filters: parseRestFilters(r),
+		Search:  q.Get("q"),
+		Limit:   limit,
+		Offset:  offset,
+	}
+	if s := q.Get("sort"); s != "" {
+		params.Sort = s
+	}
+	if d := q.Get("dir"); d != "" {
+		params.Dir = d
+	}
+	return params, nil
+}
+
+func parsePositiveInt(raw string, def int) (int, error) {
+	if strings.TrimSpace(raw) == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0, errors.New("not positive")
+	}
+	return n, nil
+}
+
+func parseNonNegativeInt(raw string, def int) (int, error) {
+	if strings.TrimSpace(raw) == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0, errors.New("negative")
+	}
+	return n, nil
 }
 
 type errorResponse struct {

@@ -537,7 +537,7 @@ func templateFuncs(bundle *i18n.Bundle) template.FuncMap {
 }
 
 func templateSource() string {
-	return tplHead + tplNav + tplIndex + tplList + tplForm + tplManagedForm + tplRegister + tplReport + tplProcessor + tplAgentSettings + tplPOS + tplAbout + tplDeleteMarked + tplInfoReg + tplConstants + tplHistory + tplJournal + tplScheduled + tplAccountReg + tplQueryBuilder + tplAllFunctions + tplQueryConsole + tplCodeConsole + tplGengen + tplForbidden + tplPageCustom + tplAppShell
+	return tplHead + tplRefPickerJS + tplNav + tplIndex + tplList + tplForm + tplManagedForm + tplRegister + tplReport + tplProcessor + tplAgentSettings + tplPOS + tplAbout + tplDeleteMarked + tplInfoReg + tplConstants + tplHistory + tplJournal + tplScheduled + tplAccountReg + tplQueryBuilder + tplAllFunctions + tplQueryConsole + tplCodeConsole + tplGengen + tplForbidden + tplPageCustom + tplAppShell
 }
 
 const tplHead = `
@@ -599,6 +599,7 @@ if (window.__obEmbedded) {
   })();
 }
 </script>
+{{template "ref-picker-js" .}}
 <style>
 .ob-embedded .topbar,.ob-embedded .subsys-bar,.ob-embedded #ob-nav{display:none!important}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -972,6 +973,208 @@ window.onebaseDevice={
 {{end}}
 `
 
+const tplRefPickerJS = `
+{{define "ref-picker-js"}}
+<script>
+function openRefPicker(selOrId) {
+  var sel = (typeof selOrId === 'string') ? document.getElementById(selOrId) : selOrId;
+  if (!sel) return;
+  var refEntity = sel.getAttribute('data-ref-entity') || '';
+  var allowCreate = sel.getAttribute('data-ref-allow-create') === '1';
+  var localOpts = [];
+  for (var i = 0; i < sel.options.length; i++) {
+    var o = sel.options[i];
+    if (o.value) localOpts.push({id: o.value, label: o.text});
+  }
+  var old = document.getElementById('_ref-picker-modal');
+  if (old) old.remove();
+  var modal = document.createElement('div');
+  modal.id = '_ref-picker-modal';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:9999;display:flex;align-items:center;justify-content:center';
+  var inner = '<div style="background:#fff;border-radius:10px;padding:20px;width:480px;max-width:95vw;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.18)">';
+  inner += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><div style="font-weight:600;font-size:15px;color:#1e293b">Выбор из списка</div>';
+  if (allowCreate && refEntity) {
+    inner += '<button type="button" id="_rp-create" style="padding:5px 12px;border:1px solid #16a34a;border-radius:6px;background:#f0fdf4;cursor:pointer;font-size:12px;font-weight:600;color:#16a34a" title="Создать новый">+ Создать</button>';
+  }
+  inner += '</div>';
+  inner += '<input id="_rp-search" type="text" placeholder="Поиск..." autocomplete="off" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;font-size:14px;margin-bottom:10px;outline:none">';
+  inner += '<div id="_rp-list" style="overflow-y:auto;flex:1;border:1px solid #e2e8f0;border-radius:7px"></div>';
+  inner += '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px"><div id="_rp-status" style="font-size:12px;color:#94a3b8"></div><button type="button" id="_rp-cancel" style="padding:6px 18px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px">Отмена</button></div>';
+  inner += '</div>';
+  modal.innerHTML = inner;
+  document.body.appendChild(modal);
+  var list = document.getElementById('_rp-list');
+  var status = document.getElementById('_rp-status');
+  function renderItems(opts) {
+    if (!list) return;
+    list.innerHTML = '';
+    if (!opts || opts.length === 0) {
+      var empty = document.createElement('div');
+      empty.style.cssText = 'padding:16px;color:#94a3b8;font-size:13px;text-align:center';
+      empty.textContent = 'Список пуст';
+      list.appendChild(empty);
+      return;
+    }
+    for (var i = 0; i < opts.length; i++) {
+      var item = document.createElement('div');
+      item.className = '_rp-item';
+      item.setAttribute('data-id', opts[i].id);
+      item.setAttribute('data-label', opts[i].label);
+      item.style.cssText = 'padding:9px 14px;cursor:pointer;border-bottom:1px solid #f1f5f9;font-size:14px;color:#1e293b';
+      item.textContent = opts[i].label;
+      list.appendChild(item);
+    }
+  }
+  function renderLocal(q) {
+    q = (q || '').toLowerCase();
+    var filtered = localOpts;
+    if (q) {
+      filtered = localOpts.filter(function(opt) {
+        return String(opt.label || '').toLowerCase().indexOf(q) >= 0;
+      });
+    }
+    renderItems(filtered);
+    if (status) status.textContent = '';
+  }
+  function selectItem(item) {
+    if (!window._rpTarget) return;
+    var id = item.getAttribute('data-id') || '';
+    var label = item.getAttribute('data-label') || item.textContent || id;
+    var exists = false;
+    for (var i = 0; i < window._rpTarget.options.length; i++) {
+      if (window._rpTarget.options[i].value === id) { exists = true; break; }
+    }
+    if (!exists && id) {
+      var opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = label;
+      window._rpTarget.appendChild(opt);
+    }
+    window._rpTarget.value = id;
+    try { window._rpTarget.dispatchEvent(new Event('change', {bubbles:true})); } catch(e) {}
+  }
+  var requestSeq = 0;
+  var searchTimer = null;
+  function loadServer(q) {
+    if (!refEntity || refEntity === '_users' || !window.fetch) {
+      renderLocal(q);
+      return;
+    }
+    var seq = ++requestSeq;
+    if (status) status.textContent = 'Загрузка...';
+    var url = '/ui/_ref-options/' + encodeURIComponent(refEntity) + '?limit=50&q=' + encodeURIComponent(q || '');
+    fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+      .then(function(resp) {
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        return resp.json();
+      })
+      .then(function(data) {
+        if (seq !== requestSeq) return;
+        var rows = (data && data.items) || [];
+        var opts = rows.map(function(row) {
+          var id = row && row.id != null ? String(row.id) : '';
+          return { id: id, label: String((row && row._label) || id) };
+        }).filter(function(opt) { return opt.id !== ''; });
+        renderItems(opts);
+        if (status) {
+          var total = data && typeof data.total === 'number' ? data.total : opts.length;
+          status.textContent = total > opts.length ? 'Показано ' + opts.length + ' из ' + total : '';
+        }
+      })
+      .catch(function() {
+        if (seq !== requestSeq) return;
+        renderLocal(q);
+      });
+  }
+  window._rpTarget = sel;
+  var search = document.getElementById('_rp-search');
+  search.focus();
+  search.addEventListener('input', function() {
+    var q = this.value;
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(function() { loadServer(q); }, 180);
+  });
+  renderItems(localOpts);
+  loadServer('');
+  document.getElementById('_rp-list').addEventListener('click', function(e) {
+    var item = e.target.closest('._rp-item');
+    if (!item) return;
+    selectItem(item);
+    modal.remove();
+  });
+  var createBtn = document.getElementById('_rp-create');
+  if (createBtn) {
+    createBtn.addEventListener('click', function() {
+      modal.remove();
+      openRefCreate(sel, refEntity);
+    });
+  }
+  document.getElementById('_rp-cancel').addEventListener('click', function() { modal.remove(); });
+  modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
+}
+
+function openRefCurrent(selOrId) {
+  var sel = (typeof selOrId === 'string') ? document.getElementById(selOrId) : selOrId;
+  if (!sel) return;
+  var refEntity = sel.getAttribute('data-ref-entity') || '';
+  if (!refEntity || !sel.value) return;
+  var refURL = '/ui/_ref-open/' + encodeURIComponent(refEntity) + '/' + encodeURIComponent(sel.value);
+  try {
+    if (window.__obEmbedded && window.parent && window.parent.obOpenTab) {
+      window.parent.postMessage({ source: 'obOpenTab', url: refURL, title: refEntity }, '*');
+      return;
+    }
+  } catch (e) {}
+  window.open(refURL, '_blank');
+}
+
+function openRefCreate(targetSelect, refEntity) {
+  if (!targetSelect || !refEntity) return;
+  var old = document.getElementById('_ref-create-modal');
+  if (old) old.remove();
+  var modal = document.createElement('div');
+  modal.id = '_ref-create-modal';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:10000;display:flex;align-items:center;justify-content:center';
+  var box = document.createElement('div');
+  box.style.cssText = 'background:#fff;border-radius:10px;width:780px;max-width:95vw;height:78vh;max-height:680px;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.22);overflow:hidden';
+  var iframe = document.createElement('iframe');
+  iframe.src = '/ui/_ref-create/' + encodeURIComponent(refEntity);
+  iframe.style.cssText = 'flex:1;border:0;width:100%';
+  box.appendChild(iframe);
+  modal.appendChild(box);
+  document.body.appendChild(modal);
+
+  function handler(ev) {
+    var d = ev.data;
+    if (!d || typeof d !== 'object') return;
+    if (d.source === 'obRefCreate' && d.id) {
+      var exists = false;
+      for (var i = 0; i < targetSelect.options.length; i++) {
+        if (targetSelect.options[i].value === d.id) { exists = true; break; }
+      }
+      if (!exists) {
+        var o = document.createElement('option');
+        o.value = d.id; o.textContent = d.label || d.id;
+        targetSelect.appendChild(o);
+      }
+      targetSelect.value = d.id;
+      try { targetSelect.dispatchEvent(new Event('change', {bubbles:true})); } catch(e) {}
+      cleanup();
+    } else if (d.source === 'obRefCancel') {
+      cleanup();
+    }
+  }
+  function cleanup() {
+    window.removeEventListener('message', handler);
+    modal.remove();
+  }
+  window.addEventListener('message', handler);
+  modal.addEventListener('click', function(e) { if (e.target === modal) cleanup(); });
+}
+</script>
+{{end}}
+`
+
 const tplNav = `
 {{define "nav"}}
 <header class="topbar">
@@ -1314,12 +1517,15 @@ const tplList = `
     {{else if isRef (str .Type)}}
       <div>
         <label>{{.DisplayName $.Lang}}</label>
-        <select name="f.{{.Name}}">
-          <option value="">{{t $.Lang "— все —"}}</option>
-          {{range index $refOpts .Name}}
-          <option value="{{index . "id"}}" {{if eq (index . "id") (filterVal $params $f.Name).Value}}selected{{end}}>{{index . "_label"}}</option>
-          {{end}}
-        </select>
+        <div style="display:flex;gap:4px;align-items:center">
+          <select id="flt-{{.Name}}" name="f.{{.Name}}" data-ref-entity="{{.RefEntity}}" style="flex:1;min-width:0">
+            <option value="">{{t $.Lang "— все —"}}</option>
+            {{range index $refOpts .Name}}
+            <option value="{{index . "id"}}" {{if eq (index . "id") (filterVal $params $f.Name).Value}}selected{{end}}>{{index . "_label"}}</option>
+            {{end}}
+          </select>
+          <button type="button" onclick="openRefPicker('flt-{{$f.Name}}')" style="padding:7px 10px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px;flex-shrink:0" title="{{t $.Lang "Выбрать из списка"}}">...</button>
+        </div>
       </div>
     {{else}}
       <div>
@@ -1356,6 +1562,7 @@ const tplList = `
   ondblclick="listRowDblClick(event,this)"
   oncontextmenu="listCtxMenu(event,this)"
   data-tree-id="{{index $row "id"}}"
+  data-tree-depth="{{$depth}}"
   data-tree-parent="{{index $row "parent_id"}}"
   data-predefined="{{if index $row "_is_predefined"}}1{{end}}"
   data-is-folder="{{if $isFolder}}1{{end}}"
@@ -1376,8 +1583,8 @@ const tplList = `
       <td>
         <span style="display:inline-block;width:{{mul (int $depth) 20}}px"></span>
         {{if $isFolder}}
-          <button type="button" class="tree-toggle" data-folder-id="{{index $row "id"}}" title="{{t $.Lang "Свернуть/Развернуть"}}"
-            style="background:none;border:none;cursor:pointer;padding:0 2px;font-size:13px">▼</button>
+          <button type="button" class="tree-toggle" data-folder-id="{{index $row "id"}}" data-expanded="0" data-loaded="0" title="{{t $.Lang "Свернуть/Развернуть"}}"
+            style="background:none;border:none;cursor:pointer;padding:0 2px;font-size:13px">▶</button>
           📁
         {{else}}📄{{end}}
         {{if eq (str $col.Type) "date"}}{{fmtDate (index $row $col.Name)}}{{else if isRichText (str $col.Type)}}{{richPlain (index $row $col.Name)}}{{else if isEnum (str $col.Type)}}{{enumLabel $.EnumLabels $col.Name (str (index $row $col.Name))}}{{else}}{{fmtCell (index $row $col.Name)}}{{end}}{{if index $row "_is_predefined"}} <span title="{{t $.Lang "Предопределённый"}}" style="color:#f59e0b;font-size:11px">★</span>{{end}}
@@ -1554,23 +1761,139 @@ function listRowDblClick(e,tr){
   if(tr.dataset.isFolder==='1'){window.location.href=tr.dataset.folderUrl;}
   else{listOpen(tr.dataset.openUrl);}
 }
-// Tree view: collapse/expand subtrees
-document.querySelectorAll('.tree-toggle').forEach(function(btn){
+// Tree view: lazy-load children, then collapse/expand subtrees.
+document.querySelectorAll('.tree-toggle').forEach(initTreeToggle);
+function initTreeToggle(btn){
   btn.addEventListener('click',function(e){
     e.stopPropagation();
-    var fid=btn.dataset.folderId;
-    var expanded=btn.getAttribute('data-expanded')!=='0';
-    treeSetVisible(fid,!expanded);
-    btn.setAttribute('data-expanded',expanded?'0':'1');
-    btn.textContent=expanded?'▶':'▼';
+    toggleTreeNode(btn);
   });
-});
+}
+function toggleTreeNode(btn){
+    var tr=btn.closest('tr');
+    var fid=btn.dataset.folderId;
+    var expanded=btn.getAttribute('data-expanded')==='1';
+    if(expanded){
+      treeSetVisible(fid,false);
+      btn.setAttribute('data-expanded','0');
+      btn.textContent='▶';
+      return;
+    }
+    if(btn.getAttribute('data-loaded')==='1'){
+      treeSetVisible(fid,true);
+      btn.setAttribute('data-expanded','1');
+      btn.textContent='▼';
+      return;
+    }
+    btn.disabled=true;
+    btn.textContent='…';
+    var depth=(tr&&tr.dataset.treeDepth)||'0';
+    var treeEntity={{jsJSON .Entity.Name}};
+    var subsystem={{jsJSON $.CurrentSubsystem}};
+    var url='/ui/_tree-children/'+encodeURIComponent(treeEntity)+'?parent='+encodeURIComponent(fid)+'&depth='+encodeURIComponent(depth);
+    if(subsystem){url+='&subsystem='+encodeURIComponent(subsystem);}
+    fetch(url,{credentials:'same-origin',headers:{'Accept':'application/json'}})
+      .then(function(resp){if(!resp.ok)throw new Error('HTTP '+resp.status);return resp.json();})
+      .then(function(data){
+        var rows=(data&&data.rows)||[];
+        insertTreeRows(tr, rows);
+        btn.setAttribute('data-loaded','1');
+        btn.setAttribute('data-expanded','1');
+        btn.textContent=rows.length?'▼':'•';
+      })
+      .catch(function(){
+        btn.textContent='▶';
+      })
+      .finally(function(){btn.disabled=false;});
+}
 function treeSetVisible(parentId,visible){
   document.querySelectorAll('[data-tree-parent="'+parentId+'"]').forEach(function(row){
     row.style.display=visible?'':'none';
     var childId=row.dataset.treeId;
     if(childId){treeSetVisible(childId,visible&&row.dataset.isFolder!=='1'||row.querySelector('.tree-toggle[data-expanded="1"]')!==null);}
   });
+}
+function insertTreeRows(parentTr, rows){
+  if(!parentTr||!rows.length)return;
+  var tbody=parentTr.parentNode;
+  var parentDepth=parseInt(parentTr.dataset.treeDepth||'0',10);
+  var before=parentTr.nextElementSibling;
+  while(before&&parseInt(before.dataset.treeDepth||'0',10)>parentDepth){before=before.nextElementSibling;}
+  rows.forEach(function(row){
+    var tr=makeTreeRow(row);
+    tbody.insertBefore(tr,before);
+  });
+}
+function makeTreeRow(row){
+  var tr=document.createElement('tr');
+  tr.style.cursor='pointer';
+  if(row.marked){tr.style.opacity='0.45';tr.style.textDecoration='line-through';}
+  tr.dataset.treeId=row.id||'';
+  tr.dataset.treeDepth=String(row.depth||0);
+  tr.dataset.treeParent=row.parent_id||'';
+  tr.dataset.predefined=row.predefined?'1':'';
+  tr.dataset.isFolder=row.is_folder?'1':'';
+  tr.dataset.folderUrl=row.folder_url||'';
+  tr.dataset.markUrl=row.mark_url||'';
+  tr.dataset.delUrl=row.delete_url||'';
+  tr.dataset.posted=row.posted?'1':'';
+  tr.dataset.marked=row.marked?'1':'';
+  tr.dataset.unpostUrl=row.unpost_url||'';
+  tr.dataset.unmarkUrl=row.unmark_url||'';
+  tr.dataset.activityEnabled=row.activity_enabled?'1':'';
+  tr.dataset.activityInactive=row.activity_inactive?'1':'';
+  tr.dataset.activityHideUrl=row.activity_hide_url||'';
+  tr.dataset.activityShowUrl=row.activity_show_url||'';
+  tr.dataset.openUrl=row.open_url||'';
+  tr.onclick=function(e){listRowClick(e,tr);};
+  tr.ondblclick=function(e){listRowDblClick(e,tr);};
+  tr.oncontextmenu=function(e){listCtxMenu(e,tr);};
+  var cells=row.cells||[];
+  var treeCell=row.tree_cell||0;
+  for(var i=0;i<cells.length;i++){
+    var td=document.createElement('td');
+    if(i===treeCell){
+      var indent=document.createElement('span');
+      indent.style.display='inline-block';
+      indent.style.width=((row.depth||0)*20)+'px';
+      td.appendChild(indent);
+      if(row.is_folder){
+        var btn=document.createElement('button');
+        btn.type='button';
+        btn.className='tree-toggle';
+        btn.setAttribute('data-folder-id',row.id||'');
+        btn.setAttribute('data-expanded','0');
+        btn.setAttribute('data-loaded','0');
+        btn.title='Свернуть/Развернуть';
+        btn.style.cssText='background:none;border:none;cursor:pointer;padding:0 2px;font-size:13px';
+        btn.textContent='▶';
+        initTreeToggle(btn);
+        td.appendChild(btn);
+        td.appendChild(document.createTextNode(' 📁 '));
+      }else{
+        td.appendChild(document.createTextNode('📄 '));
+      }
+      td.appendChild(document.createTextNode(cells[i]||''));
+      if(row.predefined){
+        var star=document.createElement('span');
+        star.title='Предопределённый';
+        star.style.cssText='color:#f59e0b;font-size:11px';
+        star.textContent=' ★';
+        td.appendChild(star);
+      }
+    }else{
+      td.textContent=cells[i]||'';
+    }
+    tr.appendChild(td);
+  }
+  var action=document.createElement('td');
+  var a=document.createElement('a');
+  a.className=row.is_folder?'btn btn-sm btn-secondary':'btn btn-sm btn-primary';
+  a.href=row.is_folder?(row.folder_url||'#'):(row.open_url||'#');
+  a.textContent=row.is_folder?'▶ Войти':'Открыть';
+  action.appendChild(a);
+  tr.appendChild(action);
+  return tr;
 }
 // listMenuItems — единый источник пунктов меню строки списка. Возвращает массив
 // {label, fn, danger, disabled}. Используется и контекстным меню (ПКМ), и кнопкой
@@ -2297,10 +2620,10 @@ function openRefPicker(selOrId) {
   if (!sel) return;
   var refEntity = sel.getAttribute('data-ref-entity') || '';
   var allowCreate = sel.getAttribute('data-ref-allow-create') === '1';
-  var opts = [];
+  var localOpts = [];
   for (var i = 0; i < sel.options.length; i++) {
     var o = sel.options[i];
-    if (o.value) opts.push({id: o.value, label: o.text});
+    if (o.value) localOpts.push({id: o.value, label: o.text});
   }
   var old = document.getElementById('_ref-picker-modal');
   if (old) old.remove();
@@ -2315,42 +2638,108 @@ function openRefPicker(selOrId) {
   inner += '</div>';
   inner += '<input id="_rp-search" type="text" placeholder="Поиск..." autocomplete="off" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;font-size:14px;margin-bottom:10px;outline:none">';
   inner += '<div id="_rp-list" style="overflow-y:auto;flex:1;border:1px solid #e2e8f0;border-radius:7px">';
-  if (opts.length === 0) {
-    inner += '<div style="padding:16px;color:#94a3b8;font-size:13px;text-align:center">Список пуст</div>';
-  }
   inner += '</div>';
-  inner += '<div style="margin-top:12px;text-align:right"><button type="button" id="_rp-cancel" style="padding:6px 18px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px">Отмена</button></div>';
+  inner += '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px"><div id="_rp-status" style="font-size:12px;color:#94a3b8"></div><button type="button" id="_rp-cancel" style="padding:6px 18px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px">Отмена</button></div>';
   inner += '</div>';
   modal.innerHTML = inner;
   document.body.appendChild(modal);
   var list = document.getElementById('_rp-list');
-  if (opts.length > 0 && list) {
+  var status = document.getElementById('_rp-status');
+  function renderItems(opts) {
+    if (!list) return;
+    list.innerHTML = '';
+    if (!opts || opts.length === 0) {
+      var empty = document.createElement('div');
+      empty.style.cssText = 'padding:16px;color:#94a3b8;font-size:13px;text-align:center';
+      empty.textContent = 'Список пуст';
+      list.appendChild(empty);
+      return;
+    }
     for (var i = 0; i < opts.length; i++) {
       var item = document.createElement('div');
       item.className = '_rp-item';
       item.setAttribute('data-id', opts[i].id);
+      item.setAttribute('data-label', opts[i].label);
       item.style.cssText = 'padding:9px 14px;cursor:pointer;border-bottom:1px solid #f1f5f9;font-size:14px;color:#1e293b';
       item.textContent = opts[i].label;
       list.appendChild(item);
     }
   }
+  function renderLocal(q) {
+    q = (q || '').toLowerCase();
+    var filtered = localOpts;
+    if (q) {
+      filtered = localOpts.filter(function(opt) {
+        return String(opt.label || '').toLowerCase().indexOf(q) >= 0;
+      });
+    }
+    renderItems(filtered);
+    if (status) status.textContent = '';
+  }
+  function selectItem(item) {
+    if (!window._rpTarget) return;
+    var id = item.getAttribute('data-id') || '';
+    var label = item.getAttribute('data-label') || item.textContent || id;
+    var exists = false;
+    for (var i = 0; i < window._rpTarget.options.length; i++) {
+      if (window._rpTarget.options[i].value === id) { exists = true; break; }
+    }
+    if (!exists && id) {
+      var opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = label;
+      window._rpTarget.appendChild(opt);
+    }
+    window._rpTarget.value = id;
+    try { window._rpTarget.dispatchEvent(new Event('change', {bubbles:true})); } catch(e) {}
+  }
+  var requestSeq = 0;
+  var searchTimer = null;
+  function loadServer(q) {
+    if (!refEntity || refEntity === '_users' || !window.fetch) {
+      renderLocal(q);
+      return;
+    }
+    var seq = ++requestSeq;
+    if (status) status.textContent = 'Загрузка...';
+    var url = '/ui/_ref-options/' + encodeURIComponent(refEntity) + '?limit=50&q=' + encodeURIComponent(q || '');
+    fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+      .then(function(resp) {
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        return resp.json();
+      })
+      .then(function(data) {
+        if (seq !== requestSeq) return;
+        var rows = (data && data.items) || [];
+        var opts = rows.map(function(row) {
+          var id = row && row.id != null ? String(row.id) : '';
+          return { id: id, label: String((row && row._label) || id) };
+        }).filter(function(opt) { return opt.id !== ''; });
+        renderItems(opts);
+        if (status) {
+          var total = data && typeof data.total === 'number' ? data.total : opts.length;
+          status.textContent = total > opts.length ? 'Показано ' + opts.length + ' из ' + total : '';
+        }
+      })
+      .catch(function() {
+        if (seq !== requestSeq) return;
+        renderLocal(q);
+      });
+  }
   window._rpTarget = sel;
   var search = document.getElementById('_rp-search');
   search.focus();
   search.addEventListener('input', function() {
-    var q = this.value.toLowerCase();
-    var items = document.querySelectorAll('._rp-item');
-    for (var i = 0; i < items.length; i++) {
-      items[i].style.display = items[i].textContent.toLowerCase().indexOf(q) >= 0 ? '' : 'none';
-    }
+    var q = this.value;
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(function() { loadServer(q); }, 180);
   });
+  renderItems(localOpts);
+  loadServer('');
   document.getElementById('_rp-list').addEventListener('click', function(e) {
     var item = e.target.closest('._rp-item');
     if (!item) return;
-    if (window._rpTarget) {
-      window._rpTarget.value = item.getAttribute('data-id');
-      try { window._rpTarget.dispatchEvent(new Event('change', {bubbles:true})); } catch(e) {}
-    }
+    selectItem(item);
     modal.remove();
   });
   var createBtn = document.getElementById('_rp-create');
@@ -3059,10 +3448,13 @@ const tplRegister = `
   <div style="display:flex;flex-direction:column;gap:2px">
     <label style="font-size:11px;color:#64748b">{{.DisplayName $.Lang}}</label>
     {{if .RefEntity}}
-    <select name="flt_{{.Name}}" style="padding:6px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px">
-      <option value="">— {{t $.Lang "все"}} —</option>
-      {{$cur := index $flt .Name}}{{range index $refOpts .Name}}<option value="{{index . "id"}}" {{if eq (str (index . "id")) $cur}}selected{{end}}>{{index . "_label"}}</option>{{end}}
-    </select>
+    <div style="display:flex;gap:4px;align-items:center">
+      <select id="regflt-{{.Name}}" name="flt_{{.Name}}" data-ref-entity="{{.RefEntity}}" style="padding:6px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;min-width:0">
+        <option value="">— {{t $.Lang "все"}} —</option>
+        {{$cur := index $flt .Name}}{{range index $refOpts .Name}}<option value="{{index . "id"}}" {{if eq (str (index . "id")) $cur}}selected{{end}}>{{index . "_label"}}</option>{{end}}
+      </select>
+      <button type="button" onclick="openRefPicker('regflt-{{.Name}}')" style="padding:6px 9px;border:1px solid #e2e8f0;border-radius:6px;background:#f8fafc;cursor:pointer;font-size:12px;flex-shrink:0" title="{{t $.Lang "Выбрать из списка"}}">...</button>
+    </div>
     {{else}}
     <input type="text" name="flt_{{.Name}}" value="{{index $flt .Name}}" style="padding:6px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px">
     {{end}}
@@ -3215,10 +3607,12 @@ const tplProcessor = `
         </select>
       {{else if isRef (str .Type)}}
         <div style="display:flex;gap:6px;align-items:center">
-          <select name="{{$pname}}" style="flex:1">
+          <select id="pp-{{$pname}}" name="{{$pname}}" style="flex:1" data-ref-entity="{{index $.ProcessorRefEntity $pname}}">
             <option value="">{{t $.Lang "— выбрать —"}}</option>
             {{with index $.RefOptions $pname}}{{range .}}<option value="{{index . "id"}}" {{if eq (index . "id") (index $.ParamValues $pname)}}selected{{end}}>{{index . "_label"}}</option>{{end}}{{end}}
           </select>
+          <button type="button" onclick="openRefPicker('pp-{{$pname}}')" style="padding:6px 10px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px;flex-shrink:0" title="{{t $.Lang "Выбрать из списка"}}">...</button>
+          <button type="button" onclick="openRefCurrent('pp-{{$pname}}')" style="padding:6px 9px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px;flex-shrink:0" title="{{t $.Lang "Открыть карточку"}}">🔍</button>
         </div>
       {{else}}
         <input type="text" name="{{$pname}}" value="{{index $.ParamValues $pname}}">
@@ -3594,58 +3988,6 @@ const tplInfoReg = `
   </div>
 </form>
 </div>
-<script>
-	function openRefPicker(selOrId){
-	  var sel=(typeof selOrId==='string')?document.getElementById(selOrId):selOrId;
-	  if(!sel)return;
-	  var opts=[];
-	  for(var i=0;i<sel.options.length;i++){
-	    var o=sel.options[i];
-	    if(o.value)opts.push({id:o.value,label:o.text});
-	  }
-	  var old=document.getElementById('_ref-picker-modal');
-	  if(old)old.remove();
-	  var modal=document.createElement('div');
-	  modal.id='_ref-picker-modal';
-	  modal.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:9999;display:flex;align-items:center;justify-content:center';
-	  var inner='<div style="background:#fff;border-radius:10px;padding:20px;width:480px;max-width:95vw;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.18)">';
-	  inner+='<div style="font-weight:600;font-size:15px;margin-bottom:12px;color:#1e293b">Выбор из списка</div>';
-	  inner+='<input id="_rp-search" type="text" placeholder="Поиск..." autocomplete="off" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;font-size:14px;margin-bottom:10px;outline:none">';
-	  inner+='<div id="_rp-list" style="overflow-y:auto;flex:1;border:1px solid #e2e8f0;border-radius:7px">';
-	  if(opts.length===0){inner+='<div style="padding:16px;color:#94a3b8;font-size:13px;text-align:center">Список пуст</div>';}
-	  inner+='</div>';
-	  inner+='<div style="margin-top:12px;text-align:right"><button type="button" id="_rp-cancel" style="padding:6px 18px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px">Отмена</button></div>';
-	  inner+='</div>';
-	  modal.innerHTML=inner;
-	  document.body.appendChild(modal);
-	  var list=document.getElementById('_rp-list');
-	  if(opts.length>0&&list){
-	    for(var j=0;j<opts.length;j++){
-	      var item=document.createElement('div');
-	      item.className='_rp-item';
-	      item.setAttribute('data-id',opts[j].id);
-	      item.style.cssText='padding:9px 14px;cursor:pointer;border-bottom:1px solid #f1f5f9;font-size:14px;color:#1e293b';
-	      item.textContent=opts[j].label;
-	      list.appendChild(item);
-	    }
-	  }
-	  window._rpTarget=sel;
-	  var search=document.getElementById('_rp-search');
-	  search.focus();
-	  search.addEventListener('input',function(){
-	    var q=this.value.toLowerCase();
-	    document.querySelectorAll('._rp-item').forEach(function(el){el.style.display=el.textContent.toLowerCase().indexOf(q)>=0?'':'none';});
-	  });
-	  document.getElementById('_rp-list').addEventListener('click',function(e){
-	    var item=e.target.closest('._rp-item');
-	    if(!item)return;
-	    if(window._rpTarget)window._rpTarget.value=item.getAttribute('data-id');
-	    modal.remove();
-	  });
-	  document.getElementById('_rp-cancel').addEventListener('click',function(){modal.remove();});
-	  modal.addEventListener('click',function(e){if(e.target===modal)modal.remove();});
-	}
-</script>
 </main></div></body></html>
 {{end}}
 `
@@ -3662,12 +4004,16 @@ const tplConstants = `
 <div class="form-group">
   <label>{{.DisplayLabel $.Lang}}</label>
   {{if .RefEntity}}
-    <select name="{{.Name}}">
-      <option value="">{{t $.Lang "— не выбрано —"}}</option>
-      {{range index $.RefOpts .Name}}
-      <option value="{{index . "id"}}" {{if eq (index . "id") (index $.Values $c.Name)}}selected{{end}}>{{index . "_label"}}</option>
-      {{end}}
-    </select>
+    <div style="display:flex;gap:6px;align-items:center">
+      <select id="const-{{.Name}}" name="{{.Name}}" data-ref-entity="{{.RefEntity}}" style="flex:1;min-width:0">
+        <option value="">{{t $.Lang "— не выбрано —"}}</option>
+        {{range index $.RefOpts .Name}}
+        <option value="{{index . "id"}}" {{if eq (index . "id") (index $.Values $c.Name)}}selected{{end}}>{{index . "_label"}}</option>
+        {{end}}
+      </select>
+      <button type="button" onclick="openRefPicker('const-{{$c.Name}}')" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px;flex-shrink:0" title="{{t $.Lang "Выбрать из списка"}}">...</button>
+      <button type="button" onclick="openRefCurrent('const-{{$c.Name}}')" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px;flex-shrink:0" title="{{t $.Lang "Открыть карточку"}}">🔍</button>
+    </div>
   {{else if eq (str .Type) "date"}}
     <input type="date" name="{{.Name}}" value="{{index $.Values .Name}}">
   {{else if eq (str .Type) "bool"}}
@@ -3723,12 +4069,15 @@ const tplJournal = `
       <label>{{.Field}}</label>
       {{if index $.FilterOptions .Field}}
       {{$f := .Field}}
-      <select name="f.{{$f}}">
-        <option value="">{{t $.Lang "— все —"}}</option>
-        {{range index $.FilterOptions $f}}
-        <option value="{{index . "id"}}" {{if eq (index . "id") (filterVal $params $f).Value}}selected{{end}}>{{index . "_label"}}</option>
-        {{end}}
-      </select>
+      <div style="display:flex;gap:4px;align-items:center">
+        <select id="jflt-{{$f}}" name="f.{{$f}}" data-ref-entity="{{index $.FilterRefEntities $f}}" style="flex:1;min-width:0">
+          <option value="">{{t $.Lang "— все —"}}</option>
+          {{range index $.FilterOptions $f}}
+          <option value="{{index . "id"}}" {{if eq (index . "id") (filterVal $params $f).Value}}selected{{end}}>{{index . "_label"}}</option>
+          {{end}}
+        </select>
+        <button type="button" onclick="openRefPicker('jflt-{{$f}}')" style="padding:7px 10px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px;flex-shrink:0" title="{{t $.Lang "Выбрать из списка"}}">...</button>
+      </div>
       {{else}}
       <input type="text" name="f.{{.Field}}" value="{{(filterVal $params .Field).Value}}">
       {{end}}
