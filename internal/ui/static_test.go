@@ -99,3 +99,39 @@ func TestStaticManagedJS(t *testing.T) {
 		t.Error("/static/managed.js содержит Go-template маркеры")
 	}
 }
+
+// TestStaticJSRevalidates проверяет, что приложенческий JS отдаётся с ETag и
+// ревалидацией (а не immutable-кэшем на год по неверсионированному пути): после
+// обновления билда клиент не должен залипнуть на старом скрипте.
+func TestStaticJSRevalidates(t *testing.T) {
+	r := chi.NewRouter()
+	mountStatic(r)
+
+	for _, path := range []string{"/static/ui.js", "/static/managed.js"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s status = %d", path, rr.Code)
+		}
+		etag := rr.Header().Get("ETag")
+		if etag == "" {
+			t.Fatalf("%s не отдаёт ETag", path)
+		}
+		if cc := rr.Header().Get("Cache-Control"); strings.Contains(cc, "immutable") {
+			t.Fatalf("%s: immutable-кэш по неверсионированному пути залипает после обновления, Cache-Control=%q", path, cc)
+		}
+
+		// Повторный запрос с If-None-Match должен вернуть 304 без тела.
+		req2 := httptest.NewRequest(http.MethodGet, path, nil)
+		req2.Header.Set("If-None-Match", etag)
+		rr2 := httptest.NewRecorder()
+		r.ServeHTTP(rr2, req2)
+		if rr2.Code != http.StatusNotModified {
+			t.Fatalf("%s с совпавшим ETag: status = %d, ожидался 304", path, rr2.Code)
+		}
+		if rr2.Body.Len() != 0 {
+			t.Fatalf("%s: 304 не должен нести тело (%d байт)", path, rr2.Body.Len())
+		}
+	}
+}
