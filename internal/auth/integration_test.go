@@ -82,7 +82,7 @@ func TestRepo_Sessions(t *testing.T) {
 
 	user, _ := repo.Create(ctx, "sesstest", "pass", "", false)
 
-	token, err := repo.CreateSession(ctx, user.ID)
+	token, err := repo.CreateSession(ctx, user.ID, auth.SessionMeta{Kind: auth.SessionKindEnterprise})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestMiddleware_WithUsers_RequiresSession(t *testing.T) {
 
 	// Valid session → pass through
 	user, _ := repo.Authenticate(ctx, "mwtest", "pass")
-	token, _ := repo.CreateSession(ctx, user.ID)
+	token, _ := repo.CreateSession(ctx, user.ID, auth.SessionMeta{})
 	req2 := httptest.NewRequest(http.MethodGet, "/ui", nil)
 	req2.AddCookie(&http.Cookie{Name: "onebase_session", Value: token})
 	rr2 := httptest.NewRecorder()

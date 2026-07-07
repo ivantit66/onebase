@@ -65,7 +65,7 @@ func newSessionFixture(t *testing.T) (*auth.Handlers, string) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	token, err := repo.CreateSession(ctx, user.ID)
+	token, err := repo.CreateSession(ctx, user.ID, auth.SessionMeta{})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestMiddleware_TkQueryParamRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	token, err := repo.CreateSession(ctx, user.ID)
+	token, err := repo.CreateSession(ctx, user.ID, auth.SessionMeta{})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}

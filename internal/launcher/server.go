@@ -38,7 +38,7 @@ func NewServer(store *Store, runner *Runner) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &handler{store: store, runner: runner}
+	h := &handler{store: store, runner: runner, isoBrowser: systemBrowser{}}
 	if b, err := i18n.Load(i18n.EmbeddedLocales, ""); err == nil {
 		launcherBundle = b
 	}
@@ -51,21 +51,14 @@ func (s *Server) URL() string { return "http://" + s.ln.Addr().String() }
 // Done returns a channel that is closed when /quit is received.
 func (s *Server) Done() <-chan struct{} { return s.quit }
 
-// Close shuts down the HTTP server, closes auth pools and kills any running
-// base processes — otherwise onebase-gui.exe children survive as zombies when
-// the launcher window is closed via the X button.
+// Close shuts down the HTTP server and closes auth pools. Запущенные базы
+// НАМЕРЕННО переживают закрытие лаунчера (план 78): лаунчер — окно запуска,
+// а не владелец сеансов, как в 1С — открытые окна Предприятия продолжают
+// работать. Раньше здесь был StopAll («иначе дети-зомби»), но с усыновлением
+// (handler.baseRunning) следующий экземпляр лаунчера видит живые базы,
+// открывает их и умеет останавливать — зомби больше не проблема. Явная
+// остановка всего — кнопка «Стоп всё» (killAll).
 func (s *Server) Close() {
-	if s.h != nil && s.h.runner != nil {
-		var ports []int
-		if s.h.store != nil {
-			if bases, err := s.h.store.List(); err == nil {
-				for _, b := range bases {
-					ports = append(ports, b.Port)
-				}
-			}
-		}
-		s.h.runner.StopAll(ports)
-	}
 	CloseAuthPools()
 	if s.httpSrv != nil {
 		s.httpSrv.Close()
@@ -106,6 +99,8 @@ func (s *Server) ListenAndServe() error {
 	r.Post("/bases/{id}/delete", s.h.delete)
 	r.Post("/bases/{id}/move", s.h.move)
 	r.Post("/bases/{id}/start", s.h.start)
+	r.Post("/bases/{id}/start-isolated", s.h.startIsolated)
+	r.Post("/bases/{id}/profiles/clean", s.h.cleanProfiles)
 	r.Post("/bases/{id}/stop", s.h.stop)
 	r.Post("/bases/{id}/config/export", s.h.configExport)
 	r.Post("/bases/{id}/config/import", s.h.configImport)
@@ -178,6 +173,7 @@ func (s *Server) ListenAndServe() error {
 		r.Post("/bases/{id}/configurator/admin/users/lang", s.h.cfgAdminUserLang)
 		r.Get("/bases/{id}/configurator/admin/sessions", s.h.cfgAdminSessions)
 		r.Post("/bases/{id}/configurator/admin/sessions/kick", s.h.cfgAdminSessionKick)
+		r.Post("/bases/{id}/configurator/admin/sessions/limit", s.h.cfgAdminSessionLimit)
 		r.Get("/bases/{id}/configurator/admin/audit", s.h.cfgAdminAudit)
 		r.Post("/bases/{id}/configurator/admin/audit/save", s.h.cfgAdminAuditSave)
 		r.Get("/bases/{id}/configurator/admin/settings", s.h.cfgAdminSettings)

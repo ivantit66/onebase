@@ -182,7 +182,9 @@ func (h *handler) cfgLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := repo.CreateSession(r.Context(), user.ID)
+	token, err := repo.CreateSession(r.Context(), user.ID, auth.SessionMeta{
+		Kind: auth.SessionKindConfigurator, IP: r.RemoteAddr, UserAgent: r.UserAgent(),
+	})
 	if err != nil {
 		http.Error(w, tr(lang, "Внутренняя ошибка"), 500)
 		return
@@ -263,6 +265,10 @@ func (h *handler) cfgAuthMiddleware(next http.Handler) http.Handler {
 			http.Redirect(w, r, "/bases/"+id+"/configurator/login", http.StatusFound)
 			return
 		}
+
+		// last_seen_at и для сессий конфигуратора — иначе они выглядят
+		// «мёртвыми» в админке активных сессий (план 78). Троттлится внутри.
+		repo.TouchSession(r.Context(), cookie.Value, time.Now())
 
 		ctx := context.WithValue(r.Context(), cfgUserKey{}, user)
 		next.ServeHTTP(w, r.WithContext(ctx))

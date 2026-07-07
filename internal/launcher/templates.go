@@ -91,6 +91,9 @@ const tplIndex = `
   <a class="tbtn" href="/bases/{{.Selected.ID}}/start" onclick="return startBase(this,'{{.Selected.ID}}')">
     <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg> {{t $.Lang "Предприятие"}}
   </a>
+  <a class="tbtn" href="/bases/{{.Selected.ID}}/start-isolated" onclick="return startIsolated(this,'{{.Selected.ID}}')" title="{{t $.Lang "Отдельное окно с изолированным профилем браузера — можно войти под другим пользователем"}}">
+    <svg viewBox="0 0 24 24"><path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg> {{t $.Lang "Новое окно"}}
+  </a>
   <a class="tbtn" href="/bases/{{.Selected.ID}}/configurator">
     <svg viewBox="0 0 24 24"><path d="M22 9V7h-2V5c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2v-2h-2V9h2zm-4 10H4V5h14v14z"/><path d="M6 13h5v4H6zm6-6h4v3h-4zm0 4h4v6h-4zM6 7h5v5H6z"/></svg> {{t $.Lang "Конфигуратор"}}
   </a>
@@ -178,6 +181,9 @@ const tplIndex = `
     <a href="{{.BaseURL}}" target="_blank" style="font-size:12px;color:#1a5fa8">{{t $.Lang "Открыть в браузере"}} ↗</a>
   </div>
   {{end}}
+  <div style="margin-top:12px">
+    <a href="#" onclick="return cleanProfiles('{{.Selected.ID}}')" style="font-size:11px;color:#94a3b8">{{t $.Lang "Очистить изолированные профили"}}</a>
+  </div>
 </div>
 {{end}}
 </div>
@@ -202,6 +208,47 @@ function quitLauncher() {
   setTimeout(function(){ window.close(); }, 200);
   return false;
 }
+function startIsolated(el, id) {
+  el.preventDefault ? el.preventDefault() : (el.returnValue = false);
+  // Окно открывает сервер лаунчера (внешний браузер с отдельным профилем),
+  // window.open здесь не нужен — работает и из GUI-режима (WebView).
+  fetch('/bases/' + id + '/start-isolated', {method:'POST'})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d && d.error) { alert('Ошибка запуска:\n' + d.error); }
+      else { setTimeout(function(){ window.location.href = '/?sel=' + id; }, 500); }
+    })
+    .catch(function(e){ alert('Ошибка запуска: ' + e); });
+  return false;
+}
+function cleanProfiles(id) {
+  if (!confirm('Удалить незанятые изолированные профили браузера этой базы?')) return false;
+  fetch('/bases/' + id + '/profiles/clean', {method:'POST'})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d && d.error) alert('Ошибка: ' + d.error);
+      else alert('Удалено профилей: ' + (d.removed || 0));
+    })
+    .catch(function(e){ alert('Ошибка: ' + e); });
+  return false;
+}
+// showStartError показывает ошибку запуска в уже открытом окне-заготовке.
+// Раньше окно закрывалось, а alert уходил под него — в WebView2 это выглядело
+// как «вечный белый экран» (закрытие попапа может не сработать, и ошибка
+// оставалась невидимой за ним).
+function showStartError(win, msg) {
+  var text = String(msg);
+  if (win) {
+    try {
+      win.document.open();
+      win.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>onebase</title></head><body style="font-family:Segoe UI,Arial,sans-serif;padding:28px"><h3 style="color:#c00;margin:0 0 12px">Ошибка запуска базы</h3><pre id="err" style="white-space:pre-wrap;font:13px Consolas,monospace;color:#333"></pre></body></html>');
+      win.document.getElementById('err').textContent = text;
+      win.document.close();
+      return;
+    } catch (e) { try { win.close(); } catch (e2) {} }
+  }
+  alert('Ошибка запуска:\n' + text);
+}
 function startBase(el, id) {
   el.preventDefault ? el.preventDefault() : (el.returnValue = false);
   var btn = el.target || el;
@@ -214,15 +261,13 @@ function startBase(el, id) {
       if (d.url) {
         if (win) win.location.href = d.url;
         setTimeout(function(){ window.location.href = '/?sel=' + id; }, 800);
-      } else if (d.error) {
-        if (win) win.close();
-        alert('Ошибка запуска:\n' + d.error);
+      } else {
+        showStartError(win, d.error || 'Неизвестная ошибка');
         if (btn.innerHTML) btn.innerHTML = origText;
       }
     })
     .catch(function(e){
-      if (win) win.close();
-      alert('Ошибка запуска: ' + e);
+      showStartError(win, e);
       if (btn.innerHTML) btn.innerHTML = origText;
     });
   return false;

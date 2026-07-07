@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ivantit66/onebase/internal/storage"
 )
@@ -41,6 +42,10 @@ func (r *Repo) Middleware(next http.Handler) http.Handler {
 			redirectToLogin(w, req)
 			return
 		}
+
+		// last_seen_at для админки сессий (план 78); троттлится внутри,
+		// ошибка не критична.
+		r.TouchSession(ctx, token, time.Now())
 
 		next.ServeHTTP(w, req.WithContext(r.contextWithUser(ctx, user)))
 	})

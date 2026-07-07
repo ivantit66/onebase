@@ -255,6 +255,7 @@ func (s *Server) adminUserCard(w http.ResponseWriter, r *http.Request) {
 			} else if err := s.authRepo.UpdatePassword(r.Context(), userID, newPwd); err != nil {
 				data["Error"] = s.errText(r, err)
 			} else {
+				s.revokeSessionsOnPasswordChange(r, userID, u.Login)
 				data["Success"] = s.tr(lang, "Пароль изменён")
 			}
 		}
@@ -368,10 +369,29 @@ func (s *Server) adminUserPasswd(w http.ResponseWriter, r *http.Request) {
 			adminTmpl.ExecuteTemplate(w, "admin-passwd", data)
 			return
 		}
+		s.revokeSessionsOnPasswordChange(r, userID, userLogin)
 		data["Success"] = true
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	adminTmpl.ExecuteTemplate(w, "admin-passwd", data)
+}
+
+// revokeSessionsOnPasswordChange — политика плана 78: смена пароля админом
+// завершает все сессии пользователя; смена собственного пароля — все сессии,
+// кроме текущей (текущее окно продолжает работать). Событие пишется в аудит.
+func (s *Server) revokeSessionsOnPasswordChange(r *http.Request, targetUserID, targetLogin string) {
+	ctx := r.Context()
+	actor := auth.UserFromContext(ctx)
+	if actor != nil && actor.ID == targetUserID {
+		if cookie, err := r.Cookie("onebase_session"); err == nil && cookie.Value != "" {
+			s.authRepo.KickOtherSessions(ctx, targetUserID, cookie.Value)
+		} else {
+			s.authRepo.KickUserSessions(ctx, targetUserID)
+		}
+	} else {
+		s.authRepo.KickUserSessions(ctx, targetUserID)
+	}
+	s.logSessionAudit(r, "password_change_sessions_revoked", targetLogin, targetUserID)
 }
 
 // selfPasswd lets any authenticated user change their own password.
@@ -387,9 +407,11 @@ func (s *Server) selfPasswd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := map[string]any{
-		"UserLogin": u.Login,
-		"BackURL":   "/ui",
-		"NeedOld":   true,
+		"UserLogin":   u.Login,
+		"BackURL":     "/ui",
+		"NeedOld":     true,
+		"SelfService": true,
+		"OthersOut":   r.URL.Query().Get("others_out") == "1",
 	}
 	if r.Method == http.MethodPost {
 		r.ParseForm()
@@ -416,6 +438,7 @@ func (s *Server) selfPasswd(w http.ResponseWriter, r *http.Request) {
 			adminTmpl.ExecuteTemplate(w, "admin-passwd", data)
 			return
 		}
+		s.revokeSessionsOnPasswordChange(r, u.ID, u.Login)
 		data["Success"] = true
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -448,7 +471,93 @@ func (s *Server) adminSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessions, _ := s.authRepo.ActiveSessions(r.Context())
-	adminTmpl.ExecuteTemplate(w, "admin-sessions", map[string]any{"Sessions": sessions})
+	limit := 0
+	if s.store != nil {
+		limit = s.store.GetMaxSessionsPerUser(r.Context())
+	}
+	adminTmpl.ExecuteTemplate(w, "admin-sessions", map[string]any{
+		"Sessions":   sessionVMs(sessions),
+		"Limit":      limit,
+		"LimitSaved": r.URL.Query().Get("limit_saved") == "1",
+	})
+}
+
+// adminSessionLimit сохраняет политику «максимум сессий на пользователя»
+// (план 78, п. 1.6; ключ auth.max_sessions_per_user в _settings).
+func (s *Server) adminSessionLimit(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		s.renderForbidden(w, r)
+		return
+	}
+	r.ParseForm()
+	n, err := strconv.Atoi(strings.TrimSpace(r.FormValue("limit")))
+	if err != nil || n < 0 {
+		n = 0
+	}
+	if s.store != nil {
+		s.store.SaveMaxSessionsPerUser(r.Context(), n)
+	}
+	http.Redirect(w, r, "/ui/admin/sessions?limit_saved=1", http.StatusFound)
+}
+
+// sessionVM — строка экрана активных сессий: SessionInfo + отображаемые поля.
+type sessionVM struct {
+	*auth.SessionInfo
+	KindLabel string
+	ShortUA   string
+}
+
+func sessionVMs(sessions []*auth.SessionInfo) []sessionVM {
+	vms := make([]sessionVM, 0, len(sessions))
+	for _, si := range sessions {
+		vm := sessionVM{SessionInfo: si, ShortUA: shortUserAgent(si.UserAgent)}
+		switch si.Kind {
+		case auth.SessionKindConfigurator:
+			vm.KindLabel = "Конфигуратор"
+		case auth.SessionKindEnterprise:
+			vm.KindLabel = "Предприятие"
+		default:
+			vm.KindLabel = "—"
+		}
+		vms = append(vms, vm)
+	}
+	return vms
+}
+
+// shortUserAgent сжимает user-agent до узнаваемого имени браузера.
+func shortUserAgent(ua string) string {
+	switch {
+	case ua == "":
+		return ""
+	case strings.Contains(ua, "Edg/"):
+		return "Edge"
+	case strings.Contains(ua, "OPR/"):
+		return "Opera"
+	case strings.Contains(ua, "Chrome/"):
+		return "Chrome"
+	case strings.Contains(ua, "Firefox/"):
+		return "Firefox"
+	case strings.Contains(ua, "Safari/"):
+		return "Safari"
+	}
+	if r := []rune(ua); len(r) > 40 {
+		return string(r[:40]) + "…"
+	}
+	return ua
+}
+
+// logSessionAudit пишет событие сессионного аудита (kick/revoke). recordID
+// аудита типизирован как UUID, поэтому туда идёт UUID пользователя (или ""),
+// а логин цели — в entityName.
+func (s *Server) logSessionAudit(r *http.Request, action, targetLogin, targetUserID string) {
+	if s.store == nil {
+		return
+	}
+	var actorID, actorLogin string
+	if u := auth.UserFromContext(r.Context()); u != nil {
+		actorID, actorLogin = u.ID, u.Login
+	}
+	s.store.LogAction(r.Context(), action, "", targetLogin, targetUserID, actorID, actorLogin, r.RemoteAddr)
 }
 
 func (s *Server) adminKickUser(w http.ResponseWriter, r *http.Request) {
@@ -458,9 +567,42 @@ func (s *Server) adminKickUser(w http.ResponseWriter, r *http.Request) {
 	}
 	login := chi.URLParam(r, "login")
 	if s.authRepo != nil {
-		s.authRepo.KickUser(r.Context(), login)
+		if err := s.authRepo.KickUser(r.Context(), login); err == nil {
+			s.logSessionAudit(r, "session_kick_all", login, "")
+		}
 	}
 	http.Redirect(w, r, "/ui/admin/sessions", http.StatusFound)
+}
+
+// adminKickSession завершает одну сессию по public_id (план 78).
+func (s *Server) adminKickSession(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		s.renderForbidden(w, r)
+		return
+	}
+	r.ParseForm()
+	publicID := r.FormValue("public_id")
+	if publicID != "" && s.authRepo != nil {
+		if err := s.authRepo.KickSession(r.Context(), publicID); err == nil {
+			s.logSessionAudit(r, "session_kick", r.FormValue("login"), "")
+		}
+	}
+	http.Redirect(w, r, "/ui/admin/sessions", http.StatusFound)
+}
+
+// selfLogoutOthers — «выйти со всех устройств, кроме текущего» (план 78).
+func (s *Server) selfLogoutOthers(w http.ResponseWriter, r *http.Request) {
+	u := auth.UserFromContext(r.Context())
+	if u == nil {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	if cookie, err := r.Cookie("onebase_session"); err == nil && cookie.Value != "" && s.authRepo != nil {
+		if err := s.authRepo.KickOtherSessions(r.Context(), u.ID, cookie.Value); err == nil {
+			s.logSessionAudit(r, "session_kick_all", u.Login, u.ID)
+		}
+	}
+	http.Redirect(w, r, "/ui/profile/passwd?others_out=1", http.StatusFound)
 }
 
 func (s *Server) adminAPITokens(w http.ResponseWriter, r *http.Request) {
@@ -790,6 +932,16 @@ const tplAdminPasswd = `{{define "admin-passwd"}}` + adminHead + `
   </div>
 </form>
 </div>
+{{if .SelfService}}
+<div class="card" style="max-width:500px;margin-top:16px">
+  <h3 style="margin-bottom:8px">Сессии</h3>
+  {{if .OthersOut}}<div style="background:#f0fdf4;border:1px solid #bbf7d0;color:#16a34a;padding:10px;border-radius:7px;margin-bottom:12px;font-size:13px">Остальные сессии завершены.</div>{{end}}
+  <p style="color:#64748b;font-size:13px;margin-bottom:12px">Завершить все ваши сессии на других устройствах и в других окнах. Текущее окно продолжит работать.</p>
+  <form method="POST" action="/ui/profile/logout-others" onsubmit="return confirm('Выйти со всех устройств, кроме текущего?')">
+    <button class="btn" type="submit" style="background:#fee2e2;color:#b91c1c">Выйти со всех устройств</button>
+  </form>
+</div>
+{{end}}
 </main></body></html>
 {{end}}`
 
@@ -818,22 +970,45 @@ const tplAdminSessions = `{{define "admin-sessions"}}` + adminHead + `
   <p class="empty">Авторизация не настроена — пользователей нет.</p>
 </div>
 {{else if .Sessions}}
-<div class="card" style="max-width:700px">
+<div class="card" style="max-width:1100px;margin-bottom:16px">
+  <form method="POST" action="/ui/admin/sessions/limit" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <label style="font-size:13px;color:#475569">Максимум сессий на пользователя (0 — без ограничения)</label>
+    <input type="number" name="limit" value="{{.Limit}}" min="0" max="99" style="width:80px">
+    <button class="btn btn-sm btn-primary" type="submit">Сохранить</button>
+    {{if .LimitSaved}}<span style="color:#16a34a;font-size:13px">✓ Сохранено</span>{{end}}
+  </form>
+  <div style="font-size:12px;color:#94a3b8;margin-top:6px">При превышении лимита новый вход вытесняет самую давнюю по активности сессию Предприятия этого пользователя. Сессии конфигуратора не учитываются.</div>
+</div>
+<div class="card" style="max-width:1100px">
 <table>
 <thead><tr>
-  <th>Логин</th><th>Имя</th><th>Роль</th><th>Сессия до</th><th style="width:100px"></th>
+  <th>Логин</th><th>Имя</th><th>Вид</th><th>Вход</th><th>Активность</th><th>Сессия до</th><th>IP</th><th>Браузер</th><th style="width:150px"></th>
 </tr></thead>
 <tbody>
 {{range .Sessions}}<tr>
-  <td><strong>{{.Login}}</strong></td>
+  <td><strong>{{.Login}}</strong>{{if .IsAdmin}} <span title="Администратор" style="color:#3b82f6">★</span>{{end}}</td>
   <td>{{.FullName}}</td>
-  <td>{{if .IsAdmin}}<span style="color:#3b82f6">Администратор</span>{{else}}Пользователь{{end}}</td>
+  <td style="font-size:12px">{{.KindLabel}}</td>
+  <td style="font-size:12px;color:#94a3b8">{{if .CreatedAt.IsZero}}—{{else}}{{.CreatedAt.Format "02.01 15:04"}}{{end}}</td>
+  <td style="font-size:12px;color:#94a3b8">{{if .LastSeenAt.IsZero}}—{{else}}{{.LastSeenAt.Format "02.01 15:04"}}{{end}}</td>
   <td style="font-size:12px;color:#94a3b8">{{.ExpiresAt.Format "02.01.2006 15:04"}}</td>
+  <td style="font-size:12px;color:#94a3b8">{{.IP}}</td>
+  <td style="font-size:12px;color:#94a3b8">{{.ShortUA}}</td>
   <td>
-    <form method="POST" action="/ui/admin/sessions/{{.Login}}/kick"
-          onsubmit="return confirm('Принудительно завершить все сессии {{.Login}}?')">
-      <button class="btn btn-sm btn-danger" type="submit">Выгнать</button>
-    </form>
+    <div style="display:flex;gap:4px">
+      {{if .PublicID}}
+      <form method="POST" action="/ui/admin/sessions/kick" style="margin:0"
+            onsubmit="return confirm('Завершить эту сессию {{.Login}}?')">
+        <input type="hidden" name="public_id" value="{{.PublicID}}">
+        <input type="hidden" name="login" value="{{.Login}}">
+        <button class="btn btn-sm btn-danger" type="submit">Завершить</button>
+      </form>
+      {{end}}
+      <form method="POST" action="/ui/admin/sessions/{{.Login}}/kick" style="margin:0"
+            onsubmit="return confirm('Принудительно завершить все сессии {{.Login}}?')">
+        <button class="btn btn-sm" type="submit" style="background:#fee2e2;color:#b91c1c" title="Завершить все сессии пользователя">Все</button>
+      </form>
+    </div>
   </td>
 </tr>{{end}}
 </tbody>

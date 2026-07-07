@@ -261,11 +261,15 @@ func (s *Server) Mount(r chi.Router) {
 	// Self-service: change own password
 	r.Get("/ui/profile/passwd", s.selfPasswd)
 	r.Post("/ui/profile/passwd", s.selfPasswd)
+	// Self-service: завершить все свои сессии, кроме текущей (план 78)
+	r.Post("/ui/profile/logout-others", s.selfLogoutOthers)
 	// Self-service: change language
 	r.Post("/ui/profile/lang", s.setLang)
 
 	// Admin: active sessions
 	r.Get("/ui/admin/sessions", s.adminSessions)
+	r.Post("/ui/admin/sessions/kick", s.adminKickSession)
+	r.Post("/ui/admin/sessions/limit", s.adminSessionLimit)
 	r.Post("/ui/admin/sessions/{login}/kick", s.adminKickUser)
 
 	// Admin: REST API v2 integration tokens

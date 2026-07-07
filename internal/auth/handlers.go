@@ -50,6 +50,11 @@ type Handlers struct {
 	LoginLimit *LoginLimiter // rate-limit попыток входа (план 53); optional
 }
 
+// sessionMetaFromRequest собирает мету сессии пользовательского режима.
+func sessionMetaFromRequest(r *http.Request) SessionMeta {
+	return SessionMeta{Kind: SessionKindEnterprise, IP: r.RemoteAddr, UserAgent: r.UserAgent()}
+}
+
 func setSessionCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "onebase_session",
@@ -148,7 +153,7 @@ func (h *Handlers) LoginSubmit(w http.ResponseWriter, r *http.Request) {
 		h.LoginLimit.Reset(loginKey(r, login))
 	}
 
-	token, err := h.Repo.CreateSession(r.Context(), user.ID)
+	token, err := h.Repo.CreateSession(r.Context(), user.ID, sessionMetaFromRequest(r))
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -194,7 +199,7 @@ func (h *Handlers) LoginJSON(w http.ResponseWriter, r *http.Request) {
 		h.LoginLimit.Reset(loginKey(r, req.Login))
 	}
 
-	token, err := h.Repo.CreateSession(r.Context(), user.ID)
+	token, err := h.Repo.CreateSession(r.Context(), user.ID, sessionMetaFromRequest(r))
 	if err != nil {
 		http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
 		return

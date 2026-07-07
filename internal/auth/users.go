@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -54,8 +56,14 @@ func (r *Repo) EnsureSchema(ctx context.Context) error {
 		CREATE TABLE IF NOT EXISTS _sessions (
 			token TEXT PRIMARY KEY,
 			user_id %s NOT NULL REFERENCES _users(id) ON DELETE CASCADE,
-			expires_at %s NOT NULL
-		)`, d.TypeUUID(), d.TypeTimestamp())
+			expires_at %s NOT NULL,
+			public_id TEXT,
+			kind TEXT,
+			created_at %s,
+			last_seen_at %s,
+			ip TEXT,
+			user_agent TEXT
+		)`, d.TypeUUID(), d.TypeTimestamp(), d.TypeTimestamp(), d.TypeTimestamp())
 	if _, err := r.db.Exec(ctx, sessionsDDL); err != nil {
 		return fmt.Errorf("auth: create _sessions: %w", err)
 	}
@@ -70,7 +78,41 @@ func (r *Repo) EnsureSchema(ctx context.Context) error {
 	r.db.Exec(ctx, fmt.Sprintf(`ALTER TABLE _users ADD COLUMN show_in_list %s NOT NULL DEFAULT %s`, d.TypeBool(), boolFalseFor(d)))
 	r.db.Exec(ctx, `ALTER TABLE _users ADD COLUMN lang TEXT NOT NULL DEFAULT ''`)
 	r.db.Exec(ctx, fmt.Sprintf(`ALTER TABLE _users ADD COLUMN ai_data_access %s NOT NULL DEFAULT %s`, d.TypeBool(), boolFalseFor(d)))
+	// Мультисессии (план 78): служебные метаданные сессии. Колонки nullable без
+	// DEFAULT — SQLite не разрешает ни UNIQUE, ни CURRENT_TIMESTAMP в ADD COLUMN;
+	// уникальность public_id обеспечивает отдельный индекс. EnsureSchema зовётся
+	// конкурентно из процесса базы и лаунчера, поэтому глотаем только «колонка уже
+	// есть» — молча проглоченный SQLITE_BUSY оставил бы колонку несозданной и
+	// сломал INSERT сессий.
+	for _, ddl := range []string{
+		`ALTER TABLE _sessions ADD COLUMN public_id TEXT`,
+		`ALTER TABLE _sessions ADD COLUMN kind TEXT`,
+		fmt.Sprintf(`ALTER TABLE _sessions ADD COLUMN created_at %s`, d.TypeTimestamp()),
+		fmt.Sprintf(`ALTER TABLE _sessions ADD COLUMN last_seen_at %s`, d.TypeTimestamp()),
+		`ALTER TABLE _sessions ADD COLUMN ip TEXT`,
+		`ALTER TABLE _sessions ADD COLUMN user_agent TEXT`,
+	} {
+		if _, err := r.db.Exec(ctx, ddl); err != nil && !isDuplicateColumnErr(err) {
+			return fmt.Errorf("auth: migrate _sessions: %w", err)
+		}
+	}
+	for _, ddl := range []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS ix_sessions_public_id ON _sessions(public_id)`,
+		`CREATE INDEX IF NOT EXISTS ix_sessions_user_id ON _sessions(user_id)`,
+		`CREATE INDEX IF NOT EXISTS ix_sessions_expires_at ON _sessions(expires_at)`,
+	} {
+		if _, err := r.db.Exec(ctx, ddl); err != nil {
+			return fmt.Errorf("auth: index _sessions: %w", err)
+		}
+	}
 	return nil
+}
+
+// isDuplicateColumnErr распознаёт «колонка уже существует» у SQLite
+// («duplicate column name») и PostgreSQL («column ... already exists»).
+func isDuplicateColumnErr(err error) bool {
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "duplicate column") || strings.Contains(s, "already exists")
 }
 
 // boolFalseFor returns "FALSE" for PG and "0" for SQLite, used in DEFAULT clauses.
@@ -237,22 +279,118 @@ func (r *Repo) Authenticate(ctx context.Context, login, password string) (*User,
 	return u, nil
 }
 
-func (r *Repo) CreateSession(ctx context.Context, userID string) (string, error) {
+// SessionKind* — значения колонки _sessions.kind: откуда создана сессия.
+const (
+	SessionKindEnterprise   = "enterprise"   // пользовательский режим (Предприятие)
+	SessionKindConfigurator = "configurator" // конфигуратор (лаунчер)
+)
+
+// SessionMeta — служебный контекст новой сессии (план 78): вид, IP и
+// user-agent. Показывается в админке активных сессий; токен не содержит.
+type SessionMeta struct {
+	Kind      string
+	IP        string
+	UserAgent string
+}
+
+// CreateSession создаёт новую сессию пользователя. Живые сессии не трогает
+// (мультисессии, план 78) — подчищает только истёкшие, так что рост _sessions
+// ограничен TTL. Опциональная политика «максимум сессий на пользователя»
+// (п. 1.6) может вытеснить старейшую enterprise-сессию.
+func (r *Repo) CreateSession(ctx context.Context, userID string, meta SessionMeta) (string, error) {
 	d := r.db.Dialect()
-	// удаляем все старые сессии пользователя перед созданием новой
-	delQ := fmt.Sprintf(`DELETE FROM _sessions WHERE user_id = %s`, d.Placeholder(1))
-	r.db.Exec(ctx, delQ, userID)
+	r.DeleteExpiredSessions(ctx)
+	if meta.Kind == SessionKindEnterprise {
+		r.enforceSessionLimit(ctx, userID, meta)
+	}
 
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
 	token := hex.EncodeToString(b)
-	expires := time.Now().Add(24 * time.Hour)
-	q := fmt.Sprintf(`INSERT INTO _sessions (token, user_id, expires_at) VALUES (%s, %s, %s)`,
-		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3))
-	_, err := r.db.Exec(ctx, q, token, userID, expires)
+	now := time.Now()
+	expires := now.Add(24 * time.Hour)
+	q := fmt.Sprintf(`INSERT INTO _sessions (token, user_id, expires_at, public_id, kind, created_at, last_seen_at, ip, user_agent)
+		VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)`,
+		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4), d.Placeholder(5),
+		d.Placeholder(6), d.Placeholder(7), d.Placeholder(8), d.Placeholder(9))
+	_, err := r.db.Exec(ctx, q, token, userID, expires, uuid.New().String(), meta.Kind, now, now, meta.IP, meta.UserAgent)
 	return token, err
+}
+
+// enforceSessionLimit применяет политику `auth.max_sessions_per_user`
+// (план 78, п. 1.6): при превышении лимита вытесняет старейшие по активности
+// enterprise-сессии пользователя, освобождая место новой. Именно вытеснение,
+// а не отказ во входе: брошенная сессия (браузер закрыт без «Выйти») при TTL
+// 24 ч заблокировала бы пользователя до вмешательства админа. Сессии
+// конфигуратора не считаются и не вытесняются — иначе вернулся бы баг «вход
+// в конфигуратор выбивает Предприятие». Ошибки не фатальны: политика не
+// должна ломать вход.
+func (r *Repo) enforceSessionLimit(ctx context.Context, userID string, meta SessionMeta) {
+	limit := r.db.GetMaxSessionsPerUser(ctx)
+	if limit <= 0 {
+		return
+	}
+	d := r.db.Dialect()
+	var count int
+	q := fmt.Sprintf(`SELECT count(*) FROM _sessions WHERE user_id = %s AND kind = %s AND expires_at > %s`,
+		d.Placeholder(1), d.Placeholder(2), d.Now())
+	if err := r.db.QueryRow(ctx, q, userID, SessionKindEnterprise).Scan(&count); err != nil {
+		return
+	}
+	excess := count - limit + 1 // +1: новая сессия должна поместиться в лимит
+	if excess <= 0 {
+		return
+	}
+	delQ := fmt.Sprintf(`DELETE FROM _sessions WHERE token IN (
+		SELECT token FROM _sessions WHERE user_id = %s AND kind = %s
+		ORDER BY COALESCE(last_seen_at, created_at, expires_at) ASC LIMIT %s)`,
+		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3))
+	if _, err := r.db.Exec(ctx, delQ, userID, SessionKindEnterprise, excess); err != nil {
+		return
+	}
+	// Аудит вытеснения — актор сам пользователь: это его новый вход.
+	login := ""
+	r.db.QueryRow(ctx, fmt.Sprintf(`SELECT login FROM _users WHERE id = %s`, d.Placeholder(1)), userID).Scan(&login)
+	r.db.LogAction(ctx, "session_displaced", "", login, userID, userID, login, meta.IP)
+}
+
+// DeleteExpiredSessions удаляет истёкшие сессии всех пользователей.
+// Вызывается при каждом логине (из CreateSession).
+func (r *Repo) DeleteExpiredSessions(ctx context.Context) error {
+	q := fmt.Sprintf(`DELETE FROM _sessions WHERE expires_at <= %s`, r.db.Dialect().Now())
+	_, err := r.db.Exec(ctx, q)
+	return err
+}
+
+// touchThrottle — глобальный (на процесс) трекер последних записей last_seen_at:
+// не чаще touchInterval на токен. Package-level, а не поле Repo: лаунчер создаёт
+// Repo на каждый запрос (cfgAuthMiddleware), троттлинг должен переживать Repo.
+// Ключи — валидные токены сессий, поэтому размер ограничен числом сессий.
+var touchThrottle sync.Map // map[string]time.Time
+
+const touchInterval = 5 * time.Minute
+
+// TouchSession обновляет last_seen_at сессии, но не чаще раза в touchInterval:
+// SQLite single-writer, а лаунчер и процесс базы пишут в один файл — лишние
+// записи ни к чему. now передаётся параметром ради детерминизма в тестах.
+func (r *Repo) TouchSession(ctx context.Context, token string, now time.Time) error {
+	if last, ok := touchThrottle.Load(token); ok && now.Sub(last.(time.Time)) < touchInterval {
+		return nil
+	}
+	touchThrottle.Store(token, now)
+	// Попутная уборка записей умерших сессий (не чаще реальных touch'ей).
+	touchThrottle.Range(func(k, v any) bool {
+		if now.Sub(v.(time.Time)) > 24*time.Hour {
+			touchThrottle.Delete(k)
+		}
+		return true
+	})
+	d := r.db.Dialect()
+	q := fmt.Sprintf(`UPDATE _sessions SET last_seen_at = %s WHERE token = %s`, d.Placeholder(1), d.Placeholder(2))
+	_, err := r.db.Exec(ctx, q, now, token)
+	return err
 }
 
 func (r *Repo) LookupSession(ctx context.Context, token string) (*User, error) {
@@ -279,19 +417,29 @@ func (r *Repo) DeleteSession(ctx context.Context, token string) error {
 	return err
 }
 
-// SessionInfo describes one active session.
+// SessionInfo describes one active session. Токен наружу не отдаётся —
+// сессию идентифицирует PublicID. Поля метаданных пустые у сессий, созданных
+// до миграции плана 78.
 type SessionInfo struct {
-	Login     string
-	FullName  string
-	IsAdmin   bool
-	ExpiresAt time.Time
+	PublicID   string
+	Kind       string // SessionKindEnterprise | SessionKindConfigurator | ""
+	Login      string
+	FullName   string
+	IsAdmin    bool
+	CreatedAt  time.Time
+	LastSeenAt time.Time
+	ExpiresAt  time.Time
+	IP         string
+	UserAgent  string
 }
 
 // ActiveSessions returns all non-expired sessions with user info.
+// Один логин может встречаться несколько раз — по строке на сессию (план 78).
 func (r *Repo) ActiveSessions(ctx context.Context) ([]*SessionInfo, error) {
 	d := r.db.Dialect()
 	q := fmt.Sprintf(`
-		SELECT u.login, u.full_name, u.is_admin, s.expires_at
+		SELECT s.public_id, s.kind, u.login, u.full_name, u.is_admin,
+		       s.created_at, s.last_seen_at, s.expires_at, s.ip, s.user_agent
 		FROM _sessions s
 		JOIN _users u ON u.id = s.user_id
 		WHERE s.expires_at > %s
@@ -305,14 +453,31 @@ func (r *Repo) ActiveSessions(ctx context.Context) ([]*SessionInfo, error) {
 	var sessions []*SessionInfo
 	for rows.Next() {
 		si := &SessionInfo{}
-		var expiresRaw any
-		if err := rows.Scan(&si.Login, &si.FullName, &si.IsAdmin, &expiresRaw); err != nil {
+		var publicID, kind, createdRaw, lastSeenRaw, expiresRaw, ip, ua any
+		if err := rows.Scan(&publicID, &kind, &si.Login, &si.FullName, &si.IsAdmin, &createdRaw, &lastSeenRaw, &expiresRaw, &ip, &ua); err != nil {
 			return nil, err
 		}
+		si.PublicID = scanString(publicID)
+		si.Kind = scanString(kind)
+		si.IP = scanString(ip)
+		si.UserAgent = scanString(ua)
+		si.CreatedAt = parseSessionTime(createdRaw)
+		si.LastSeenAt = parseSessionTime(lastSeenRaw)
 		si.ExpiresAt = parseSessionTime(expiresRaw)
 		sessions = append(sessions, si)
 	}
 	return sessions, rows.Err()
+}
+
+// scanString нормализует nullable-текстовую колонку: NULL → "".
+func scanString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case []byte:
+		return string(t)
+	}
+	return ""
 }
 
 // ActiveSessionCount returns the number of non-expired sessions.
@@ -377,5 +542,35 @@ func (r *Repo) KickUser(ctx context.Context, login string) error {
 	q := fmt.Sprintf(`DELETE FROM _sessions WHERE user_id = (SELECT id FROM _users WHERE login = %s)`,
 		d.Placeholder(1))
 	_, err := r.db.Exec(ctx, q, login)
+	return err
+}
+
+// KickUserSessions удаляет все сессии пользователя по его ID — вариант KickUser
+// для мест, где известен ID, а не логин (ревокация при смене пароля админом).
+func (r *Repo) KickUserSessions(ctx context.Context, userID string) error {
+	d := r.db.Dialect()
+	q := fmt.Sprintf(`DELETE FROM _sessions WHERE user_id = %s`, d.Placeholder(1))
+	_, err := r.db.Exec(ctx, q, userID)
+	return err
+}
+
+// KickSession завершает одну сессию по её публичному идентификатору (план 78).
+func (r *Repo) KickSession(ctx context.Context, publicID string) error {
+	if publicID == "" {
+		return fmt.Errorf("auth: kick session: пустой public_id")
+	}
+	d := r.db.Dialect()
+	q := fmt.Sprintf(`DELETE FROM _sessions WHERE public_id = %s`, d.Placeholder(1))
+	_, err := r.db.Exec(ctx, q, publicID)
+	return err
+}
+
+// KickOtherSessions завершает все сессии пользователя, кроме текущей —
+// «выйти со всех устройств кроме этого» (план 78).
+func (r *Repo) KickOtherSessions(ctx context.Context, userID, currentToken string) error {
+	d := r.db.Dialect()
+	q := fmt.Sprintf(`DELETE FROM _sessions WHERE user_id = %s AND token <> %s`,
+		d.Placeholder(1), d.Placeholder(2))
+	_, err := r.db.Exec(ctx, q, userID, currentToken)
 	return err
 }

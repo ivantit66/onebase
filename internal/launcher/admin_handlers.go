@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ivantit66/onebase/internal/auth"
@@ -327,7 +328,25 @@ func (h *handler) cfgAdminUserPasswd(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]any{"error": err.Error()})
 		return
 	}
+	// Политика плана 78: смена пароля из конфигуратора — админское действие,
+	// завершает все сессии пользователя (украденная сессия не переживёт смену).
+	repo.KickUserSessions(r.Context(), req.ID)
+	targetLogin := ""
+	if u, err := repo.GetByID(r.Context(), req.ID); err == nil {
+		targetLogin = u.Login
+	}
+	logCfgSessionAudit(r, db, "password_change_sessions_revoked", targetLogin, req.ID)
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// logCfgSessionAudit пишет событие сессионного аудита от имени администратора
+// конфигуратора. recordID — UUID (или пустая строка), логин цели — в entityName.
+func logCfgSessionAudit(r *http.Request, db *storage.DB, action, targetLogin, targetUserID string) {
+	var actorID, actorLogin string
+	if u := cfgUserFromContext(r.Context()); u != nil {
+		actorID, actorLogin = u.ID, u.Login
+	}
+	db.LogAction(r.Context(), action, "", targetLogin, targetUserID, actorID, actorLogin, r.RemoteAddr)
 }
 
 func (h *handler) cfgAdminUserDenyPasswd(w http.ResponseWriter, r *http.Request) {
@@ -455,10 +474,32 @@ func (h *handler) cfgAdminSessions(w http.ResponseWriter, r *http.Request) {
 	repo.EnsureSchema(r.Context())
 	sessions, _ := repo.ActiveSessions(r.Context())
 
+	kindLabel := func(kind string) string {
+		switch kind {
+		case auth.SessionKindConfigurator:
+			return "Конфигуратор"
+		case auth.SessionKindEnterprise:
+			return "Предприятие"
+		}
+		return "—"
+	}
+	fmtT := func(t time.Time, layout string) string {
+		if t.IsZero() {
+			return "—"
+		}
+		return t.Format(layout)
+	}
+
 	html := `<div style="padding:16px">
 	<h3 style="margin:0 0 14px;font-size:15px">Активные пользователи</h3>
+	<div style="margin:0 0 14px;display:flex;align-items:center;gap:8px;font-size:12px;color:#444">
+	  <span>Максимум сессий на пользователя (0 — без ограничения):</span>
+	  <input id="sess-limit" type="number" min="0" max="99" value="` + fmt.Sprintf("%d", db.GetMaxSessionsPerUser(r.Context())) + `" style="width:60px;padding:3px 6px;border:1px solid #ACA899;border-radius:2px">
+	  <button onclick="cfgSaveSessLimit()" style="padding:3px 10px;border:1px solid #ACA899;border-radius:2px;background:#F5F4EE;cursor:pointer;font-size:12px">Сохранить</button>
+	  <span id="sess-limit-msg" style="color:#16a34a"></span>
+	</div>
 	<table style="width:100%;border-collapse:collapse;font-size:12px">
-	<tr style="background:#f1f5f9"><th style="text-align:left;padding:6px 8px;font-weight:600">Логин</th><th style="text-align:left;padding:6px 8px;font-weight:600">Имя</th><th style="text-align:center;padding:6px 8px;font-weight:600">Админ</th><th style="text-align:left;padding:6px 8px;font-weight:600">Действует до</th><th style="padding:6px 8px"></th></tr>`
+	<tr style="background:#f1f5f9"><th style="text-align:left;padding:6px 8px;font-weight:600">Логин</th><th style="text-align:left;padding:6px 8px;font-weight:600">Имя</th><th style="text-align:left;padding:6px 8px;font-weight:600">Вид</th><th style="text-align:center;padding:6px 8px;font-weight:600">Админ</th><th style="text-align:left;padding:6px 8px;font-weight:600">Вход</th><th style="text-align:left;padding:6px 8px;font-weight:600">Активность</th><th style="text-align:left;padding:6px 8px;font-weight:600">Действует до</th><th style="text-align:left;padding:6px 8px;font-weight:600">IP</th><th style="padding:6px 8px"></th></tr>`
 	for i, s := range sessions {
 		bg := ""
 		if i%2 == 1 {
@@ -468,24 +509,44 @@ func (h *handler) cfgAdminSessions(w http.ResponseWriter, r *http.Request) {
 		if s.IsAdmin {
 			admin = `<span style="color:#16a34a;font-weight:600">Да</span>`
 		}
-		html += fmt.Sprintf(`<tr%s><td style="padding:5px 8px">%s</td><td style="padding:5px 8px">%s</td><td style="padding:5px 8px;text-align:center">%s</td><td style="padding:5px 8px;color:#888">%s</td><td style="padding:5px 8px"><button onclick="cfgKick('%s')" style="color:#c00;background:none;border:none;cursor:pointer;font-size:11px" title="Завершить сессию">✕</button></td></tr>`,
-			bg, escHTML(s.Login), escHTML(s.FullName), admin, s.ExpiresAt.Format("02.01.2006 15:04"), escHTML(s.Login))
+		kickOne := ""
+		if s.PublicID != "" {
+			kickOne = fmt.Sprintf(`<button onclick="cfgKickSession('%s','%s')" style="color:#c00;background:none;border:none;cursor:pointer;font-size:11px" title="Завершить сессию">✕</button>`,
+				escHTML(s.PublicID), escHTML(s.Login))
+		}
+		html += fmt.Sprintf(`<tr%s><td style="padding:5px 8px">%s</td><td style="padding:5px 8px">%s</td><td style="padding:5px 8px;color:#666">%s</td><td style="padding:5px 8px;text-align:center">%s</td><td style="padding:5px 8px;color:#888">%s</td><td style="padding:5px 8px;color:#888">%s</td><td style="padding:5px 8px;color:#888">%s</td><td style="padding:5px 8px;color:#888">%s</td><td style="padding:5px 8px;white-space:nowrap">%s <button onclick="cfgKickAll('%s')" style="color:#c00;background:none;border:none;cursor:pointer;font-size:11px" title="Завершить все сессии пользователя">все</button></td></tr>`,
+			bg, escHTML(s.Login), escHTML(s.FullName), kindLabel(s.Kind), admin,
+			fmtT(s.CreatedAt, "02.01 15:04"), fmtT(s.LastSeenAt, "02.01 15:04"),
+			s.ExpiresAt.Format("02.01.2006 15:04"), escHTML(s.IP), kickOne, escHTML(s.Login))
 	}
 	if len(sessions) == 0 {
-		html += `<tr><td colspan="6" style="padding:20px;text-align:center;color:#999">Нет активных сессий</td></tr>`
+		html += `<tr><td colspan="9" style="padding:20px;text-align:center;color:#999">Нет активных сессий</td></tr>`
 	}
 	html += `</table></div>
 <script>
-function cfgKick(login){
-  if(!confirm('Завершить сессию '+login+'?'))return;
+function cfgKickSession(publicID, login){
+  if(!confirm('Завершить эту сессию '+login+'?'))return;
+  fetch('/bases/` + b.ID + `/configurator/admin/sessions/kick',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({public_id:publicID})})
+    .then(function(){cfgAdmin('sessions')})
+}
+function cfgKickAll(login){
+  if(!confirm('Завершить все сессии '+login+'?'))return;
   fetch('/bases/` + b.ID + `/configurator/admin/sessions/kick',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({login:login})})
     .then(function(){cfgAdmin('sessions')})
+}
+function cfgSaveSessLimit(){
+  var n = parseInt(document.getElementById('sess-limit').value, 10) || 0;
+  fetch('/bases/` + b.ID + `/configurator/admin/sessions/limit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({limit:n})})
+    .then(function(r){return r.json()})
+    .then(function(d){document.getElementById('sess-limit-msg').textContent = d.error ? ('Ошибка: '+d.error) : '✓';})
 }
 </script>`
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(html))
 }
 
+// cfgAdminSessionKick завершает сессии: по public_id — одну (план 78), по
+// login — все сессии пользователя (прежнее поведение).
 func (h *handler) cfgAdminSessionKick(w http.ResponseWriter, r *http.Request) {
 	b, err := h.store.Get(chi.URLParam(r, "id"))
 	if err != nil {
@@ -493,7 +554,8 @@ func (h *handler) cfgAdminSessionKick(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Login string `json:"login"`
+		PublicID string `json:"public_id"`
+		Login    string `json:"login"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]any{"error": err.Error()})
@@ -505,7 +567,50 @@ func (h *handler) cfgAdminSessionKick(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repo := auth.NewRepo(db)
-	repo.KickUser(r.Context(), req.Login)
+	switch {
+	case req.PublicID != "":
+		if err := repo.KickSession(r.Context(), req.PublicID); err != nil {
+			writeJSON(w, 500, map[string]any{"error": err.Error()})
+			return
+		}
+		logCfgSessionAudit(r, db, "session_kick", req.Login, "")
+	case req.Login != "":
+		if err := repo.KickUser(r.Context(), req.Login); err != nil {
+			writeJSON(w, 500, map[string]any{"error": err.Error()})
+			return
+		}
+		logCfgSessionAudit(r, db, "session_kick_all", req.Login, "")
+	default:
+		writeJSON(w, 400, map[string]any{"error": "нужен public_id или login"})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// cfgAdminSessionLimit сохраняет политику «максимум сессий на пользователя»
+// (план 78, п. 1.6; ключ auth.max_sessions_per_user в _settings).
+func (h *handler) cfgAdminSessionLimit(w http.ResponseWriter, r *http.Request) {
+	b, err := h.store.Get(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, 404, map[string]any{"error": "not found"})
+		return
+	}
+	var req struct {
+		Limit int `json:"limit"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]any{"error": err.Error()})
+		return
+	}
+	db, err := getAuthDB(r.Context(), b)
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := db.SaveMaxSessionsPerUser(r.Context(), req.Limit); err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
