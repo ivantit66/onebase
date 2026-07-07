@@ -130,6 +130,17 @@ func TestPageManagedForm_Renders(t *testing.T) {
 			t.Errorf("managed runtime должен жить в /static/managed.js, но HTML содержит %q", old)
 		}
 	}
+	for _, old := range []string{
+		"onclick=",
+		"onchange=",
+		"oninput=",
+		"onfocus=",
+		"onsubmit=",
+	} {
+		if strings.Contains(tplManagedForm, old) {
+			t.Errorf("templates_managed.go не должен содержать inline handler %q", old)
+		}
+	}
 }
 
 // ГруппаФормы с orientation: horizontal раскладывает дочерние реквизиты в ряд

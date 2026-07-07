@@ -14,7 +14,7 @@ import (
 )
 
 // При объявленном НачалоВыбора у ПолеСписка рендер навешивает data-el и
-// onfocus=obStartListChoice — крючок для динамического списка значений.
+// data-ob-list-choice — крючок для динамического списка значений.
 func TestManagedFormChoiceListDynamicAttrs(t *testing.T) {
 	form := &metadata.FormModule{
 		Name:       "ФормаОбъекта",
@@ -61,8 +61,8 @@ func TestManagedFormChoiceListDynamicAttrs(t *testing.T) {
 	if !strings.Contains(html, `data-el="ПолеВалюта"`) {
 		t.Error("нет data-el у ПолеСписка с НачалоВыбора")
 	}
-	if !strings.Contains(html, `onfocus="obStartListChoice('ПолеВалюта')"`) {
-		t.Error("нет onfocus→obStartListChoice у ПолеСписка с НачалоВыбора")
+	if !strings.Contains(html, `data-ob-list-choice="ПолеВалюта"`) {
+		t.Error("нет data-ob-list-choice у ПолеСписка с НачалоВыбора")
 	}
 }
 

@@ -511,11 +511,152 @@ function addVtRow(vtName, fields) {
   var tdDel = document.createElement("td");
   var btn = document.createElement("button");
   btn.type = "button"; btn.className = "del-btn"; btn.textContent = "×";
-  btn.onclick = function(){ tr.remove(); };
+  btn.setAttribute("data-ob-remove-row", "");
   tdDel.appendChild(btn);
   tr.appendChild(tdDel);
   tbody.appendChild(tr);
 }
+
+function obManagedClosestSelect(btn) {
+  var target = btn.getAttribute('data-ob-ref-picker') || btn.getAttribute('data-ob-ref-current') || '';
+  if (target && target !== 'closest') return document.getElementById(target);
+  var root = btn.parentElement || (btn.closest && btn.closest('td')) || document;
+  return root && root.querySelector ? root.querySelector('select') : null;
+}
+
+function obManagedParseFieldMeta(raw) {
+  return String(raw || '').split(',').filter(Boolean).map(function (s) {
+    var idx = s.indexOf('|');
+    if (idx < 0) return { name: s, type: 'string' };
+    var rest = s.slice(idx + 1);
+    var refIdx = rest.indexOf(':');
+    return { name: s.slice(0, idx), type: refIdx >= 0 ? rest.slice(0, refIdx) : rest };
+  }).filter(function (f) { return f.name !== ''; });
+}
+
+function obManagedAddTpRow(btn) {
+  var tpName = btn.getAttribute('data-ob-add-tp') || '';
+  var tbody = document.getElementById('tp-body-' + tpName);
+  if (!tpName || !tbody || typeof addTpRow !== 'function') return;
+  var meta = obManagedParseFieldMeta(tbody.getAttribute('data-tp-fields') || '');
+  var fields = meta.map(function (f) { return f.name; });
+  var nums = meta.filter(function (f) { return f.type === 'number'; }).map(function (f) { return f.name; });
+  addTpRow(tpName, fields, nums, tbody.rows.length);
+}
+
+function obManagedAddVtRow(btn) {
+  var vtName = btn.getAttribute('data-ob-add-vt') || '';
+  var tbody = document.getElementById('vt-body-' + vtName);
+  if (!vtName || !tbody || typeof addVtRow !== 'function') return;
+  var fields = obManagedParseFieldMeta(tbody.getAttribute('data-vt-fields') || '').map(function (f) { return f.name; });
+  addVtRow(vtName, fields);
+}
+
+function obManagedInitDelegates() {
+  document.addEventListener('click', function (e) {
+    var btn = e.target && e.target.closest ? e.target.closest('[data-ob-ref-picker],[data-ob-ref-current],[data-ob-file-trigger],[data-ob-fire-click],[data-ob-grid-add],[data-ob-grid-del],[data-ob-add-tp],[data-ob-add-vt],[data-ob-remove-row],[data-ob-ref-cancel],[data-ob-toggle-next]') : null;
+    if (!btn) return;
+
+    if (btn.hasAttribute('data-ob-ref-cancel')) {
+      e.preventDefault();
+      try { parent.postMessage({ source: 'obRefCancel' }, '*'); } catch (_) {}
+      return;
+    }
+    if (btn.hasAttribute('data-ob-toggle-next')) {
+      e.preventDefault();
+      var d = btn.nextElementSibling;
+      if (d) d.style.display = d.style.display === 'none' ? 'block' : 'none';
+      return;
+    }
+    if (btn.hasAttribute('data-ob-ref-picker')) {
+      e.preventDefault();
+      var pickSel = obManagedClosestSelect(btn);
+      if (pickSel && typeof openRefPicker === 'function') openRefPicker(pickSel);
+      return;
+    }
+    if (btn.hasAttribute('data-ob-ref-current')) {
+      e.preventDefault();
+      var curSel = obManagedClosestSelect(btn);
+      if (curSel && typeof openRefCurrent === 'function') openRefCurrent(curSel);
+      return;
+    }
+    if (btn.hasAttribute('data-ob-file-trigger')) {
+      e.preventDefault();
+      var file = document.getElementById(btn.getAttribute('data-ob-file-trigger') || '');
+      if (file) file.click();
+      return;
+    }
+    if (btn.hasAttribute('data-ob-fire-click')) {
+      e.preventDefault();
+      var params = {};
+      var tp = btn.getAttribute('data-ob-fire-tp') || '';
+      if (tp) params._tp = tp;
+      if (window.obFire) window.obFire(btn.getAttribute('data-ob-fire-click') || '', 'Нажатие', params);
+      return;
+    }
+    if (btn.hasAttribute('data-ob-grid-add')) {
+      e.preventDefault();
+      if (window.obGridAddRow) window.obGridAddRow(btn.getAttribute('data-ob-grid-add') || '');
+      return;
+    }
+    if (btn.hasAttribute('data-ob-grid-del')) {
+      e.preventDefault();
+      if (window.obGridDelRow) window.obGridDelRow(btn.getAttribute('data-ob-grid-del') || '');
+      return;
+    }
+    if (btn.hasAttribute('data-ob-add-tp')) {
+      e.preventDefault();
+      obManagedAddTpRow(btn);
+      return;
+    }
+    if (btn.hasAttribute('data-ob-add-vt')) {
+      e.preventDefault();
+      obManagedAddVtRow(btn);
+      return;
+    }
+    if (btn.hasAttribute('data-ob-remove-row')) {
+      e.preventDefault();
+      var tr = btn.closest && btn.closest('tr');
+      if (tr) tr.remove();
+    }
+  });
+
+  document.addEventListener('change', function (e) {
+    var el = e.target;
+    if (!el || !el.getAttribute) return;
+    if (el.hasAttribute('data-ob-file-pick-path') && window.obFilePick) {
+      window.obFilePick(el, el.getAttribute('data-ob-file-pick-path') || '', el.getAttribute('data-ob-file-pick-content') || '');
+      return;
+    }
+    var fire = el.getAttribute('data-ob-fire-change');
+    if (fire && window.obFire) window.obFire(fire, 'ПриИзменении');
+  });
+
+  document.addEventListener('input', function (e) {
+    var el = e.target;
+    if (el && el.hasAttribute && el.hasAttribute('data-ob-recalc-tp-row') && typeof recalcTpRow === 'function') recalcTpRow(el);
+  });
+
+  document.addEventListener('focusin', function (e) {
+    var el = e.target;
+    var name = el && el.getAttribute ? el.getAttribute('data-ob-list-choice') : '';
+    if (name && window.obStartListChoice) window.obStartListChoice(name);
+  });
+
+  document.addEventListener('submit', function (e) {
+    var form = e.target;
+    if (!form || !form.getAttribute) return;
+    var msg = form.getAttribute('data-ob-confirm');
+    if (msg && !confirm(msg)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (form.hasAttribute('data-ob-grid-sync') && window.obGridSync) window.obGridSync();
+  });
+}
+
+obManagedReady(obManagedInitDelegates);
 
 // SlickGrid initializer for managed-form table parts (plan 48).
 // Grids are stored in window._obGrids = {tpName: {grid, dataView, columns}}.

@@ -58,7 +58,7 @@ func TestLoadChoiceOptions(t *testing.T) {
 
 // При рендере managed-формы элемент ПолеСписка отрисовывается как <select> с
 // опциями из ChoiceOptions, текущее значение помечается selected, а при наличии
-// обработчика навешивается onchange→obFire('ПриИзменении').
+// обработчика навешивается data-ob-fire-change для delegated runtime.
 func TestManagedFormChoiceListRenders(t *testing.T) {
 	form := &metadata.FormModule{
 		Name:       "ФормаОбъекта",
@@ -106,8 +106,8 @@ func TestManagedFormChoiceListRenders(t *testing.T) {
 	if !strings.Contains(html, `value="high" selected`) {
 		t.Error("текущее значение high не помечено selected")
 	}
-	if !strings.Contains(html, `onchange="obFire('ПолеПриоритет','ПриИзменении')"`) {
-		t.Error("нет onchange→obFire('ПриИзменении') у поля со списком значений")
+	if !strings.Contains(html, `data-ob-fire-change="ПолеПриоритет"`) {
+		t.Error("нет data-ob-fire-change у поля со списком значений")
 	}
 }
 

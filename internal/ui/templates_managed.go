@@ -61,26 +61,26 @@ const tplManagedForm = `
     {{if $f}}
       {{if isRef (str $f.Type)}}
         <div style="display:flex;gap:6px;align-items:center">
-          <select id="ref-{{$fn}}" name="{{$fn}}" style="flex:1" data-ref-entity="{{$f.RefEntity}}"{{if $f.InlineCreateEnabled false}} data-ref-allow-create="1"{{end}}{{if $el.ReadOnly}} disabled{{end}}{{if $hChg}} onchange="obFire('{{$el.Name}}','ПриИзменении')"{{end}}>
+          <select id="ref-{{$fn}}" name="{{$fn}}" style="flex:1" data-ref-entity="{{$f.RefEntity}}"{{if $f.InlineCreateEnabled false}} data-ref-allow-create="1"{{end}}{{if $el.ReadOnly}} disabled{{end}}{{if $hChg}} data-ob-fire-change="{{$el.Name}}"{{end}}>
             <option value="">— выбрать —</option>
             {{range index $ctx.RefOptions $fn}}
             <option value="{{index . "id"}}" {{if eq (index . "id") (index $ctx.Values $fn)}}selected{{end}}>{{index . "_label"}}</option>
             {{end}}
           </select>
-          <button type="button" onclick="openRefPicker('ref-{{$fn}}')" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px">…</button>
-          <button type="button" onclick="openRefCurrent('ref-{{$fn}}')" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px" title="Открыть карточку">🔍</button>
+          <button type="button" data-ob-ref-picker="ref-{{$fn}}" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px">…</button>
+          <button type="button" data-ob-ref-current="ref-{{$fn}}" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px" title="Открыть карточку">🔍</button>
         </div>
       {{else if isEnum (str $f.Type)}}
-        <select name="{{$fn}}"{{if $el.ReadOnly}} disabled{{end}}{{if $hChg}} onchange="obFire('{{$el.Name}}','ПриИзменении')"{{end}}>
+        <select name="{{$fn}}"{{if $el.ReadOnly}} disabled{{end}}{{if $hChg}} data-ob-fire-change="{{$el.Name}}"{{end}}>
           <option value="">— выбрать —</option>
           {{range index $ctx.EnumOptions $fn}}
           <option value="{{.Value}}" {{if eq .Value (index $ctx.Values $fn)}}selected{{end}}>{{.Label}}</option>
           {{end}}
         </select>
       {{else if eq (str $f.Type) "date"}}
-        <input type="datetime-local" name="{{$fn}}" value="{{index $ctx.Values $fn}}"{{if $el.ReadOnly}} readonly{{end}}{{if $hChg}} onchange="obFire('{{$el.Name}}','ПриИзменении')"{{end}}>
+        <input type="datetime-local" name="{{$fn}}" value="{{index $ctx.Values $fn}}"{{if $el.ReadOnly}} readonly{{end}}{{if $hChg}} data-ob-fire-change="{{$el.Name}}"{{end}}>
       {{else if eq (str $f.Type) "bool"}}
-        <select name="{{$fn}}"{{if $el.ReadOnly}} disabled{{end}}{{if $hChg}} onchange="obFire('{{$el.Name}}','ПриИзменении')"{{end}}>
+        <select name="{{$fn}}"{{if $el.ReadOnly}} disabled{{end}}{{if $hChg}} data-ob-fire-change="{{$el.Name}}"{{end}}>
           <option value="false" {{if eq (index $ctx.Values $fn) "false"}}selected{{end}}>Нет</option>
           <option value="true" {{if eq (index $ctx.Values $fn) "true"}}selected{{end}}>Да</option>
         </select>
@@ -94,26 +94,26 @@ const tplManagedForm = `
         <div style="display:flex;gap:6px;align-items:center">
           <input type="text" name="{{$fn}}" id="file-path-{{$fn}}" placeholder="Путь к файлу или выберите …" style="flex:1"{{if $el.ReadOnly}} readonly{{end}}>
           <textarea name="_fc_{{$fn}}" id="file-content-{{$fn}}" style="display:none"></textarea>
-          <input type="file" id="file-pick-{{$fn}}" style="display:none" onchange="obFilePick(this,'file-path-{{$fn}}','file-content-{{$fn}}')">
-          <button type="button" onclick="document.getElementById('file-pick-{{$fn}}').click()" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px;white-space:nowrap" title="Выбрать файл">…</button>
+          <input type="file" id="file-pick-{{$fn}}" style="display:none" data-ob-file-pick-path="file-path-{{$fn}}" data-ob-file-pick-content="file-content-{{$fn}}">
+          <button type="button" data-ob-file-trigger="file-pick-{{$fn}}" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px;white-space:nowrap" title="Выбрать файл">…</button>
         </div>
       {{else if $el.Multiline}}
-        <textarea name="{{$fn}}" rows="5" style="width:100%"{{if $el.ReadOnly}} readonly{{end}}{{if $hChg}} onchange="obFire('{{$el.Name}}','ПриИзменении')"{{end}}>{{index $ctx.Values $fn}}</textarea>
+        <textarea name="{{$fn}}" rows="5" style="width:100%"{{if $el.ReadOnly}} readonly{{end}}{{if $hChg}} data-ob-fire-change="{{$el.Name}}"{{end}}>{{index $ctx.Values $fn}}</textarea>
       {{else}}
-        <input type="text" name="{{$fn}}" value="{{index $ctx.Values $fn}}" placeholder="{{$fn}}"{{if $el.ReadOnly}} readonly{{end}}{{if $el.Mask}} pattern="{{$el.Mask}}"{{end}}{{if $hChg}} onchange="obFire('{{$el.Name}}','ПриИзменении')"{{end}}>
+        <input type="text" name="{{$fn}}" value="{{index $ctx.Values $fn}}" placeholder="{{$fn}}"{{if $el.ReadOnly}} readonly{{end}}{{if $el.Mask}} pattern="{{$el.Mask}}"{{end}}{{if $hChg}} data-ob-fire-change="{{$el.Name}}"{{end}}>
       {{end}}
     {{else if eq (str $el.Type) "file"}}
       {{/* Поле не найдено в Entity, но элемент объявлен как file */}}
       <div style="display:flex;gap:6px;align-items:center">
         <input type="text" name="{{$fn}}" id="file-path-{{$fn}}" placeholder="Путь к файлу или выберите …" style="flex:1">
         <textarea name="_fc_{{$fn}}" id="file-content-{{$fn}}" style="display:none"></textarea>
-        <input type="file" id="file-pick-{{$fn}}" style="display:none" onchange="obFilePick(this,'file-path-{{$fn}}','file-content-{{$fn}}')">
-        <button type="button" onclick="document.getElementById('file-pick-{{$fn}}').click()" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px;white-space:nowrap" title="Выбрать файл">…</button>
+        <input type="file" id="file-pick-{{$fn}}" style="display:none" data-ob-file-pick-path="file-path-{{$fn}}" data-ob-file-pick-content="file-content-{{$fn}}">
+        <button type="button" data-ob-file-trigger="file-pick-{{$fn}}" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px;white-space:nowrap" title="Выбрать файл">…</button>
       </div>
     {{else}}
       {{/* Поле не найдено в Entity (возможно реквизит формы, ещё не привязан) */}}
       <input type="text" name="{{$fn}}" value="{{index $ctx.Values $fn}}" placeholder="{{$fn}}" style="background:#fef9c3"
-        title="Реквизит формы '{{$el.DataPath}}' не найден среди полей сущности"{{if $hChg}} onchange="obFire('{{$el.Name}}','ПриИзменении')"{{end}}>
+        title="Реквизит формы '{{$el.DataPath}}' не найден среди полей сущности"{{if $hChg}} data-ob-fire-change="{{$el.Name}}"{{end}}>
     {{end}}
     {{if $el.Hint}}<small style="color:#94a3b8;font-size:11px">{{$el.Hint}}</small>{{end}}
   </div>
@@ -126,7 +126,7 @@ const tplManagedForm = `
   {{$hChg := hasHandler $el "ПриИзменении"}}
   <div class="form-group">
     <label>{{fieldTitleRU $el.TitleMap $fn}}{{if $el.Required}} <span style="color:#dc2626">*</span>{{end}}</label>
-    <select name="{{$fn}}"{{if hasHandler $el "НачалоВыбора"}} data-el="{{$el.Name}}" onfocus="obStartListChoice('{{$el.Name}}')"{{end}}{{if $el.ReadOnly}} disabled{{end}}{{if $hChg}} onchange="obFire('{{$el.Name}}','ПриИзменении')"{{end}}>
+    <select name="{{$fn}}"{{if hasHandler $el "НачалоВыбора"}} data-el="{{$el.Name}}" data-ob-list-choice="{{$el.Name}}"{{end}}{{if $el.ReadOnly}} disabled{{end}}{{if $hChg}} data-ob-fire-change="{{$el.Name}}"{{end}}>
       <option value="">— выбрать —</option>
       {{range index $ctx.ChoiceOptions $el.Name}}
       <option value="{{.Value}}" {{if eq .Value (index $ctx.Values $fn)}}selected{{end}}>{{.Label}}</option>
@@ -146,7 +146,7 @@ const tplManagedForm = `
     {{fieldTitleRU $el.TitleMap $el.Name}}
   </div>
 {{else if eq (str $el.Kind) "Кнопка"}}
-  <button type="button" class="btn btn-secondary" style="margin:6px 4px 6px 0"{{if $el.ReadOnly}} disabled{{end}}{{if hasHandler $el "Нажатие"}} onclick="obFire('{{$el.Name}}','Нажатие')"{{end}}>
+  <button type="button" class="btn btn-secondary" style="margin:6px 4px 6px 0"{{if $el.ReadOnly}} disabled{{end}}{{if hasHandler $el "Нажатие"}} data-ob-fire-click="{{$el.Name}}"{{end}}>
     {{fieldTitleRU $el.TitleMap $el.Name}}
   </button>
 {{else if eq (str $el.Kind) "ПолеКартинки"}}
@@ -172,7 +172,7 @@ const tplManagedForm = `
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
     {{range $tpCmds}}
     <button type="button" class="btn btn-sm" style="background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe"
-      {{if $el.ReadOnly}}disabled{{end}}{{if hasHandler . "Нажатие"}} onclick="obFire('{{.Name}}','Нажатие',{_tp:'{{$tpName}}'})"{{end}}>
+      {{if $el.ReadOnly}}disabled{{end}}{{if hasHandler . "Нажатие"}} data-ob-fire-click="{{.Name}}" data-ob-fire-tp="{{$tpName}}"{{end}}>
       {{fieldTitleRU .TitleMap .Name}}
     </button>
     {{end}}
@@ -195,9 +195,9 @@ const tplManagedForm = `
   <input type="hidden" name="tp_json.{{$tpName}}" id="tp-json-{{$tpName}}" value="">
   <div style="display:flex;gap:6px;margin-top:4px">
     <button type="button" class="btn btn-sm" style="background:#e2e8f0;color:#475569"
-      onclick="obGridAddRow('{{$tpName}}')">+ Добавить строку</button>
+      data-ob-grid-add="{{$tpName}}">+ Добавить строку</button>
     <button type="button" class="btn btn-sm" style="background:#fee2e2;color:#991b1b"
-      onclick="obGridDelRow('{{$tpName}}')">− Удалить строку</button>
+      data-ob-grid-del="{{$tpName}}">− Удалить строку</button>
   </div>
 {{else}}
 <table class="tp-table" data-tp="{{$tpName}}">
@@ -223,17 +223,17 @@ const tplManagedForm = `
                 <option value="{{index . "id"}}" {{if eq (str (index . "id")) (refID $v)}}selected{{end}}>{{index . "_label"}}</option>
                 {{end}}
               </select>
-              <button type="button" onclick="openRefPicker(this.parentElement.querySelector('select'))" style="padding:4px 8px;border:1px solid #e2e8f0;border-radius:5px;background:#f8fafc;cursor:pointer;font-size:12px;flex-shrink:0" title="Выбрать из списка">...</button>
-              <button type="button" onclick="openRefCurrent(this.parentElement.querySelector('select'))" style="padding:4px 7px;border:1px solid #e2e8f0;border-radius:5px;background:#f8fafc;cursor:pointer;font-size:12px;flex-shrink:0" title="Открыть карточку">🔍</button>
+              <button type="button" data-ob-ref-picker="closest" style="padding:4px 8px;border:1px solid #e2e8f0;border-radius:5px;background:#f8fafc;cursor:pointer;font-size:12px;flex-shrink:0" title="Выбрать из списка">...</button>
+              <button type="button" data-ob-ref-current="closest" style="padding:4px 7px;border:1px solid #e2e8f0;border-radius:5px;background:#f8fafc;cursor:pointer;font-size:12px;flex-shrink:0" title="Открыть карточку">🔍</button>
             </div>
           {{else if eq (str $f.Type) "number"}}
-            <input type="number" step="any" name="tp.{{$tpName}}.{{$i}}.{{$f.Name}}" value="{{$v}}" data-tp-num="{{$f.Name}}" oninput="recalcTpRow(this)">
+            <input type="number" step="any" name="tp.{{$tpName}}.{{$i}}.{{$f.Name}}" value="{{$v}}" data-tp-num="{{$f.Name}}" data-ob-recalc-tp-row>
           {{else}}
-            <input type="text" name="tp.{{$tpName}}.{{$i}}.{{$f.Name}}" value="{{$v}}" oninput="recalcTpRow(this)">
+            <input type="text" name="tp.{{$tpName}}.{{$i}}.{{$f.Name}}" value="{{$v}}" data-ob-recalc-tp-row>
           {{end}}
         </td>
         {{end}}
-        <td><button type="button" class="del-btn" onclick="this.closest('tr').remove()">×</button></td>
+        <td><button type="button" class="del-btn" data-ob-remove-row>×</button></td>
       </tr>
     {{end}}
     </tbody>
@@ -243,7 +243,7 @@ const tplManagedForm = `
     </tr></tfoot>
   </table>
   <button type="button" class="btn btn-sm" style="background:#e2e8f0;color:#475569;margin:0 0 12px"
-    onclick="addTpRow('{{$tpName}}', [{{range $tpMeta.Fields}}'{{.Name}}',{{end}}], [{{range $tpMeta.Fields}}{{if eq (str .Type) "number"}}'{{.Name}}',{{end}}{{end}}], document.getElementById('tp-body-{{$tpName}}').rows.length)">
+    data-ob-add-tp="{{$tpName}}">
     + Добавить строку
 {{end}}
   </button>
@@ -258,7 +258,7 @@ const tplManagedForm = `
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
     {{range $vtCmds}}
     <button type="button" class="btn btn-sm" style="background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe"
-      onclick="obFire('{{.Name}}','Нажатие',{_tp:'{{$tpName}}'})">
+      data-ob-fire-click="{{.Name}}" data-ob-fire-tp="{{$tpName}}">
       {{fieldTitleRU .TitleMap .Name}}
     </button>
     {{end}}
@@ -286,13 +286,13 @@ const tplManagedForm = `
           {{end}}
         </td>
         {{end}}
-        <td><button type="button" class="del-btn" onclick="this.closest('tr').remove()">×</button></td>
+        <td><button type="button" class="del-btn" data-ob-remove-row>×</button></td>
       </tr>
     {{end}}
     </tbody>
   </table>
   <button type="button" class="btn btn-sm" style="background:#e2e8f0;color:#475569;margin:0 0 12px"
-    onclick="addVtRow('{{$tpName}}', [{{range $vtCols}}'{{.Name}}',{{end}}])">
+    data-ob-add-vt="{{$tpName}}">
     + Добавить строку
   </button>
   {{else}}
@@ -310,7 +310,7 @@ const tplManagedForm = `
   {{$dv := index $ctx.Values $fn}}
   <div class="form-group">
     <label>{{fieldTitleRU $el.TitleMap $fn}}{{if $el.Required}} <span style="color:#dc2626">*</span>{{end}}</label>
-    <input type="date" name="{{$fn}}" value="{{if ge (len $dv) 10}}{{slice $dv 0 10}}{{else}}{{$dv}}{{end}}"{{if $el.ReadOnly}} readonly{{end}}{{if $hChg}} onchange="obFire('{{$el.Name}}','ПриИзменении')"{{end}}>
+    <input type="date" name="{{$fn}}" value="{{if ge (len $dv) 10}}{{slice $dv 0 10}}{{else}}{{$dv}}{{end}}"{{if $el.ReadOnly}} readonly{{end}}{{if $hChg}} data-ob-fire-change="{{$el.Name}}"{{end}}>
   </div>
 {{else if eq (str $el.Kind) "Переключатель"}}
   {{/* Поле с набором значений: радио-переключатель (по умолчанию) или список
@@ -325,7 +325,7 @@ const tplManagedForm = `
   <div class="form-group">
     <label>{{fieldTitleRU $el.TitleMap $fn}}{{if $el.Required}} <span style="color:#dc2626">*</span>{{end}}</label>
     {{if eq $el.View "select"}}
-      <select name="{{$fn}}"{{if $el.ReadOnly}} disabled{{end}}{{if $hChg}} onchange="obFire('{{$el.Name}}','ПриИзменении')"{{end}}>
+      <select name="{{$fn}}"{{if $el.ReadOnly}} disabled{{end}}{{if $hChg}} data-ob-fire-change="{{$el.Name}}"{{end}}>
         <option value="">— выбрать —</option>
         {{if $enum}}
           {{range index $ctx.EnumOptions $fn}}<option value="{{.Value}}" {{if eq .Value $cur}}selected{{end}}>{{.Label}}</option>{{end}}
@@ -336,9 +336,9 @@ const tplManagedForm = `
     {{else}}
       <div class="switch-options" style="display:flex;flex-wrap:wrap;gap:12px;padding:4px 0">
         {{if $enum}}
-          {{range index $ctx.EnumOptions $fn}}<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="{{$fn}}" value="{{.Value}}"{{if eq .Value $cur}} checked{{end}}{{if $el.ReadOnly}} disabled{{end}}{{if $hChg}} onchange="obFire('{{$el.Name}}','ПриИзменении')"{{end}}> {{.Label}}</label>{{end}}
+          {{range index $ctx.EnumOptions $fn}}<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="{{$fn}}" value="{{.Value}}"{{if eq .Value $cur}} checked{{end}}{{if $el.ReadOnly}} disabled{{end}}{{if $hChg}} data-ob-fire-change="{{$el.Name}}"{{end}}> {{.Label}}</label>{{end}}
         {{else}}
-          {{range $el.Options}}<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="{{$fn}}" value="{{.ValueStr}}"{{if eq .ValueStr $cur}} checked{{end}}{{if $el.ReadOnly}} disabled{{end}}{{if $hChg}} onchange="obFire('{{$el.Name}}','ПриИзменении')"{{end}}> {{.Label}}</label>{{end}}
+          {{range $el.Options}}<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="{{$fn}}" value="{{.ValueStr}}"{{if eq .ValueStr $cur}} checked{{end}}{{if $el.ReadOnly}} disabled{{end}}{{if $hChg}} data-ob-fire-change="{{$el.Name}}"{{end}}> {{.Label}}</label>{{end}}
         {{end}}
       </div>
     {{end}}
@@ -391,7 +391,7 @@ const tplManagedForm = `
     <span style="font-size:11px;color:#10b981;background:#d1fae5;padding:2px 8px;border-radius:10px;vertical-align:middle;font-weight:500" title="Управляемая форма из forms/{{if .IsProcessor}}{{lower .Processor.Name}}{{else}}{{lower .Entity.Name}}{{end}}/">◇ managed</span>
   </h2>
   {{if .IsPopup}}
-  <a href="javascript:void(0)" onclick="try{parent.postMessage({source:'obRefCancel'}, '*')}catch(e){}" title="Закрыть" style="font-size:22px;line-height:1;color:#94a3b8;text-decoration:none;padding:2px 8px;border-radius:5px;background:#f1f5f9;font-weight:300">×</a>
+  <a href="#" data-ob-ref-cancel title="Закрыть" style="font-size:22px;line-height:1;color:#94a3b8;text-decoration:none;padding:2px 8px;border-radius:5px;background:#f1f5f9;font-weight:300">×</a>
   {{else}}
   <a href="{{if .IsProcessor}}/ui/{{else}}/ui/{{lower (str .Entity.Kind)}}/{{lower .Entity.Name}}{{end}}" title="Закрыть" style="font-size:22px;line-height:1;color:#94a3b8;text-decoration:none;padding:2px 8px;border-radius:5px;background:#f1f5f9;font-weight:300">×</a>
   {{end}}
@@ -436,7 +436,7 @@ const tplManagedForm = `
     <a href="/ui/{{lower (str .Entity.Kind)}}/{{.Entity.Name}}/{{.ID}}/history" class="btn btn-sm btn-secondary">История</a>
     {{if or .AllPrintForms .HasPrintProc}}
     <div style="position:relative">
-      <button type="button" class="btn btn-sm btn-secondary" onclick="var d=this.nextElementSibling;d.style.display=d.style.display==='none'?'block':'none'">{{t $.Lang "Печать"}} ▾</button>
+      <button type="button" class="btn btn-sm btn-secondary" data-ob-toggle-next>{{t $.Lang "Печать"}} ▾</button>
       <div style="display:none;position:absolute;top:100%;left:0;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.1);min-width:200px;z-index:50;margin-top:4px">
         {{range .AllPrintForms}}
         <div style="display:flex;align-items:center;border-bottom:1px solid #f1f5f9">
@@ -455,7 +455,7 @@ const tplManagedForm = `
     {{end}}
     {{if .Receivers}}
     <div style="position:relative;display:inline-block">
-      <button type="button" class="btn btn-sm btn-secondary" onclick="var d=this.nextElementSibling;d.style.display=d.style.display==='none'?'block':'none'">{{t $.Lang "Ввести на основании"}} ▾</button>
+      <button type="button" class="btn btn-sm btn-secondary" data-ob-toggle-next>{{t $.Lang "Ввести на основании"}} ▾</button>
       <div style="display:none;position:absolute;top:100%;left:0;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.1);min-width:200px;z-index:50;margin-top:4px">
         {{range .Receivers}}
         <a href="/ui/{{lower (str .Kind)}}/{{.Name}}/new?based_on={{$.Entity.Name}}&based_on_id={{$.ID}}"
@@ -466,7 +466,7 @@ const tplManagedForm = `
     {{end}}
     {{if and .CanDelete (not (deleteHidden .Form))}}
     <form method="POST" action="/ui/{{lower (str .Entity.Kind)}}/{{.Entity.Name}}/{{.ID}}/delete"
-          onsubmit="return confirm('{{if .IsAdmin}}Удалить запись навсегда?{{else}}Пометить запись на удаление?{{end}}')" style="margin-left:auto">
+          data-ob-confirm="{{if .IsAdmin}}Удалить запись навсегда?{{else}}Пометить запись на удаление?{{end}}" style="margin-left:auto">
       <button class="btn btn-danger btn-sm" type="submit">{{if .IsAdmin}}Удалить{{else}}Пометить на удаление{{end}}</button>
     </form>
     {{end}}
@@ -508,7 +508,7 @@ const tplManagedForm = `
 {{end}}
 
 <div class="card">
-<form id="main-form" method="POST" onsubmit="if(window.obGridSync)obGridSync()" {{if .IsProcessor}}action="/ui/processor/{{lower .Processor.Name}}" enctype="multipart/form-data"{{end}}>
+<form id="main-form" method="POST" data-ob-grid-sync {{if .IsProcessor}}action="/ui/processor/{{lower .Processor.Name}}" enctype="multipart/form-data"{{end}}>
 {{if and (not .IsNew) (index .Values "_version")}}<input type="hidden" name="_version" value="{{index .Values "_version"}}">{{end}}
 {{if .IsPopup}}<input type="hidden" name="_popup" value="1">{{end}}
 
@@ -520,7 +520,7 @@ const tplManagedForm = `
 <div style="margin-top:16px">
   {{if .IsPopup}}
   {{if .CanWrite}}<button class="btn btn-primary" type="submit" name="_action" value="" form="main-form">Записать и выбрать</button>{{end}}
-  <a href="javascript:void(0)" onclick="try{parent.postMessage({source:'obRefCancel'}, '*')}catch(e){}" class="btn btn-cancel">Отмена</a>
+  <a href="#" data-ob-ref-cancel class="btn btn-cancel">Отмена</a>
   {{else if .IsProcessor}}
   {{/* Кнопка «Выполнить» скрыта: managed-форма использует свои кнопки */}}
   <a href="/ui/" class="btn btn-cancel">Отмена</a>

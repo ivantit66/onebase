@@ -67,6 +67,9 @@ func TestStaticManagedJS(t *testing.T) {
 		"function addVtRow",
 		"window.obGridSync",
 		"function gridCellEventParams",
+		"function obManagedInitDelegates",
+		"data-ob-fire-click",
+		"data-ob-add-tp",
 		"obManagedSwitchTab",
 		"ПриОткрытии",
 	} {
