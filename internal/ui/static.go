@@ -11,6 +11,9 @@ import (
 //go:embed static/ui.js
 var uiJS []byte
 
+//go:embed static/managed.js
+var managedJS []byte
+
 // mountStatic регистрирует отдачу общих встроенных ассетов. Самохостинг вместо
 // CDN: графики и редактор работают офлайн — десктопная база не должна зависеть
 // от интернета. ECharts и Monaco вендорятся один раз в webassets и раздаются
@@ -21,6 +24,11 @@ func mountStatic(r chi.Router) {
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		_, _ = w.Write(uiJS)
+	})
+	r.Get("/static/managed.js", func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		_, _ = w.Write(managedJS)
 	})
 	r.Handle("/vendor/echarts/*", http.StripPrefix("/vendor/echarts/", webassets.EChartsHandler()))
 	// Monaco editor — инструменты разработчика (консоль кода/запросов, отладчик)

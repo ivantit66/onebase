@@ -71,9 +71,18 @@ func TestManagedFormConditionalRenderSlickGrid(t *testing.T) {
 	applyManagedFormConditionalStyles(form, rows, nil, newInterpEvaluator(interpreter.New()))
 
 	html := renderConditionalManagedForm(t, ent, form, rows)
-	for _, want := range []string{"_form_row_class", "_form_cell_classes", "getItemMetadata = formGridItemMetadata", "cssClass: String(cc[field])"} {
+	for _, want := range []string{"_form_row_class", "_form_cell_classes", `src="/static/managed.js"`} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("rendered grid form missing %q:\n%s", want, html)
+		}
+	}
+	if strings.Contains(html, "getItemMetadata = formGridItemMetadata") || strings.Contains(html, "cssClass: String(cc[field])") {
+		t.Fatalf("SlickGrid runtime должен жить в /static/managed.js, а не в HTML")
+	}
+	js := string(managedJS)
+	for _, want := range []string{"getItemMetadata = formGridItemMetadata", "cssClass: String(cc[field])"} {
+		if !strings.Contains(js, want) {
+			t.Fatalf("/static/managed.js missing %q", want)
 		}
 	}
 }

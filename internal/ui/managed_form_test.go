@@ -111,10 +111,23 @@ func TestPageManagedForm_Renders(t *testing.T) {
 		"type=\"checkbox\"",
 		"name=\"Наименование\"",
 		"name=\"Активен\"",
+		`id="ob-managed-config"`,
+		`id="ob-managed-tp-ref-opts"`,
+		`src="/static/managed.js"`,
 	}
 	for _, e := range expects {
 		if !strings.Contains(html, e) {
 			t.Errorf("в HTML не найдено %q", e)
+		}
+	}
+	for _, old := range []string{
+		"window._tpRefOpts =",
+		"window.obFire = async function",
+		"function addVtRow",
+		"function gridCellEventParams",
+	} {
+		if strings.Contains(html, old) {
+			t.Errorf("managed runtime должен жить в /static/managed.js, но HTML содержит %q", old)
 		}
 	}
 }

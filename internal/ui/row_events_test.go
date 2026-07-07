@@ -163,8 +163,12 @@ func TestManagedFormGridRowEventAttrs(t *testing.T) {
 	if !strings.Contains(html, `data-sg-rowdel="1"`) {
 		t.Error("нет data-sg-rowdel при объявленном ПриУдаленииСтроки")
 	}
-	if !strings.Contains(html, "gridCellEventParams") || !strings.Contains(html, "_tp_col") || !strings.Contains(html, "_tp_row_number") {
-		t.Error("рендер грида не содержит передачу контекста изменённой ячейки")
+	if strings.Contains(html, "gridCellEventParams") {
+		t.Error("runtime грида должен жить в /static/managed.js, а не в HTML")
+	}
+	js := string(managedJS)
+	if !strings.Contains(js, "gridCellEventParams") || !strings.Contains(js, "_tp_col") || !strings.Contains(js, "_tp_row_number") {
+		t.Error("/static/managed.js не содержит передачу контекста изменённой ячейки")
 	}
 }
 

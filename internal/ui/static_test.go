@@ -45,3 +45,36 @@ func TestStaticUIJS(t *testing.T) {
 		}
 	}
 }
+
+func TestStaticManagedJS(t *testing.T) {
+	r := chi.NewRouter()
+	mountStatic(r)
+
+	req := httptest.NewRequest(http.MethodGet, "/static/managed.js", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("/static/managed.js status = %d", rr.Code)
+	}
+	if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, "application/javascript") {
+		t.Fatalf("/static/managed.js content-type = %q", ct)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		"function obManagedConfig",
+		"window.obFire",
+		"function addVtRow",
+		"window.obGridSync",
+		"function gridCellEventParams",
+		"obManagedSwitchTab",
+		"ПриОткрытии",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/static/managed.js не содержит %q", want)
+		}
+	}
+	if strings.Contains(body, "{{") {
+		t.Error("/static/managed.js содержит Go-template маркеры")
+	}
+}
