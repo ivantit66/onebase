@@ -3,10 +3,37 @@ package configdb_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/ivantit66/onebase/internal/configdb"
 )
+
+// Порядок версий стабилен даже при создании многих версий в один момент
+// таймера: ListVersions обязан вернуть их строго в обратном порядке создания.
+func TestListVersionsOrderStableUnderCoarseTimer(t *testing.T) {
+	repo, _, ctx := newSQLiteRepo(t)
+
+	const n = 25
+	for i := 0; i < n; i++ {
+		if _, err := repo.CreateVersion(ctx, configdb.VersionOptions{Message: fmt.Sprintf("v%03d", i)}); err != nil {
+			t.Fatalf("CreateVersion %d: %v", i, err)
+		}
+	}
+	versions, err := repo.ListVersions(ctx, 0)
+	if err != nil {
+		t.Fatalf("ListVersions: %v", err)
+	}
+	if len(versions) != n {
+		t.Fatalf("versions len = %d, want %d", len(versions), n)
+	}
+	for i, v := range versions {
+		want := fmt.Sprintf("v%03d", n-1-i)
+		if v.Message != want {
+			t.Fatalf("позиция %d: message = %q, want %q (порядок версий недетерминирован)", i, v.Message, want)
+		}
+	}
+}
 
 func TestRepoVersions_SaveDiffRollback(t *testing.T) {
 	repo, _, ctx := newSQLiteRepo(t)

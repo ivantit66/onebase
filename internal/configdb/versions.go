@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,6 +32,27 @@ type VersionOptions struct {
 
 // versionTimeLayout keeps SQLite TEXT timestamps lexicographically sortable.
 const versionTimeLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
+// versionClock выдаёт строго возрастающие created_at внутри процесса. Системный
+// таймер (особенно на Windows) может вернуть одинаковый time.Now() для
+// нескольких подряд созданных версий; тогда порядок решал тай-брейк по
+// СЛУЧАЙНОМУ UUID — история конфигурации могла показать «последней» не ту
+// версию, а откат взять не тот снимок (флак TestRepoVersions_SaveDiffRollback).
+var versionClock struct {
+	mu   sync.Mutex
+	last time.Time
+}
+
+func nextVersionTime() time.Time {
+	versionClock.mu.Lock()
+	defer versionClock.mu.Unlock()
+	now := time.Now().UTC()
+	if !now.After(versionClock.last) {
+		now = versionClock.last.Add(time.Nanosecond)
+	}
+	versionClock.last = now
+	return now
+}
 
 // DiffKind describes how a file differs between two versions.
 type DiffKind string
@@ -86,7 +108,7 @@ func (r *Repo) CreateVersion(ctx context.Context, opts VersionOptions) (*Version
 	}
 	v := &Version{
 		ID:          uuid.NewString(),
-		CreatedAt:   time.Now().UTC(),
+		CreatedAt:   nextVersionTime(),
 		AuthorID:    opts.AuthorID,
 		AuthorLogin: opts.AuthorLogin,
 		Message:     opts.Message,
