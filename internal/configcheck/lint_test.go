@@ -224,14 +224,51 @@ elements:
     name: ПолеНомер
     data_path: Объект.Номер
     accesskey: "N"
-  - kind: Кнопка
-    name: КнопкаКопировать
-    accesskey: "7"
+	  - kind: Кнопка
+	    name: КнопкаКопировать
+	    accesskey: "7"
+	    hotkey: F7
 `)
 	for _, is := range CheckLintYAML(dir) {
 		if is.Code == "metadata.unvalidated-key" {
 			t.Fatalf("accesskey формы должен быть известен линту, получено: %+v", is)
 		}
+	}
+}
+
+func TestLintYAML_FormHotkeyWarnings(t *testing.T) {
+	dir := t.TempDir()
+	mkFile(t, filepath.Join(dir, "forms", "заказ", "объекта.form.yaml"), `schema: onebase.form/v1
+form:
+  name: ФормаОбъекта
+  kind: object
+  entity: Заказ
+elements:
+  - kind: Кнопка
+    name: КнопкаКопировать
+    hotkey: F7
+  - kind: Кнопка
+    name: КнопкаСоздатьНаОсновании
+    hotkey: f7
+  - kind: Кнопка
+    name: КнопкаОбновить
+    hotkey: F5
+  - kind: ПолеВвода
+    name: ПолеНомер
+    data_path: Объект.Номер
+    hotkey: F8
+`)
+	got := map[string]int{}
+	for _, is := range CheckLintYAML(dir) {
+		got[is.Code]++
+	}
+	for _, code := range []string{"form.duplicate-hotkey", "form.unsupported-hotkey", "form.ignored-hotkey"} {
+		if got[code] == 0 {
+			t.Fatalf("ожидался warning %s, получено: %+v", code, got)
+		}
+	}
+	if got["metadata.unvalidated-key"] != 0 {
+		t.Fatalf("hotkey формы должен быть известен линту, получено: %+v", got)
 	}
 }
 

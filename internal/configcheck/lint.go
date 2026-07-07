@@ -44,6 +44,7 @@ func CheckLintYAML(dir string) []Issue {
 		}
 		label := relLabel(dir, path)
 		issues = append(issues, lintYAMLFile(path, label, "Управляемая форма", formModuleYAMLSchema())...)
+		issues = append(issues, lintFormHotkeys(path, label)...)
 		return nil
 	})
 
@@ -154,6 +155,113 @@ func lintYAMLNode(label, kind, path string, node *yaml.Node, schema *yamlLintSch
 		}
 		lintYAMLNode(label, kind, nextPath, valueNode, child, issues)
 	}
+}
+
+type formHotkeyRef struct {
+	name string
+	line int
+}
+
+func lintFormHotkeys(path, label string) []Issue {
+	data, err := os.ReadFile(path)
+	if err != nil || len(strings.TrimSpace(string(data))) == 0 {
+		return nil
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 {
+		return nil
+	}
+	elements := yamlMapValue(doc.Content[0], "elements")
+	if elements == nil {
+		return nil
+	}
+	seen := map[string]formHotkeyRef{}
+	var issues []Issue
+	lintFormHotkeyElements(label, elements, seen, &issues)
+	return issues
+}
+
+func lintFormHotkeyElements(label string, node *yaml.Node, seen map[string]formHotkeyRef, issues *[]Issue) {
+	if node == nil || node.Kind != yaml.SequenceNode {
+		return
+	}
+	for _, el := range node.Content {
+		if el == nil || el.Kind != yaml.MappingNode {
+			continue
+		}
+		kind := yamlMapScalar(el, "kind")
+		name := yamlMapScalar(el, "name")
+		if name == "" {
+			name = kind
+		}
+		if hotkeyNode := yamlMapValue(el, "hotkey"); hotkeyNode != nil && strings.TrimSpace(hotkeyNode.Value) != "" {
+			hotkey := strings.TrimSpace(hotkeyNode.Value)
+			normalized := normalizeFormHotkey(hotkey)
+			if kind != string(metadata.FormElementButton) {
+				*issues = append(*issues, Issue{
+					File:         label,
+					Kind:         "Управляемая форма",
+					Code:         "form.ignored-hotkey",
+					Line:         hotkeyNode.Line,
+					Column:       hotkeyNode.Column,
+					Message:      fmt.Sprintf("hotkey %q у элемента %q игнорируется: сейчас hotkey поддержан только для kind: Кнопка", hotkey, name),
+					SuggestedFix: "Используйте `accesskey` для полей ввода или перенесите `hotkey` на кнопку формы.",
+				})
+			} else if normalized == "" {
+				*issues = append(*issues, Issue{
+					File:         label,
+					Kind:         "Управляемая форма",
+					Code:         "form.unsupported-hotkey",
+					Line:         hotkeyNode.Line,
+					Column:       hotkeyNode.Column,
+					Message:      fmt.Sprintf("hotkey %q у кнопки %q не поддержан runtime: доступны F2, F4, F7, F8, F9, F10", hotkey, name),
+					SuggestedFix: "Выберите одну из поддержанных F-клавиш: F2, F4, F7, F8, F9, F10.",
+				})
+			} else if prev, ok := seen[normalized]; ok {
+				*issues = append(*issues, Issue{
+					File:         label,
+					Kind:         "Управляемая форма",
+					Code:         "form.duplicate-hotkey",
+					Line:         hotkeyNode.Line,
+					Column:       hotkeyNode.Column,
+					Message:      fmt.Sprintf("hotkey %s у кнопки %q уже используется кнопкой %q на строке %d", normalized, name, prev.name, prev.line),
+					SuggestedFix: "Оставьте одну кнопку на эту клавишу или назначьте другой hotkey.",
+				})
+			} else {
+				seen[normalized] = formHotkeyRef{name: name, line: hotkeyNode.Line}
+			}
+		}
+		lintFormHotkeyElements(label, yamlMapValue(el, "children"), seen, issues)
+	}
+}
+
+func normalizeFormHotkey(value string) string {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "F2", "F4", "F7", "F8", "F9", "F10":
+		return strings.ToUpper(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func yamlMapValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i] != nil && node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+func yamlMapScalar(node *yaml.Node, key string) string {
+	value := yamlMapValue(node, key)
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(value.Value)
 }
 
 func obj(keys ...string) *yamlLintSchema {
@@ -375,7 +483,7 @@ func formModuleYAMLSchema() *yamlLintSchema {
 		"id", "name", "kind", "field", "table_part", "visible", "enabled", "required",
 		"original_id", "data_path", "picture", "values_picture", "width", "height",
 		"halign", "valign", "readonly", "use_grid", "no_grid", "auto_sum", "hint", "mask",
-		"accesskey", "multiline", "format", "display_format", "type", "choice", "unknown_xml", "view",
+		"accesskey", "hotkey", "multiline", "format", "display_format", "type", "choice", "unknown_xml", "view",
 	} {
 		element.keys[k] = nil
 	}

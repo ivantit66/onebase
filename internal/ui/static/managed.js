@@ -621,6 +621,35 @@ function obManagedInitDelegates() {
     }
   });
 
+  function obManagedNormalizeHotkey(value) {
+    var key = String(value || '').trim().toUpperCase();
+    if (key === 'F2' || key === 'F4' || key === 'F7' || key === 'F8' || key === 'F9' || key === 'F10') return key;
+    return '';
+  }
+
+  function obManagedEventHotkey(e) {
+    if (!e || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return '';
+    return obManagedNormalizeHotkey(e.key || e.code || '');
+  }
+
+  document.addEventListener('keydown', function (e) {
+    var hotkey = obManagedEventHotkey(e);
+    if (!hotkey) return;
+    var form = document.getElementById('main-form');
+    var target = e.target;
+    if (form && target && target !== document.body && !form.contains(target)) return;
+    var root = form || document;
+    var buttons = root.querySelectorAll('[data-ob-hotkey]');
+    for (var i = 0; i < buttons.length; i++) {
+      var btn = buttons[i];
+      if (obManagedNormalizeHotkey(btn.getAttribute('data-ob-hotkey')) !== hotkey) continue;
+      if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') continue;
+      e.preventDefault();
+      btn.click();
+      return;
+    }
+  });
+
   document.addEventListener('change', function (e) {
     var el = e.target;
     if (!el || !el.getAttribute) return;

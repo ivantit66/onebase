@@ -54,6 +54,12 @@ elements:
         name: ПолеАктивен
         data_path: Объект.Активен
         accesskey: "A"
+      - kind: Кнопка
+        name: КнопкаКопировать
+        title: { ru: "Создать копию" }
+        hotkey: F7
+        events:
+          Нажатие: Копировать
 
 events:
   ПриОткрытии: ПриОткрытииФормы
@@ -114,8 +120,8 @@ func TestManagedFormLoader_ParseYAML(t *testing.T) {
 		t.Fatalf("root element = %+v", form.Elements)
 	}
 	root := form.Elements[0]
-	if len(root.Children) != 2 {
-		t.Fatalf("root.Children = %d, want 2", len(root.Children))
+	if len(root.Children) != 3 {
+		t.Fatalf("root.Children = %d, want 3", len(root.Children))
 	}
 	first := root.Children[0]
 	if first.Kind != metadata.FormElementField || first.Name != "ПолеКонтрагент" {
@@ -132,6 +138,12 @@ func TestManagedFormLoader_ParseYAML(t *testing.T) {
 	}
 	if root.Children[1].AccessKey != "A" {
 		t.Errorf("second child accesskey = %q, want A", root.Children[1].AccessKey)
+	}
+	if root.Children[2].HotKey != "F7" {
+		t.Errorf("third child hotkey = %q, want F7", root.Children[2].HotKey)
+	}
+	if root.Children[2].Handlers[metadata.FormEventOnClick] != "Копировать" {
+		t.Errorf("third child events = %+v", root.Children[2].Handlers)
 	}
 
 	// Form-level events

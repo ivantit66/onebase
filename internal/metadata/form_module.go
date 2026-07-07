@@ -122,6 +122,7 @@ type FormElement struct {
 	Hint            string            `yaml:"hint,omitempty"`           // всплывающая подсказка
 	Mask            string            `yaml:"mask,omitempty"`           // маска ввода
 	AccessKey       string            `yaml:"accesskey,omitempty"`      // HTML accesskey для браузерной активации (Alt/Option+клавиша)
+	HotKey          string            `yaml:"hotkey,omitempty"`         // runtime shortcut для кнопок формы (F2/F4/F7/F8/F9/F10)
 	Multiline       bool              `yaml:"multiline,omitempty"`      // обычное поле ввода рендерится как textarea
 	// Format/DisplayFormat распознаются, но для kind: ПолеДаты НЕ применяются в
 	// рантайме: нативный <input type=date> показывает дату по локали браузера, а

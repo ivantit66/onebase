@@ -146,7 +146,7 @@ const tplManagedForm = `
     {{fieldTitleRU $el.TitleMap $el.Name}}
   </div>
 {{else if eq (str $el.Kind) "Кнопка"}}
-  <button type="button" class="btn btn-secondary" style="margin:6px 4px 6px 0"{{if $el.AccessKey}} accesskey="{{$el.AccessKey}}"{{end}}{{if $el.ReadOnly}} disabled{{end}}{{if hasHandler $el "Нажатие"}} data-ob-fire-click="{{$el.Name}}"{{end}}>
+  <button type="button" class="btn btn-secondary" style="margin:6px 4px 6px 0"{{if $el.AccessKey}} accesskey="{{$el.AccessKey}}"{{end}}{{if $el.HotKey}} data-ob-hotkey="{{$el.HotKey}}" aria-keyshortcuts="{{$el.HotKey}}"{{end}}{{if $el.ReadOnly}} disabled{{end}}{{if hasHandler $el "Нажатие"}} data-ob-fire-click="{{$el.Name}}"{{end}}>
     {{fieldTitleRU $el.TitleMap $el.Name}}
   </button>
 {{else if eq (str $el.Kind) "ПолеКартинки"}}
@@ -172,7 +172,7 @@ const tplManagedForm = `
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
     {{range $tpCmds}}
     <button type="button" class="btn btn-sm" style="background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe"
-      {{if .AccessKey}}accesskey="{{.AccessKey}}" {{end}}{{if $el.ReadOnly}}disabled{{end}}{{if hasHandler . "Нажатие"}} data-ob-fire-click="{{.Name}}" data-ob-fire-tp="{{$tpName}}"{{end}}>
+      {{if .AccessKey}}accesskey="{{.AccessKey}}" {{end}}{{if .HotKey}}data-ob-hotkey="{{.HotKey}}" aria-keyshortcuts="{{.HotKey}}" {{end}}{{if $el.ReadOnly}}disabled{{end}}{{if hasHandler . "Нажатие"}} data-ob-fire-click="{{.Name}}" data-ob-fire-tp="{{$tpName}}"{{end}}>
       {{fieldTitleRU .TitleMap .Name}}
     </button>
     {{end}}
@@ -258,7 +258,7 @@ const tplManagedForm = `
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
     {{range $vtCmds}}
     <button type="button" class="btn btn-sm" style="background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe"
-      {{if .AccessKey}}accesskey="{{.AccessKey}}" {{end}}data-ob-fire-click="{{.Name}}" data-ob-fire-tp="{{$tpName}}">
+      {{if .AccessKey}}accesskey="{{.AccessKey}}" {{end}}{{if .HotKey}}data-ob-hotkey="{{.HotKey}}" aria-keyshortcuts="{{.HotKey}}" {{end}}data-ob-fire-click="{{.Name}}" data-ob-fire-tp="{{$tpName}}">
       {{fieldTitleRU .TitleMap .Name}}
     </button>
     {{end}}
