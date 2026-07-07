@@ -839,6 +839,65 @@ func TestAPIV2_ReportRunsQueryEnvelope(t *testing.T) {
 	}
 }
 
+func TestAPIV2_ReportRequiresReadOnQuerySourcesAndAppliesRowAccess(t *testing.T) {
+	cat := &metadata.Entity{
+		Name: "Товар",
+		Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{
+			{Name: "Наименование", Type: metadata.FieldTypeString},
+			{Name: "Owner", Type: metadata.FieldTypeString},
+		},
+	}
+	rep := &reportpkg.Report{
+		Name:  "Товары",
+		Query: `ВЫБРАТЬ Наименование ИЗ Справочник.Товар УПОРЯДОЧИТЬ ПО Наименование`,
+	}
+	h, ctx := newAPITestHandlerWithReports(t, []*metadata.Entity{cat}, []*reportpkg.Report{rep}, nil)
+	for _, row := range []map[string]any{
+		{"Наименование": "Allowed", "Owner": "u"},
+		{"Наименование": "Hidden", "Owner": "other"},
+	} {
+		if err := h.store.Upsert(ctx, cat.Name, uuid.New(), row, cat); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := "/api/v2/report/Товары"
+	params := map[string]string{"name": "Товары"}
+
+	deniedReq := reqWithEntity("GET", target, nil, params, nil)
+	deniedReq = withUser(deniedReq, apiUser("runner", auth.Permission{
+		Reports: map[string][]string{"Товары": {"run"}},
+	}))
+	deniedRec := httptest.NewRecorder()
+	h.runReportV2().ServeHTTP(deniedRec, deniedReq)
+	if deniedRec.Code != http.StatusForbidden {
+		t.Fatalf("expected source-read 403, got %d: %s", deniedRec.Code, deniedRec.Body.String())
+	}
+
+	allowedReq := reqWithEntity("GET", target, nil, params, nil)
+	allowedReq = withUser(allowedReq, apiUser("u", auth.Permission{
+		Reports:  map[string][]string{"Товары": {"run"}},
+		Catalogs: map[string][]string{"Товар": {"read"}},
+		RowAccess: auth.RowAccess{Catalogs: map[string]auth.RowPolicies{
+			"Товар": {"read": {Field: "Owner", Op: "eq", Value: auth.RowValue{User: "login"}}},
+		}},
+	}))
+	allowedRec := httptest.NewRecorder()
+	h.runReportV2().ServeHTTP(allowedRec, allowedReq)
+	if allowedRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", allowedRec.Code, allowedRec.Body.String())
+	}
+	var resp struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(allowedRec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Data) != 1 || resp.Data[0]["наименование"] != "Allowed" {
+		t.Fatalf("RLS report rows = %#v", resp.Data)
+	}
+}
+
 func TestAPIV2_ReportParamsAndRBAC(t *testing.T) {
 	rep := &reportpkg.Report{
 		Name: "Сумма",

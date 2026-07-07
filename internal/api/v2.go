@@ -370,6 +370,10 @@ func (h *handler) runReportV2() http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "query compile error: "+err.Error(), "", 0)
 			return
 		}
+		if denied := h.deniedQuerySource(r.Context(), compiled.Sources); denied != "" {
+			writeError(w, http.StatusForbidden, "forbidden source: "+denied, "", 0)
+			return
+		}
 		rows, cols, truncated, err := h.store.RunQueryLimit(r.Context(), compiled.SQL, compiled.Args, limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error(), "", 0)

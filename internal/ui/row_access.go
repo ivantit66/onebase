@@ -205,3 +205,7 @@ func (s *Server) compileQueryWithRowAccess(ctx context.Context, text string, par
 		Dialect:     s.store.Dialect(),
 	})
 }
+
+func (s *Server) deniedQuerySource(ctx context.Context, sources []query.SourceRef) string {
+	return access.DeniedReadSource(auth.UserFromContext(ctx), sources)
+}

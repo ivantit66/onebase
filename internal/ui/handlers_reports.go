@@ -173,6 +173,11 @@ func (s *Server) runReport(w http.ResponseWriter, r *http.Request, rep *reportpk
 		})
 		return
 	}
+	if denied := s.deniedQuerySource(opCtx, compiled.Sources); denied != "" {
+		opStatus = "error"
+		s.renderForbidden(w, r)
+		return
+	}
 	opAttrs = []slog.Attr{slog.String("sql_hash", sqlHash(compiled.SQL))}
 	rows, cols, truncated, err := s.store.RunQueryLimit(opCtx, compiled.SQL, compiled.Args, s.cfg.Limits.ReportMaxRows)
 	opTruncated = truncated
@@ -554,6 +559,9 @@ func (s *Server) reportExportRowsWithContext(ctx context.Context, r *http.Reques
 	compiled, err := s.compileQueryWithRowAccess(ctx, rep.Query, paramValues)
 	if err != nil {
 		return nil, nil, newReportExportError(http.StatusBadRequest, "query compile error", err)
+	}
+	if denied := s.deniedQuerySource(ctx, compiled.Sources); denied != "" {
+		return nil, nil, newReportExportError(http.StatusForbidden, "source access", fmt.Errorf("нет доступа к объекту: %s", denied))
 	}
 	if stats != nil {
 		stats.attrs = []slog.Attr{slog.String("sql_hash", sqlHash(compiled.SQL))}

@@ -89,3 +89,7 @@ func (h *handler) compileQueryWithRowAccess(ctx context.Context, text string, pa
 		Dialect:     h.store.Dialect(),
 	})
 }
+
+func (h *handler) deniedQuerySource(ctx context.Context, sources []query.SourceRef) string {
+	return access.DeniedReadSource(auth.UserFromContext(ctx), sources)
+}

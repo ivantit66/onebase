@@ -571,6 +571,24 @@ func (tr *translator) rowFilterCondition(kind, name string, meta *metadata.Entit
 	return sql, nil
 }
 
+func (tr *translator) rowFilteredSourceSQL(typeUpper, name, tableName, alias string) (string, bool, error) {
+	kind := sourcePermKind(typeUpper)
+	pred := tr.sourceRowFilter(kind, name)
+	if pred == nil {
+		return "", false, nil
+	}
+	meta := tr.predicateEntityForSource(typeUpper, name)
+	if meta == nil {
+		return "", false, fmt.Errorf("row filter source %s.%s metadata not found", kind, name)
+	}
+	sql, args, _, err := storage.PredicateSQLQualified(dialectOrDefault(tr.opts.Dialect), meta, pred, len(tr.args)+1, "")
+	if err != nil {
+		return "", false, fmt.Errorf("row filter %s.%s: %w", kind, name, err)
+	}
+	tr.args = append(tr.args, args...)
+	return fmt.Sprintf("(SELECT * FROM %s WHERE %s) AS %s", tableName, sql, alias), true, nil
+}
+
 func (tr *translator) pendingRowFilterConditions() ([]string, error) {
 	conds := make([]string, 0, len(tr.rowFilters))
 	for _, rf := range tr.rowFilters {
@@ -1975,17 +1993,19 @@ func translate(tokens []tok, opts CompileOpts) (Result, error) {
 			if isMain {
 				tr.mainTable = tableName
 			}
-			tr.emit(tableName)
 			sourceAlias := tableName
-			// Consume optional КАК/AS alias before auto-JOINs
+			hasAlias := false
+			// Consume optional КАК/AS alias before emitting the source. Joined
+			// restricted sources are scoped as subqueries and need the final alias
+			// up front.
 			if p := tr.peek(0); p.kind == tIdent {
 				pUpper := strings.ToUpper(p.val)
 				if pUpper == "КАК" || pUpper == "AS" {
 					tr.advance()
 					if a := tr.peek(0); a.kind == tIdent {
 						aliasName := strings.ToLower(tr.advance().val)
-						tr.emit("AS " + aliasName)
 						sourceAlias = aliasName
+						hasAlias = true
 						// Собственные колонки квалифицируем алиасом, а не именем
 						// таблицы (иначе `таблица.col` не совпадёт с `AS алиас`).
 						if isMain {
@@ -1994,8 +2014,27 @@ func translate(tokens []tok, opts CompileOpts) (Result, error) {
 					}
 				}
 			}
-			if err := tr.addPendingRowFilter(upper, entity.val, sourceAlias); err != nil {
-				return Result{}, err
+			if !isMain {
+				filtered, ok, err := tr.rowFilteredSourceSQL(upper, entity.val, tableName, sourceAlias)
+				if err != nil {
+					return Result{}, err
+				}
+				if ok {
+					tr.emit(filtered)
+				} else {
+					tr.emit(tableName)
+					if hasAlias {
+						tr.emit("AS " + sourceAlias)
+					}
+				}
+			} else {
+				tr.emit(tableName)
+				if hasAlias {
+					tr.emit("AS " + sourceAlias)
+				}
+				if err := tr.addPendingRowFilter(upper, entity.val, sourceAlias); err != nil {
+					return Result{}, err
+				}
 			}
 			if tr.section == sectionFrom && isMain {
 				// ON ссылается на источник через tr.mainTable: это имя таблицы

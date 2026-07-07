@@ -81,3 +81,34 @@ func TestCompile_RowFiltersVirtualRegister(t *testing.T) {
 		t.Fatalf("row filter must be inside register virtual table, got:\n%s", res.SQL)
 	}
 }
+
+func TestCompile_RowFiltersJoinedSourceScopedBeforeOn(t *testing.T) {
+	doc := &metadata.Entity{Name: "Заказ", Kind: metadata.KindDocument}
+	cat := &metadata.Entity{
+		Name: "Клиент",
+		Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{
+			{Name: "Наименование", Type: metadata.FieldTypeString},
+			{Name: "Owner", Type: metadata.FieldTypeString},
+		},
+	}
+	res, err := query.Compile(`ВЫБРАТЬ з.Ссылка, к.Наименование ИЗ Документ.Заказ КАК з ЛЕВОЕ СОЕДИНЕНИЕ Справочник.Клиент КАК к ПО к.Ссылка = з.Ссылка`, query.CompileOpts{
+		Entities: []*metadata.Entity{doc, cat},
+		Dialect:  storage.SQLiteDialect{},
+		RowFilters: map[query.SourceRef]*storage.Predicate{
+			{Kind: "catalog", Name: "Клиент"}: {Field: "Owner", Op: "eq", Value: "u"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if !strings.Contains(res.SQL, "LEFT JOIN (SELECT * FROM клиент WHERE owner = ?) AS к ON") {
+		t.Fatalf("joined row filter must be scoped inside joined source, got:\n%s", res.SQL)
+	}
+	if strings.Contains(res.SQL, "WHERE (к.owner = ?)") {
+		t.Fatalf("joined row filter must not turn LEFT JOIN into an outer WHERE filter:\n%s", res.SQL)
+	}
+	if len(res.Args) != 1 || res.Args[0] != "u" {
+		t.Fatalf("args = %#v, want one joined row filter arg", res.Args)
+	}
+}

@@ -64,3 +64,17 @@ func QueryRowFilters(
 	}
 	return out, nil
 }
+
+// DeniedReadSource returns the first query source the user cannot read.
+// A nil user means auth is disabled/open deployment; admins pass via User.Has.
+func DeniedReadSource(u *auth.User, sources []query.SourceRef) string {
+	if u == nil || u.IsAdmin {
+		return ""
+	}
+	for _, src := range sources {
+		if !u.Has(src.Kind, src.Name, "read") {
+			return src.Name
+		}
+	}
+	return ""
+}
