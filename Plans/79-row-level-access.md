@@ -8,7 +8,8 @@
 - декларативный `permissions.row_access` в ролях для `catalogs`,
   `documents`, `registers`, `inforegs`;
 - `same_as`, `all/any/not`, `eq/ne/in/not_in/empty/not_empty`,
-  `{ user: id|login }`, `{ literal: ... }`, `{ list: [...] }`;
+  `{ user: id|login }`, `{ user_attr: ... }`, `{ literal: ... }`,
+  `{ list: [...] }`;
 - единый компилятор безопасных SQL-предикатов для SQLite/PostgreSQL;
 - UI и REST v1/v2 для справочников/документов: list/count/get/create/update/
   delete/post/unpost;
@@ -27,8 +28,9 @@
 
 - расширять alias-aware внедрение row predicates в query compiler для оставшихся
   форм запросов (`UNION`, более богатая диагностика источников);
-- расширения политик вроде `{ user_attr: ... }`, условий по реквизитам ссылок и
-  автоустановки владельца при создании;
+- расширения политик вроде условий по реквизитам ссылок и автоустановки владельца
+  при создании (`user_attr` уже поддержан для встроенных атрибутов пользователя и
+  host-provided `User.Attrs`);
 - явная модель для trusted DSL/server-code путей и внешних обработок;
 - UI-редактор политик и отдельный diagnostics экран; базовые `onebase check
   --lint` warnings `rls.*` уже проверяют unknown object, invalid policy и
@@ -141,12 +143,13 @@ row_access:
 - значения:
   - `{ user: id }` - текущий `auth.User.ID`;
   - `{ user: login }` - текущий `auth.User.Login`;
+  - `{ user_attr: full_name|lang|... }` - встроенный атрибут пользователя или
+    host-provided `auth.User.Attrs`;
   - `{ literal: ... }` - строка, число, bool, UUID-строка;
   - `{ list: [...] }` - список literal-значений.
 
 Отложить:
 
-- `{ user_attr: ... }` для подразделений/групп пользователя;
 - условия по ролям;
 - условия по реквизитам ссылок;
 - автоустановку поля при создании (`Ответственный = текущий пользователь`).

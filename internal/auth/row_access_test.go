@@ -21,6 +21,10 @@ permissions:
           value: { user: login }
         write:
           same_as: read
+        delete:
+          field: Подразделение
+          op: eq
+          value: { user_attr: Department }
 `)
 	var role Role
 	if err := yaml.Unmarshal(src, &role); err != nil {
@@ -32,6 +36,13 @@ permissions:
 	}
 	if policy.Field != "Ответственный" || policy.Value.User != "login" {
 		t.Fatalf("policy = %+v", policy)
+	}
+	policy, ok = role.Permissions.RowAccess.Policy("catalog", "Контрагенты", "delete")
+	if !ok {
+		t.Fatal("delete row policy not resolved")
+	}
+	if policy.Value.UserAttr != "department" {
+		t.Fatalf("user_attr was not normalized: %+v", policy)
 	}
 	raw, err := marshalPermissions(role.Permissions)
 	if err != nil {

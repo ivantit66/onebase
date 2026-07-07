@@ -25,7 +25,8 @@ type User struct {
 	AIDataAccess     bool   // can use AI chat data tools without being admin
 	Lang             string // preferred UI language ("" = use base default)
 	CreatedAt        time.Time
-	Roles            []*Role // loaded by middleware after session lookup
+	Attrs            map[string]any // optional host-provided attributes for row-level access
+	Roles            []*Role        // loaded by middleware after session lookup
 }
 
 type Repo struct {

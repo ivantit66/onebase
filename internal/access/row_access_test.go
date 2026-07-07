@@ -16,6 +16,8 @@ func dealEntity() *metadata.Entity {
 		Fields: []metadata.Field{
 			{Name: "Ответственный", Type: metadata.FieldTypeString},
 			{Name: "Автор", Type: metadata.FieldTypeString},
+			{Name: "Подразделение", Type: metadata.FieldTypeString},
+			{Name: "ФИО", Type: metadata.FieldTypeString},
 		},
 	}
 }
@@ -142,6 +144,59 @@ func TestDecide_InvalidPolicyFieldFailsClosed(t *testing.T) {
 	}
 }
 
+func TestDecide_UserAttrPolicy(t *testing.T) {
+	policies := auth.RowPolicies{"read": {
+		Field: "Подразделение",
+		Op:    "eq",
+		Value: auth.RowValue{UserAttr: "department"},
+	}}
+	u := &auth.User{
+		ID:    "u1",
+		Attrs: map[string]any{"Department": "sales"},
+		Roles: []*auth.Role{docRole("Сделка", []string{"read"}, policies)},
+	}
+	dec, err := access.Decide(u, "document", "Сделка", "read", dealEntity())
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if dec.Predicate == nil || dec.Predicate.Field != "Подразделение" || dec.Predicate.Value != "sales" {
+		t.Fatalf("predicate = %+v, want Подразделение eq sales", dec.Predicate)
+	}
+}
+
+func TestDecide_UserAttrBuiltInPolicy(t *testing.T) {
+	policies := auth.RowPolicies{"read": {
+		Field: "ФИО",
+		Op:    "eq",
+		Value: auth.RowValue{UserAttr: "full_name"},
+	}}
+	u := &auth.User{
+		ID:       "u1",
+		FullName: "Иван Петров",
+		Roles:    []*auth.Role{docRole("Сделка", []string{"read"}, policies)},
+	}
+	dec, err := access.Decide(u, "document", "Сделка", "read", dealEntity())
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if dec.Predicate == nil || dec.Predicate.Value != "Иван Петров" {
+		t.Fatalf("predicate = %+v, want full_name value", dec.Predicate)
+	}
+}
+
+func TestDecide_UnknownUserAttrFailsClosed(t *testing.T) {
+	policies := auth.RowPolicies{"read": {
+		Field: "Подразделение",
+		Op:    "eq",
+		Value: auth.RowValue{UserAttr: "department"},
+	}}
+	u := &auth.User{ID: "u1", Roles: []*auth.Role{docRole("Сделка", []string{"read"}, policies)}}
+	_, err := access.Decide(u, "document", "Сделка", "read", dealEntity())
+	if err == nil {
+		t.Fatal("policy with missing user_attr must fail closed")
+	}
+}
+
 func TestValidatePolicyRejectsUnknownOperator(t *testing.T) {
 	err := access.ValidatePolicy(auth.RowPolicy{
 		Field: "Ответственный",
@@ -150,6 +205,28 @@ func TestValidatePolicyRejectsUnknownOperator(t *testing.T) {
 	}, dealEntity())
 	if err == nil {
 		t.Fatal("unknown row policy operator must be rejected")
+	}
+}
+
+func TestValidatePolicyRejectsUnknownUserAttr(t *testing.T) {
+	err := access.ValidatePolicy(auth.RowPolicy{
+		Field: "Подразделение",
+		Op:    "eq",
+		Value: auth.RowValue{UserAttr: "department"},
+	}, dealEntity())
+	if err == nil {
+		t.Fatal("unknown row policy user_attr must be rejected")
+	}
+}
+
+func TestValidatePolicyRejectsAmbiguousUserValue(t *testing.T) {
+	err := access.ValidatePolicy(auth.RowPolicy{
+		Field: "Ответственный",
+		Op:    "eq",
+		Value: auth.RowValue{User: "login", UserAttr: "full_name"},
+	}, dealEntity())
+	if err == nil {
+		t.Fatal("row policy value with both user and user_attr must be rejected")
 	}
 }
 

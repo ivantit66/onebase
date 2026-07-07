@@ -69,12 +69,25 @@ func HasRestrictedPolicy(u *auth.User, kind, entity, op string) bool {
 // runtime. It is intended for diagnostics/lint: callers pass already resolved
 // same_as policies.
 func ValidatePolicy(p auth.RowPolicy, meta *metadata.Entity) error {
-	pred, err := compilePolicy(p, &auth.User{ID: "_lint_user_id", Login: "_lint_user_login"}, meta)
+	pred, err := compilePolicy(p, lintUser(), meta)
 	if err != nil {
 		return err
 	}
 	_, _, _, err = storage.PredicateSQL(storage.SQLiteDialect{}, meta, &pred, 1)
 	return err
+}
+
+func lintUser() *auth.User {
+	return &auth.User{
+		ID:               "_lint_user_id",
+		Login:            "_lint_user_login",
+		FullName:         "_lint_user_full_name",
+		Lang:             "_lint_user_lang",
+		IsAdmin:          false,
+		DenyPasswdChange: false,
+		ShowInList:       false,
+		AIDataAccess:     false,
+	}
 }
 
 func compilePolicy(p auth.RowPolicy, u *auth.User, meta *metadata.Entity) (storage.Predicate, error) {
@@ -132,6 +145,9 @@ func compilePolicy(p auth.RowPolicy, u *auth.User, meta *metadata.Entity) (stora
 }
 
 func resolveValue(v auth.RowValue, u *auth.User) (any, []any, error) {
+	if strings.TrimSpace(v.User) != "" && strings.TrimSpace(v.UserAttr) != "" {
+		return nil, nil, fmt.Errorf("row policy value cannot use both user and user_attr")
+	}
 	switch v.User {
 	case "":
 	case "id":
@@ -141,10 +157,48 @@ func resolveValue(v auth.RowValue, u *auth.User) (any, []any, error) {
 	default:
 		return nil, nil, fmt.Errorf("unknown row policy user value %q", v.User)
 	}
+	if strings.TrimSpace(v.UserAttr) != "" {
+		value, ok := resolveUserAttr(u, v.UserAttr)
+		if !ok {
+			return nil, nil, fmt.Errorf("unknown row policy user_attr %q", v.UserAttr)
+		}
+		return value, nil, nil
+	}
 	if len(v.List) > 0 {
 		return nil, v.List, nil
 	}
 	return v.Literal, nil, nil
+}
+
+func resolveUserAttr(u *auth.User, attr string) (any, bool) {
+	if u == nil {
+		return nil, false
+	}
+	key := strings.ToLower(strings.TrimSpace(attr))
+	switch key {
+	case "id", "user_id":
+		return u.ID, true
+	case "login":
+		return u.Login, true
+	case "full_name", "fullname":
+		return u.FullName, true
+	case "lang", "language":
+		return u.Lang, true
+	case "is_admin", "admin":
+		return u.IsAdmin, true
+	case "deny_passwd_change":
+		return u.DenyPasswdChange, true
+	case "show_in_list":
+		return u.ShowInList, true
+	case "ai_data_access":
+		return u.AIDataAccess, true
+	}
+	for name, value := range u.Attrs {
+		if strings.EqualFold(strings.TrimSpace(name), key) {
+			return value, true
+		}
+	}
+	return nil, false
 }
 
 func fieldAllowed(entity *metadata.Entity, field string) bool {

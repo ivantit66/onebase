@@ -315,7 +315,7 @@ permissions:
         write:
           field: Owner
           op: eq
-          value: { user: login }
+          value: { user_attr: department }
         delete:
           same_as: missing
       Несуществующий:
@@ -338,8 +338,8 @@ permissions:
 			t.Fatalf("expected %s warning, got codes=%+v warnings=%+v", code, got, res.Warnings)
 		}
 	}
-	if got["rls.invalid-policy"] < 2 {
-		t.Fatalf("expected invalid field and invalid same_as warnings, got codes=%+v warnings=%+v", got, res.Warnings)
+	if got["rls.invalid-policy"] < 3 {
+		t.Fatalf("expected invalid field, invalid user_attr and invalid same_as warnings, got codes=%+v warnings=%+v", got, res.Warnings)
 	}
 }
 
@@ -360,7 +360,7 @@ permissions:
         read:
           field: Owner
           op: eq
-          value: { user: login }
+          value: { user_attr: full_name }
         write:
           same_as: read
 `)

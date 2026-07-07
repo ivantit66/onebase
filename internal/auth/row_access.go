@@ -29,9 +29,10 @@ type RowPolicy struct {
 }
 
 type RowValue struct {
-	User    string `yaml:"user,omitempty" json:"user,omitempty"`
-	Literal any    `yaml:"literal,omitempty" json:"literal,omitempty"`
-	List    []any  `yaml:"list,omitempty" json:"list,omitempty"`
+	User     string `yaml:"user,omitempty" json:"user,omitempty"`
+	UserAttr string `yaml:"user_attr,omitempty" json:"user_attr,omitempty"`
+	Literal  any    `yaml:"literal,omitempty" json:"literal,omitempty"`
+	List     []any  `yaml:"list,omitempty" json:"list,omitempty"`
 }
 
 func (policies RowPolicies) Resolve(op string) (RowPolicy, bool) {
@@ -83,6 +84,7 @@ func normalizeRowPolicy(p RowPolicy) RowPolicy {
 		p.Not = &n
 	}
 	p.Value.User = strings.ToLower(strings.TrimSpace(p.Value.User))
+	p.Value.UserAttr = strings.ToLower(strings.TrimSpace(p.Value.UserAttr))
 	return p
 }
 
