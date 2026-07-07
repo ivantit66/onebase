@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Kind — протокол/семейство API, по которому обращаемся к провайдеру.
@@ -37,6 +39,49 @@ type Model struct {
 	Endpoint  string `json:"endpoint" yaml:"endpoint"` // ссылка на Endpoint.Name
 	Vision    bool   `json:"vision,omitempty" yaml:"vision,omitempty"`
 	MaxTokens int    `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"` // 0 → DefaultMaxTokens
+}
+
+type modelWire struct {
+	Name      string `json:"name" yaml:"name"`
+	Endpoint  string `json:"endpoint" yaml:"endpoint"`
+	Provider  string `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Vision    bool   `json:"vision,omitempty" yaml:"vision,omitempty"`
+	MaxTokens int    `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
+}
+
+// UnmarshalJSON accepts the legacy UI name "provider" as an alias for
+// Model.Endpoint. The canonical serialized form remains "endpoint".
+func (m *Model) UnmarshalJSON(data []byte) error {
+	var w modelWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	*m = modelFromWire(w)
+	return nil
+}
+
+// UnmarshalYAML keeps app.yaml tolerant to the same provider/endpoint naming
+// split as the configurator UI.
+func (m *Model) UnmarshalYAML(value *yaml.Node) error {
+	var w modelWire
+	if err := value.Decode(&w); err != nil {
+		return err
+	}
+	*m = modelFromWire(w)
+	return nil
+}
+
+func modelFromWire(w modelWire) Model {
+	endpoint := w.Endpoint
+	if endpoint == "" {
+		endpoint = w.Provider
+	}
+	return Model{
+		Name:      w.Name,
+		Endpoint:  endpoint,
+		Vision:    w.Vision,
+		MaxTokens: w.MaxTokens,
+	}
 }
 
 // Profile — маршрут одной задачи: упорядоченная цепочка моделей. Движок идёт по

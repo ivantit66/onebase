@@ -10,15 +10,17 @@
   var cfg;
   try { cfg = JSON.parse(root.getAttribute('data-cfg') || '{}'); }
   catch (e) { root.innerHTML = '<div style="color:#c00">Повреждённый конфиг: ' + e.message + '</div>'; return; }
-  cfg.endpoints = cfg.endpoints || [];
-  cfg.models = cfg.models || [];
-  cfg.profiles = cfg.profiles || [];
+  normalizeConfig();
 
   var KINDS = ['anthropic', 'gemini', 'openai', 'compatible'];
   var jsonMode = false;
   var saveURL = '/bases/' + baseId + '/configurator/admin/ai/save';
   var testURL = '/bases/' + baseId + '/configurator/admin/ai/test';
   var warnBox = null;
+  var openSections = { endpoints: true, models: false };
+  var editingEndpointIndex = -1;
+  var editingModelIndex = -1;
+  var activeEditors = [];
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -27,6 +29,30 @@
   }
   function el(html) { var d = document.createElement('div'); d.innerHTML = html; return d.firstElementChild; }
   function modelByName(n) { for (var i = 0; i < cfg.models.length; i++) if (cfg.models[i].name === n) return cfg.models[i]; return null; }
+  function modelEndpoint(m) { return m.endpoint || m.provider || ''; }
+  function setModelEndpoint(m, endpoint) { m.endpoint = endpoint; if (Object.prototype.hasOwnProperty.call(m, 'provider')) delete m.provider; }
+  function normalizeModel(m) { if (m && !m.endpoint && m.provider) setModelEndpoint(m, m.provider); return m; }
+  function normalizeConfig() {
+    cfg = cfg || {};
+    cfg.endpoints = cfg.endpoints || [];
+    cfg.models = cfg.models || [];
+    cfg.profiles = cfg.profiles || [];
+    cfg.models.forEach(normalizeModel);
+  }
+  function uniqueName(base, items, prop) {
+    var seen = {};
+    items.forEach(function (x) { seen[x[prop]] = true; });
+    if (!seen[base]) return base;
+    for (var i = 2; ; i++) {
+      var n = base + '-' + i;
+      if (!seen[n]) return n;
+    }
+  }
+  function commitActiveEditors() {
+    var editors = activeEditors.slice();
+    activeEditors = [];
+    editors.forEach(function (commit) { commit(); });
+  }
 
   // --- предупреждения: обновление без пересборки панели ---
   function updateWarnings() {
@@ -41,7 +67,8 @@
     var w = [], ep = {};
     cfg.endpoints.forEach(function (e) { ep[e.name] = true; });
     cfg.models.forEach(function (m) {
-      if (m.endpoint && !ep[m.endpoint]) w.push('Модель «' + m.name + '» ссылается на несуществующего провайдера «' + m.endpoint + '»');
+      var endpoint = modelEndpoint(m);
+      if (endpoint && !ep[endpoint]) w.push('Модель «' + m.name + '» ссылается на несуществующего провайдера «' + endpoint + '»');
     });
     cfg.profiles.forEach(function (p) {
       (p.models || []).forEach(function (mn) {
@@ -56,6 +83,7 @@
   // --- рендер всей панели ---
   function render() {
     if (jsonMode) return renderJson();
+    activeEditors = [];
     root.innerHTML = '';
 
     var head = el('<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"></div>');
@@ -64,7 +92,7 @@
     en.querySelector('input').onchange = function () { cfg.enabled = this.checked; };
     head.appendChild(en);
     var jb = el('<span style="color:#64748b;font-size:11px;cursor:pointer">⚙ Показать JSON</span>');
-    jb.onclick = function () { jsonMode = true; render(); };
+    jb.onclick = function () { commitActiveEditors(); jsonMode = true; render(); };
     head.appendChild(jb);
     root.appendChild(head);
 
@@ -81,22 +109,25 @@
     updateWarnings();
 
     root.appendChild(sectionTasks());
-    root.appendChild(collapsible('Провайдеры и ключи (' + cfg.endpoints.length + ')', renderEndpoints(), true));
-    root.appendChild(collapsible('Модели (' + cfg.models.length + ')', renderModels(), false));
+    root.appendChild(collapsible('endpoints', 'Провайдеры и ключи (' + cfg.endpoints.length + ')', renderEndpoints(), true));
+    root.appendChild(collapsible('models', 'Модели (' + cfg.models.length + ')', renderModels(), false));
 
     var foot = el('<div style="margin-top:14px;display:flex;justify-content:flex-end;align-items:center;gap:10px"><span id="ais-msg" style="font-size:11px"></span><button style="background:#16a34a;color:#fff;border:none;padding:6px 16px;border-radius:3px;cursor:pointer;font-size:12px">Сохранить</button></div>');
     foot.querySelector('button').onclick = save;
     root.appendChild(foot);
   }
 
-  function collapsible(title, bodyNode, open) {
+  function collapsible(key, title, bodyNode, open) {
+    if (openSections[key] == null) openSections[key] = !!open;
+    var isOpen = !!openSections[key];
     var d = el('<div style="margin-top:10px"></div>');
-    var hdr = el('<div style="padding:6px 8px;background:#f1f5f9;border-radius:4px;cursor:pointer;font-weight:600;font-size:12px">' + (open ? '▾ ' : '▸ ') + esc(title) + '</div>');
+    var hdr = el('<div style="padding:6px 8px;background:#f1f5f9;border-radius:4px;cursor:pointer;font-weight:600;font-size:12px">' + (isOpen ? '▾ ' : '▸ ') + esc(title) + '</div>');
     var body = el('<div></div>');
     body.appendChild(bodyNode);
-    body.style.display = open ? 'block' : 'none';
+    body.style.display = isOpen ? 'block' : 'none';
     hdr.onclick = function () {
       var vis = body.style.display === 'none';
+      openSections[key] = vis;
       body.style.display = vis ? 'block' : 'none';
       hdr.textContent = (vis ? '▾ ' : '▸ ') + title;
     };
@@ -112,6 +143,7 @@
     cfg.profiles.forEach(function (p, idx) { box.appendChild(taskRow(p, idx)); });
     var add = el('<div style="padding:6px 8px;color:#2563eb;cursor:pointer;font-size:12px">+ добавить задачу</div>');
     add.onclick = function () {
+      commitActiveEditors();
       var name = prompt('Имя задачи (например: анализ, чат, конфигуратор, документы):', '');
       if (!name) return;
       cfg.profiles.push({ task: name, models: [] }); render();
@@ -198,31 +230,58 @@
     t.appendChild(rowHTML(['Имя', 'Тип', 'Base URL', 'Ключ', ''], true));
     cfg.endpoints.forEach(function (e, i) { t.appendChild(endpointRow(e, i)); });
     var add = el('<div style="padding:6px 8px;color:#2563eb;cursor:pointer;font-size:12px">+ добавить провайдера</div>');
-    add.onclick = function () { cfg.endpoints.push({ name: 'new', kind: 'anthropic', base_url: '', api_key: '' }); render(); };
+    add.onclick = function () {
+      commitActiveEditors();
+      var idx = cfg.endpoints.length;
+      cfg.endpoints.push({ name: uniqueName('new', cfg.endpoints, 'name'), kind: 'anthropic', base_url: '', api_key: '' });
+      openSections.endpoints = true;
+      editingEndpointIndex = idx;
+      editingModelIndex = -1;
+      render();
+    };
     t.appendChild(add);
     return t;
   }
   function endpointRow(e, i) {
+    if (editingEndpointIndex === i) return endpointEditRow(e, i);
     var r = el('<div style="display:flex;padding:5px 8px;align-items:center;font-size:12px' + (i % 2 ? ';background:#f9fafb' : '') + '"></div>');
     r.appendChild(el('<span style="flex:2">' + esc(e.name) + '</span>'));
     r.appendChild(el('<span style="flex:2">' + esc(e.kind) + '</span>'));
     r.appendChild(el('<span style="flex:3">' + esc(e.base_url || '—') + '</span>'));
     r.appendChild(el('<span style="flex:2">' + esc(e.api_key || '') + '</span>'));
-    var act = el('<span style="width:46px;color:#94a3b8;cursor:pointer">✎ 🗑</span>');
-    act.onclick = function () { editEndpoint(r, e, i); };
+    var act = el('<span style="width:46px;display:flex;gap:8px;justify-content:flex-end"></span>');
+    var edit = el('<span style="color:#94a3b8;cursor:pointer" title="редактировать">✎</span>');
+    var del = el('<span style="color:#c00;cursor:pointer" title="удалить">🗑</span>');
+    edit.onclick = function () { commitActiveEditors(); editingEndpointIndex = i; editingModelIndex = -1; openSections.endpoints = true; render(); };
+    del.onclick = function () { commitActiveEditors(); cfg.endpoints.splice(i, 1); editingEndpointIndex = -1; render(); };
+    act.append(edit, del);
     r.appendChild(act);
     return r;
   }
-  function editEndpoint(r, e, i) {
-    r.innerHTML = '';
-    r.style.background = '#fffbeb';
+  function endpointEditRow(e, i) {
+    var r = el('<div style="display:flex;padding:5px 8px;align-items:center;font-size:12px;background:#fffbeb"></div>');
+    var oldName = e.name;
     var name = inp(e.name, 2), kind = sel(KINDS, e.kind, 2), url = inp(e.base_url, 3), key = inp(e.api_key, 2);
     [name, kind, url, key].forEach(function (x) { r.appendChild(x); });
+    function commit() {
+      var nextName = name.value.trim();
+      if (oldName && nextName && oldName !== nextName) {
+        cfg.models.forEach(function (m) { if (modelEndpoint(m) === oldName) setModelEndpoint(m, nextName); });
+      }
+      e.name = nextName;
+      e.kind = kind.value;
+      e.base_url = url.value;
+      e.api_key = key.value;
+      oldName = e.name;
+      updateWarnings();
+    }
+    activeEditors.push(commit);
     var ok = el('<span style="color:#16a34a;cursor:pointer">✓</span>');
     var del = el('<span style="color:#c00;cursor:pointer;margin-left:6px" title="удалить">🗑</span>');
-    ok.onclick = function () { e.name = name.value; e.kind = kind.value; e.base_url = url.value; e.api_key = key.value; render(); };
-    del.onclick = function () { cfg.endpoints.splice(i, 1); render(); };
+    ok.onclick = function () { commit(); editingEndpointIndex = -1; render(); };
+    del.onclick = function () { cfg.endpoints.splice(i, 1); editingEndpointIndex = -1; render(); };
     r.appendChild(el('<span style="width:46px"></span>')).append(ok, del);
+    return r;
   }
 
   // --- таблица моделей ---
@@ -231,44 +290,74 @@
     t.appendChild(rowHTML(['Имя', 'Провайдер', 'Vision', 'MaxTokens', ''], true));
     cfg.models.forEach(function (m, i) { t.appendChild(modelRow(m, i)); });
     var add = el('<div style="padding:6px 8px;color:#2563eb;cursor:pointer;font-size:12px">+ добавить модель</div>');
-    add.onclick = function () { cfg.models.push({ name: 'new-model', endpoint: (cfg.endpoints[0] || {}).name || '', vision: false, max_tokens: 0 }); render(); };
+    add.onclick = function () {
+      commitActiveEditors();
+      var idx = cfg.models.length;
+      cfg.models.push({ name: uniqueName('new-model', cfg.models, 'name'), endpoint: (cfg.endpoints[0] || {}).name || '', vision: false, max_tokens: 0 });
+      openSections.models = true;
+      editingModelIndex = idx;
+      editingEndpointIndex = -1;
+      render();
+    };
     t.appendChild(add);
     return t;
   }
   function modelRow(m, i) {
+    normalizeModel(m);
+    if (editingModelIndex === i) return modelEditRow(m, i);
     var r = el('<div style="display:flex;padding:5px 8px;align-items:center;font-size:12px' + (i % 2 ? ';background:#f9fafb' : '') + '"></div>');
     r.appendChild(el('<span style="flex:3">' + esc(m.name) + '</span>'));
-    r.appendChild(el('<span style="flex:2">' + esc(m.endpoint) + '</span>'));
+    r.appendChild(el('<span style="flex:2">' + esc(modelEndpoint(m) || '—') + '</span>'));
     r.appendChild(el('<span style="flex:1">' + (m.vision ? '✓' : '—') + '</span>'));
     r.appendChild(el('<span style="flex:1">' + (m.max_tokens || '') + '</span>'));
-    var act = el('<span style="width:46px;color:#94a3b8;cursor:pointer">✎ 🗑</span>');
-    act.onclick = function () { editModel(r, m, i); };
+    var act = el('<span style="width:46px;display:flex;gap:8px;justify-content:flex-end"></span>');
+    var edit = el('<span style="color:#94a3b8;cursor:pointer" title="редактировать">✎</span>');
+    var del = el('<span style="color:#c00;cursor:pointer" title="удалить">🗑</span>');
+    edit.onclick = function () { commitActiveEditors(); editingModelIndex = i; editingEndpointIndex = -1; openSections.models = true; render(); };
+    del.onclick = function () { commitActiveEditors(); cfg.models.splice(i, 1); editingModelIndex = -1; render(); };
+    act.append(edit, del);
     r.appendChild(act);
     return r;
   }
-  function editModel(r, m, i) {
-    r.innerHTML = '';
-    r.style.background = '#fffbeb';
+  function modelEditRow(m, i) {
+    var r = el('<div style="display:flex;padding:5px 8px;align-items:center;font-size:12px;background:#fffbeb"></div>');
+    var oldName = m.name;
     var name = inp(m.name, 3);
     var epNames = cfg.endpoints.map(function (e) { return e.name; });
-    var ep = sel(epNames, m.endpoint, 2);
+    var ep = sel(epNames, modelEndpoint(m), 2);
     var vis = el('<span style="flex:1"><input type="checkbox"' + (m.vision ? ' checked' : '') + '></span>');
     var tok = inp(m.max_tokens || '', 1);
     [name, ep, vis, tok].forEach(function (x) { r.appendChild(x); });
+    function commit() {
+      var nextName = name.value.trim();
+      if (oldName && nextName && oldName !== nextName) {
+        cfg.profiles.forEach(function (p) {
+          (p.models || []).forEach(function (mn, idx) {
+            if (mn === oldName) p.models[idx] = nextName;
+          });
+        });
+      }
+      m.name = nextName;
+      setModelEndpoint(m, ep.value);
+      m.vision = vis.querySelector('input').checked;
+      m.max_tokens = parseInt(tok.value, 10) || 0;
+      oldName = m.name;
+      updateWarnings();
+    }
+    activeEditors.push(commit);
     var ok = el('<span style="color:#16a34a;cursor:pointer">✓</span>');
     var del = el('<span style="color:#c00;cursor:pointer;margin-left:6px">🗑</span>');
-    ok.onclick = function () {
-      m.name = name.value; m.endpoint = ep.value; m.vision = vis.querySelector('input').checked;
-      m.max_tokens = parseInt(tok.value, 10) || 0; render();
-    };
-    del.onclick = function () { cfg.models.splice(i, 1); render(); };
+    ok.onclick = function () { commit(); editingModelIndex = -1; render(); };
+    del.onclick = function () { cfg.models.splice(i, 1); editingModelIndex = -1; render(); };
     var box = el('<span style="width:46px"></span>'); box.append(ok, del); r.appendChild(box);
+    return r;
   }
 
   // --- мелкие хелперы полей ---
   function inp(v, flex) { var i = el('<input style="flex:' + flex + ';min-width:0;padding:3px 6px;border:1px solid #cbd5e1;border-radius:3px;font-size:12px">'); i.value = v == null ? '' : v; return i; }
   function sel(opts, cur, flex) {
     var s = el('<select style="flex:' + flex + ';padding:3px 6px;border:1px solid #cbd5e1;border-radius:3px;font-size:12px"></select>');
+    if (cur && opts.indexOf(cur) < 0) opts = [cur].concat(opts);
     opts.forEach(function (o) { s.appendChild(el('<option' + (o === cur ? ' selected' : '') + '>' + esc(o) + '</option>')); });
     return s;
   }
@@ -284,14 +373,14 @@
     root.innerHTML = '';
     var bar = el('<div style="display:flex;justify-content:space-between;margin-bottom:8px"><span style="font-size:11px;color:#666">Режим JSON — правьте конфиг целиком</span><span style="color:#2563eb;cursor:pointer;font-size:11px">▦ Вернуть формы</span></div>');
     bar.querySelector('span:last-child').onclick = function () {
-      try { var v = JSON.parse(ta.value); cfg = v; cfg.endpoints = cfg.endpoints || []; cfg.models = cfg.models || []; cfg.profiles = cfg.profiles || []; jsonMode = false; render(); }
+      try { var v = JSON.parse(ta.value); cfg = v; normalizeConfig(); jsonMode = false; render(); }
       catch (e) { msg('Некорректный JSON: ' + e.message, '#c00'); }
     };
     var ta = el('<textarea spellcheck="false" style="width:100%;height:340px;font-family:monospace;font-size:12px;padding:8px;border:1px solid #cbd5e1;border-radius:4px;resize:vertical"></textarea>');
     ta.value = JSON.stringify(cfg, null, 2);
     var foot = el('<div style="margin-top:10px;display:flex;justify-content:flex-end;gap:10px"><span id="ais-msg" style="font-size:11px"></span><button style="background:#16a34a;color:#fff;border:none;padding:6px 16px;border-radius:3px;cursor:pointer;font-size:12px">Сохранить</button></div>');
     foot.querySelector('button').onclick = function () {
-      try { cfg = JSON.parse(ta.value); save(); } catch (e) { msg('Некорректный JSON: ' + e.message, '#c00'); }
+      try { cfg = JSON.parse(ta.value); normalizeConfig(); save(); } catch (e) { msg('Некорректный JSON: ' + e.message, '#c00'); }
     };
     root.appendChild(bar); root.appendChild(ta); root.appendChild(foot);
   }
@@ -300,11 +389,18 @@
 
   // --- сохранение и проверка через существующие эндпоинты ---
   function save() {
+    commitActiveEditors();
     msg('Сохранение…', '#666');
     fetch(saveURL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) })
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        if (d.ok) { msg('Сохранено', '#16a34a'); if (typeof window.cfgAiRefresh === 'function') window.cfgAiRefresh(); }
+        if (d.ok) {
+          editingEndpointIndex = -1;
+          editingModelIndex = -1;
+          if (!jsonMode) render();
+          msg('Сохранено', '#16a34a');
+          if (typeof window.cfgAiRefresh === 'function') window.cfgAiRefresh();
+        }
         else msg(d.error || 'Ошибка', '#c00');
       })
       .catch(function () { msg('Ошибка сети', '#c00'); });

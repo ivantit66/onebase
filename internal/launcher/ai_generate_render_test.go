@@ -48,3 +48,22 @@ func TestAISettings_LimitFieldsWired(t *testing.T) {
 		}
 	}
 }
+
+func TestAISettings_ModelEditorUXWired(t *testing.T) {
+	b, err := os.ReadFile("static/ai-settings.js")
+	if err != nil {
+		t.Fatalf("read static/ai-settings.js: %v", err)
+	}
+	js := string(b)
+	for _, sub := range []string{
+		"openSections.models = true",
+		"editingModelIndex = idx",
+		"commitActiveEditors()",
+		"modelEndpoint(m)",
+		"setModelEndpoint(m, ep.value)",
+	} {
+		if !strings.Contains(js, sub) {
+			t.Errorf("в ai-settings.js нет %q — UX добавления/редактирования моделей может снова сломаться", sub)
+		}
+	}
+}
