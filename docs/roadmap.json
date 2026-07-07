@@ -85,15 +85,16 @@
     {
       "id": "rest-api-v2",
       "plan": "Plans/26-rest-api-v2.md",
-      "status": "planned",
-      "bucket": "next",
-      "progress": 0,
+      "status": "done",
+      "bucket": "done",
+      "progress": 100,
       "track": { "ru": "Интеграции", "en": "Integrations" },
       "title": { "ru": "REST API v2", "en": "REST API v2" },
       "summary": {
-        "ru": "Единый публичный API для объектов конфигурации: фильтры, пагинация, проведение, отчёты и OpenAPI.",
-        "en": "A unified public API for configuration objects: filters, pagination, posting, reports, and OpenAPI."
-      }
+        "ru": "Единый публичный API для объектов конфигурации готов: CRUD справочников/документов, фильтры, пагинация, оптимистическая блокировка, проведение, отчёты, композиция отчётов, Bearer API-токены, RBAC/RLS и OpenAPI.",
+        "en": "The unified public API is complete: catalog/document CRUD, filters, pagination, optimistic locking, posting, reports, report composition, Bearer API tokens, RBAC/RLS, and OpenAPI."
+      },
+      "feature": "REST API v2"
     },
     {
       "id": "pwa-store-wrapper",

@@ -734,6 +734,16 @@ func TestAPIV2_OpenAPIIncludesPathsAndSchemas(t *testing.T) {
 	if !openAPIHasQueryParam(reportParams, "composition") || !openAPIHasQueryParam(reportParams, "variant") {
 		t.Fatalf("report parameters must include composition and variant: %#v", reportParams)
 	}
+	catalogList := paths["/api/v2/catalog/{name}"].(map[string]any)["get"].(map[string]any)
+	catalogListResp := catalogList["responses"].(map[string]any)["200"].(map[string]any)
+	catalogListSchema := catalogListResp["content"].(map[string]any)["application/json"].(map[string]any)["schema"].(map[string]any)
+	if catalogListSchema["$ref"] != "#/components/schemas/CatalogListEnvelope" {
+		t.Fatalf("catalog list response schema = %#v", catalogListSchema)
+	}
+	catalogPut := paths["/api/v2/catalog/{name}/{id}"].(map[string]any)["put"].(map[string]any)
+	if !openAPIHasHeaderParam(catalogPut["parameters"].([]any), "If-Match") {
+		t.Fatalf("PUT parameters must include If-Match: %#v", catalogPut["parameters"])
+	}
 	components := spec["components"].(map[string]any)
 	securitySchemes := components["securitySchemes"].(map[string]any)
 	if _, ok := securitySchemes["bearerAuth"]; !ok {
@@ -744,6 +754,15 @@ func TestAPIV2_OpenAPIIncludesPathsAndSchemas(t *testing.T) {
 	props := schema["properties"].(map[string]any)
 	if _, ok := props["Наименование"]; !ok {
 		t.Fatalf("catalog schema lacks field: %#v", props)
+	}
+	docSchema := schemas["document_Поступление"].(map[string]any)
+	docProps := docSchema["properties"].(map[string]any)
+	if _, ok := docProps["__action"]; !ok {
+		t.Fatalf("document schema lacks __action: %#v", docProps)
+	}
+	catalogObject := schemas["CatalogObject"].(map[string]any)
+	if catalogObject["$ref"] != "#/components/schemas/catalog_Товар" {
+		t.Fatalf("CatalogObject schema = %#v", catalogObject)
 	}
 	reportSchema := schemas["report_Остатки"].(map[string]any)
 	reportProps := reportSchema["properties"].(map[string]any)
@@ -760,6 +779,16 @@ func openAPIHasQueryParam(params []any, name string) bool {
 	for _, p := range params {
 		pm, ok := p.(map[string]any)
 		if ok && pm["name"] == name && pm["in"] == "query" {
+			return true
+		}
+	}
+	return false
+}
+
+func openAPIHasHeaderParam(params []any, name string) bool {
+	for _, p := range params {
+		pm, ok := p.(map[string]any)
+		if ok && pm["name"] == name && pm["in"] == "header" {
 			return true
 		}
 	}

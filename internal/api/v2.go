@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/entityservice"
 	"github.com/ivantit66/onebase/internal/metadata"
-	"github.com/ivantit66/onebase/internal/query"
 	reportpkg "github.com/ivantit66/onebase/internal/report"
 	"github.com/ivantit66/onebase/internal/report/compose"
 	"github.com/ivantit66/onebase/internal/storage"
@@ -366,20 +365,9 @@ func (h *handler) runReportV2() http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, err.Error(), "", 0)
 			return
 		}
-		compiled, err := query.Compile(rep.Query, query.CompileOpts{
-			Entities:    h.reg.Entities(),
-			Params:      params,
-			Registers:   h.reg.Registers(),
-			InfoRegs:    h.reg.InfoRegisters(),
-			AccountRegs: h.reg.AccountRegisters(),
-			Dialect:     h.store.Dialect(),
-		})
+		compiled, err := h.compileQueryWithRowAccess(r.Context(), rep.Query, params)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "query compile error: "+err.Error(), "", 0)
-			return
-		}
-		if denied := deniedRowAccessSource(r.Context(), compiled.Sources); denied != "" {
-			writeError(w, http.StatusForbidden, "row-level access for "+denied+" is not supported in report queries yet", "", 0)
 			return
 		}
 		rows, cols, truncated, err := h.store.RunQueryLimit(r.Context(), compiled.SQL, compiled.Args, limit)
@@ -781,9 +769,31 @@ func buildOpenAPIV2(entities []*metadata.Entity, reports []*reportpkg.Report) ma
 		},
 	}
 	schemas := components["schemas"].(map[string]any)
+	var catalogRefs []any
+	var documentRefs []any
 	for _, e := range entities {
-		schemas[entitySchemaName(e)] = entityOpenAPISchema(e)
+		name := entitySchemaName(e)
+		schemas[name] = entityOpenAPISchema(e)
+		ref := map[string]any{"$ref": "#/components/schemas/" + name}
+		switch e.Kind {
+		case metadata.KindCatalog:
+			catalogRefs = append(catalogRefs, ref)
+		case metadata.KindDocument:
+			documentRefs = append(documentRefs, ref)
+		}
 	}
+	schemas["CatalogObject"] = oneOfSchema(catalogRefs)
+	schemas["DocumentObject"] = oneOfSchema(documentRefs)
+	schemas["CatalogObjectEnvelope"] = dataEnvelopeSchema(map[string]any{"$ref": "#/components/schemas/CatalogObject"}, nil)
+	schemas["DocumentObjectEnvelope"] = dataEnvelopeSchema(map[string]any{"$ref": "#/components/schemas/DocumentObject"}, nil)
+	schemas["CatalogListEnvelope"] = dataEnvelopeSchema(map[string]any{
+		"type":  "array",
+		"items": map[string]any{"$ref": "#/components/schemas/CatalogObject"},
+	}, map[string]any{"$ref": "#/components/schemas/ListMeta"})
+	schemas["DocumentListEnvelope"] = dataEnvelopeSchema(map[string]any{
+		"type":  "array",
+		"items": map[string]any{"$ref": "#/components/schemas/DocumentObject"},
+	}, map[string]any{"$ref": "#/components/schemas/ListMeta"})
 	for _, rep := range reports {
 		schemas[reportSchemaName(rep)] = reportOpenAPISchema(rep)
 	}
@@ -802,9 +812,34 @@ func buildOpenAPIV2(entities []*metadata.Entity, reports []*reportpkg.Report) ma
 	return doc
 }
 
+func oneOfSchema(refs []any) map[string]any {
+	if len(refs) == 0 {
+		return map[string]any{"type": "object"}
+	}
+	if len(refs) == 1 {
+		return refs[0].(map[string]any)
+	}
+	return map[string]any{"oneOf": refs}
+}
+
+func dataEnvelopeSchema(dataSchema, metaSchema map[string]any) map[string]any {
+	props := map[string]any{"data": dataSchema}
+	if metaSchema != nil {
+		props["meta"] = metaSchema
+	}
+	return map[string]any{"type": "object", "properties": props}
+}
+
 func openAPIV2Paths() map[string]any {
 	nameParam := map[string]any{"name": "name", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}
 	idParam := map[string]any{"name": "id", "in": "path", "required": true, "schema": map[string]any{"type": "string", "format": "uuid"}}
+	ifMatchParam := map[string]any{
+		"name":        "If-Match",
+		"in":          "header",
+		"required":    false,
+		"description": "Expected _version for optimistic locking.",
+		"schema":      map[string]any{"type": "integer", "minimum": 0},
+	}
 	listParams := []any{
 		nameParam,
 		map[string]any{"name": "q", "in": "query", "schema": map[string]any{"type": "string"}},
@@ -814,17 +849,13 @@ func openAPIV2Paths() map[string]any {
 		map[string]any{"name": "dir", "in": "query", "schema": map[string]any{"type": "string", "enum": []string{"asc", "desc"}}},
 		map[string]any{"name": "filter[Field]", "in": "query", "schema": map[string]any{"type": "string"}},
 	}
-	jsonBody := map[string]any{
-		"required": false,
-		"content": map[string]any{
-			"application/json": map[string]any{"schema": map[string]any{"type": "object"}},
-		},
-	}
-	okEnvelope := map[string]any{
-		"description": "OK",
-		"content": map[string]any{
-			"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/ObjectEnvelope"}},
-		},
+	jsonBody := func(ref string) map[string]any {
+		return map[string]any{
+			"required": false,
+			"content": map[string]any{
+				"application/json": map[string]any{"schema": map[string]any{"$ref": ref}},
+			},
+		}
 	}
 	openAPIResponse := map[string]any{
 		"description": "OK",
@@ -832,7 +863,6 @@ func openAPIV2Paths() map[string]any {
 			"application/json": map[string]any{"schema": map[string]any{"type": "object"}},
 		},
 	}
-	listEnvelope := responseWithSchema("OK", "#/components/schemas/ListEnvelope")
 	mutationEnvelope := responseWithSchema("OK", "#/components/schemas/MutationEnvelope")
 	reportEnvelope := responseWithSchema("OK", "#/components/schemas/ReportEnvelope")
 	errorResponses := map[string]any{
@@ -843,43 +873,45 @@ func openAPIV2Paths() map[string]any {
 	}
 	noContent := map[string]any{"description": "No Content"}
 	crud := func(tag string) map[string]any {
+		title := titleAPIName(tag)
 		return map[string]any{
 			"get": map[string]any{
-				"operationId": "list" + titleAPIName(tag),
+				"operationId": "list" + title,
 				"summary":     "List " + tag,
 				"tags":        []string{tag},
 				"parameters":  listParams,
-				"responses":   mergeResponses(map[string]any{"200": listEnvelope}, errorResponses),
+				"responses":   mergeResponses(map[string]any{"200": responseWithSchema("OK", "#/components/schemas/"+title+"ListEnvelope")}, errorResponses),
 			},
 			"post": map[string]any{
-				"operationId": "create" + titleAPIName(tag),
+				"operationId": "create" + title,
 				"summary":     "Create " + tag,
 				"tags":        []string{tag},
 				"parameters":  []any{nameParam},
-				"requestBody": jsonBody,
+				"requestBody": jsonBody("#/components/schemas/" + title + "Object"),
 				"responses":   mergeResponses(map[string]any{"200": mutationEnvelope}, errorResponses),
 			},
 		}
 	}
 	item := func(tag string) map[string]any {
+		title := titleAPIName(tag)
 		return map[string]any{
 			"get": map[string]any{
-				"operationId": "get" + titleAPIName(tag),
+				"operationId": "get" + title,
 				"summary":     "Get " + tag,
 				"tags":        []string{tag},
 				"parameters":  []any{nameParam, idParam},
-				"responses":   mergeResponses(map[string]any{"200": okEnvelope}, errorResponses),
+				"responses":   mergeResponses(map[string]any{"200": responseWithSchema("OK", "#/components/schemas/"+title+"ObjectEnvelope")}, errorResponses),
 			},
 			"put": map[string]any{
-				"operationId": "update" + titleAPIName(tag),
+				"operationId": "update" + title,
 				"summary":     "Update " + tag,
 				"tags":        []string{tag},
-				"parameters":  []any{nameParam, idParam},
-				"requestBody": jsonBody,
+				"parameters":  []any{nameParam, idParam, ifMatchParam},
+				"requestBody": jsonBody("#/components/schemas/" + title + "Object"),
 				"responses":   mergeResponses(map[string]any{"200": mutationEnvelope}, errorResponses),
 			},
 			"delete": map[string]any{
-				"operationId": "delete" + titleAPIName(tag),
+				"operationId": "delete" + title,
 				"summary":     "Delete " + tag,
 				"tags":        []string{tag},
 				"parameters":  []any{nameParam, idParam},
@@ -982,6 +1014,7 @@ func entityOpenAPISchema(e *metadata.Entity) map[string]any {
 	}
 	if e.Kind == metadata.KindDocument {
 		props["posted"] = map[string]any{"type": "boolean"}
+		props["__action"] = map[string]any{"type": "string", "enum": []string{"post", "post_and_close"}}
 	}
 	for _, f := range e.Fields {
 		props[f.Name] = fieldOpenAPISchema(f)

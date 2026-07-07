@@ -180,12 +180,28 @@ func (s *Server) rowFilterFor(ctx context.Context, entity *metadata.Entity, op s
 	return params, nil
 }
 
-func (s *Server) deniedRowAccessSource(ctx context.Context, sources []query.SourceRef) string {
-	u := auth.UserFromContext(ctx)
-	for _, src := range sources {
-		if access.HasRestrictedPolicy(u, src.Kind, src.Name, "read") {
-			return src.Name
-		}
+func (s *Server) queryRowFilters(ctx context.Context) (map[query.SourceRef]*storage.Predicate, error) {
+	return access.QueryRowFilters(
+		auth.UserFromContext(ctx),
+		s.reg.Entities(),
+		s.reg.Registers(),
+		s.reg.InfoRegisters(),
+		s.reg.AccountRegisters(),
+	)
+}
+
+func (s *Server) compileQueryWithRowAccess(ctx context.Context, text string, params map[string]any) (query.Result, error) {
+	rowFilters, err := s.queryRowFilters(ctx)
+	if err != nil {
+		return query.Result{}, err
 	}
-	return ""
+	return query.Compile(text, query.CompileOpts{
+		Entities:    s.reg.Entities(),
+		Params:      params,
+		Registers:   s.reg.Registers(),
+		InfoRegs:    s.reg.InfoRegisters(),
+		AccountRegs: s.reg.AccountRegisters(),
+		RowFilters:  rowFilters,
+		Dialect:     s.store.Dialect(),
+	})
 }

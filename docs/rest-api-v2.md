@@ -37,6 +37,10 @@ curl -H 'Authorization: Bearer ob_xxx' \
 {"error":"forbidden"}
 ```
 
+Object RBAC и строковые политики доступа применяются на всех маршрутах v2:
+списки и отчёты возвращают только разрешённые строки, прямое чтение/изменение
+запрещённой строки возвращает `403`.
+
 ## Справочники
 
 Список с поиском, фильтром и пагинацией:
@@ -169,4 +173,7 @@ curl -b cookies.txt 'http://localhost:8080/api/v2/openapi.json'
 ```
 
 Она описывает CRUD, проведение документов, запуск отчётов, Bearer-auth и
-базовые схемы сущностей из метаданных.
+схемы сущностей из метаданных. Generic paths `/catalog/{name}` и
+`/document/{name}` используют typed envelopes `CatalogObject`,
+`DocumentObject`, `CatalogListEnvelope` и `DocumentListEnvelope`; `PUT`
+описывает заголовок `If-Match` для оптимистической блокировки.

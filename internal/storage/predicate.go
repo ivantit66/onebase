@@ -28,18 +28,27 @@ func PredicateSQL(d Dialect, entity *metadata.Entity, p *Predicate, nextArg int)
 	if p == nil {
 		return "", nil, nextArg, nil
 	}
-	return predicateSQL(d, entity, *p, nextArg)
+	return predicateSQL(d, entity, *p, nextArg, "")
 }
 
-func predicateSQL(d Dialect, entity *metadata.Entity, p Predicate, nextArg int) (string, []any, int, error) {
+// PredicateSQLQualified is PredicateSQL with every field column prefixed by qualifier.
+// It is used by query compilation when a row-level predicate must target a SQL alias.
+func PredicateSQLQualified(d Dialect, entity *metadata.Entity, p *Predicate, nextArg int, qualifier string) (string, []any, int, error) {
+	if p == nil {
+		return "", nil, nextArg, nil
+	}
+	return predicateSQL(d, entity, *p, nextArg, qualifier)
+}
+
+func predicateSQL(d Dialect, entity *metadata.Entity, p Predicate, nextArg int, qualifier string) (string, []any, int, error) {
 	if len(p.All) > 0 {
-		return predicateGroupSQL(d, entity, p.All, " AND ", nextArg)
+		return predicateGroupSQL(d, entity, p.All, " AND ", nextArg, qualifier)
 	}
 	if len(p.Any) > 0 {
-		return predicateGroupSQL(d, entity, p.Any, " OR ", nextArg)
+		return predicateGroupSQL(d, entity, p.Any, " OR ", nextArg, qualifier)
 	}
 	if p.Not != nil {
-		inner, args, next, err := predicateSQL(d, entity, *p.Not, nextArg)
+		inner, args, next, err := predicateSQL(d, entity, *p.Not, nextArg, qualifier)
 		if err != nil || inner == "" {
 			return inner, args, next, err
 		}
@@ -49,6 +58,7 @@ func predicateSQL(d Dialect, entity *metadata.Entity, p Predicate, nextArg int) 
 	if !ok {
 		return "", nil, nextArg, fmt.Errorf("unknown row predicate field %q", p.Field)
 	}
+	col = qualifyPredicateColumn(qualifier, col)
 	op := strings.ToLower(strings.TrimSpace(p.Op))
 	switch op {
 	case "eq", "":
@@ -97,11 +107,11 @@ func predicateSQL(d Dialect, entity *metadata.Entity, p Predicate, nextArg int) 
 	}
 }
 
-func predicateGroupSQL(d Dialect, entity *metadata.Entity, items []Predicate, join string, nextArg int) (string, []any, int, error) {
+func predicateGroupSQL(d Dialect, entity *metadata.Entity, items []Predicate, join string, nextArg int, qualifier string) (string, []any, int, error) {
 	parts := make([]string, 0, len(items))
 	var args []any
 	for _, item := range items {
-		sql, itemArgs, next, err := predicateSQL(d, entity, item, nextArg)
+		sql, itemArgs, next, err := predicateSQL(d, entity, item, nextArg, qualifier)
 		if err != nil {
 			return "", nil, nextArg, err
 		}
@@ -116,6 +126,14 @@ func predicateGroupSQL(d Dialect, entity *metadata.Entity, items []Predicate, jo
 		return "", args, nextArg, nil
 	}
 	return strings.Join(parts, join), args, nextArg, nil
+}
+
+func qualifyPredicateColumn(qualifier, col string) string {
+	qualifier = strings.TrimSpace(qualifier)
+	if qualifier == "" || strings.Contains(col, ".") || strings.ContainsAny(col, " ()") {
+		return col
+	}
+	return qualifier + "." + col
 }
 
 func predicateCompareSQL(d Dialect, field *metadata.Field, col, op string, value any, nextArg int) (string, []any, int, error) {
@@ -161,9 +179,15 @@ func predicateColumn(entity *metadata.Entity, field string) (string, *metadata.F
 		if predicateEntityHasField(entity, "recorder") {
 			return "recorder", &metadata.Field{Name: "recorder", Type: metadata.FieldTypeString, RefEntity: "_uuid"}, true
 		}
+		if predicateEntityHasField(entity, "регистратор") {
+			return "регистратор", &metadata.Field{Name: "регистратор", Type: metadata.FieldTypeString, RefEntity: "_uuid"}, true
+		}
 	case "recorder_type", "типрегистратора", "тип_регистратора":
 		if predicateEntityHasField(entity, "recorder_type") {
 			return "recorder_type", &metadata.Field{Name: "recorder_type", Type: metadata.FieldTypeString}, true
+		}
+		if predicateEntityHasField(entity, "регистратор_тип") {
+			return "регистратор_тип", &metadata.Field{Name: "регистратор_тип", Type: metadata.FieldTypeString}, true
 		}
 	case "line_number", "номерстроки", "номер_строки":
 		if predicateEntityHasField(entity, "line_number") {

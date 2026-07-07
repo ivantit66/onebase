@@ -142,9 +142,9 @@ func fieldAllowed(entity *metadata.Entity, field string) bool {
 	case "period", "период":
 		return entityHasField(entity, "period")
 	case "recorder", "регистратор":
-		return entityHasField(entity, "recorder")
+		return entityHasField(entity, "recorder") || entityHasField(entity, "регистратор")
 	case "recorder_type", "типрегистратора", "тип_регистратора":
-		return entityHasField(entity, "recorder_type")
+		return entityHasField(entity, "recorder_type") || entityHasField(entity, "регистратор_тип")
 	case "line_number", "номерстроки", "номер_строки":
 		return entityHasField(entity, "line_number")
 	case "вид_движения", "виддвижения":

@@ -68,12 +68,24 @@ func (h *handler) rowAllowedUpdate(ctx context.Context, entity *metadata.Entity,
 	return storage.MatchPredicate(storage.MergeRowFields(row, fields), dec.Predicate)
 }
 
-func deniedRowAccessSource(ctx context.Context, sources []query.SourceRef) string {
-	u := auth.UserFromContext(ctx)
-	for _, src := range sources {
-		if access.HasRestrictedPolicy(u, src.Kind, src.Name, "read") {
-			return src.Name
-		}
+func (h *handler) compileQueryWithRowAccess(ctx context.Context, text string, params map[string]any) (query.Result, error) {
+	rowFilters, err := access.QueryRowFilters(
+		auth.UserFromContext(ctx),
+		h.reg.Entities(),
+		h.reg.Registers(),
+		h.reg.InfoRegisters(),
+		h.reg.AccountRegisters(),
+	)
+	if err != nil {
+		return query.Result{}, err
 	}
-	return ""
+	return query.Compile(text, query.CompileOpts{
+		Entities:    h.reg.Entities(),
+		Params:      params,
+		Registers:   h.reg.Registers(),
+		InfoRegs:    h.reg.InfoRegisters(),
+		AccountRegs: h.reg.AccountRegisters(),
+		RowFilters:  rowFilters,
+		Dialect:     h.store.Dialect(),
+	})
 }

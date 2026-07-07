@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
 	"github.com/ivantit66/onebase/internal/excel"
-	"github.com/ivantit66/onebase/internal/query"
 	reportpkg "github.com/ivantit66/onebase/internal/report"
 	"github.com/ivantit66/onebase/internal/report/compose"
 	"github.com/ivantit66/onebase/internal/runtime"
@@ -156,36 +155,13 @@ func (s *Server) runReport(w http.ResponseWriter, r *http.Request, rep *reportpk
 			queryValues[p.Name] = parseParamValue(str, "bool")
 		}
 	}
-	compiled, err := query.Compile(rep.Query, query.CompileOpts{
-		Entities:    s.reg.Entities(),
-		Params:      queryValues,
-		Registers:   s.reg.Registers(),
-		InfoRegs:    s.reg.InfoRegisters(),
-		AccountRegs: s.reg.AccountRegisters(),
-		Dialect:     s.store.Dialect(),
-	})
+	compiled, err := s.compileQueryWithRowAccess(opCtx, rep.Query, queryValues)
 	reportParams := s.buildReportParams(opCtx, s.resolveLang(r), rep.Params, paramValues)
 	if err != nil {
 		opStatus = "error"
 		s.render(w, r, "page-report", map[string]any{
 			"Report":             rep,
 			"QueryError":         err.Error(),
-			"ParamValues":        paramValues,
-			"ReportParams":       reportParams,
-			"ActiveVariant":      variant,
-			"UserSettings":       settings,
-			"ReportSettingsJSON": settingsJSON,
-			"ReportPresets":      presets,
-			"ActivePresetID":     rs.ActivePresetID,
-			"ActivePreset":       activePreset,
-		})
-		return
-	}
-	if denied := s.deniedRowAccessSource(opCtx, compiled.Sources); denied != "" {
-		opStatus = "error"
-		s.render(w, r, "page-report", map[string]any{
-			"Report":             rep,
-			"QueryError":         "row-level access for " + denied + " is not supported in report queries yet",
 			"ParamValues":        paramValues,
 			"ReportParams":       reportParams,
 			"ActiveVariant":      variant,
@@ -575,19 +551,9 @@ func (s *Server) reportExportRowsWithContext(ctx context.Context, r *http.Reques
 			paramValues[p.Name] = val
 		}
 	}
-	compiled, err := query.Compile(rep.Query, query.CompileOpts{
-		Entities:    s.reg.Entities(),
-		Params:      paramValues,
-		Registers:   s.reg.Registers(),
-		InfoRegs:    s.reg.InfoRegisters(),
-		AccountRegs: s.reg.AccountRegisters(),
-		Dialect:     s.store.Dialect(),
-	})
+	compiled, err := s.compileQueryWithRowAccess(ctx, rep.Query, paramValues)
 	if err != nil {
 		return nil, nil, newReportExportError(http.StatusBadRequest, "query compile error", err)
-	}
-	if denied := s.deniedRowAccessSource(ctx, compiled.Sources); denied != "" {
-		return nil, nil, newReportExportError(http.StatusForbidden, "row-level access", fmt.Errorf("row-level access for %s is not supported in report queries yet", denied))
 	}
 	if stats != nil {
 		stats.attrs = []slog.Attr{slog.String("sql_hash", sqlHash(compiled.SQL))}

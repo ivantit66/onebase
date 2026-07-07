@@ -163,14 +163,7 @@ func (s *Server) aiRunQuery(ctx context.Context, call llm.ToolCall) llm.ToolResu
 		params = p
 		coerceParams(params)
 	}
-	res, err := query.Compile(qtext, query.CompileOpts{
-		Params:      params,
-		Entities:    s.reg.Entities(),
-		Registers:   s.reg.Registers(),
-		InfoRegs:    s.reg.InfoRegisters(),
-		AccountRegs: s.reg.AccountRegisters(),
-		Dialect:     s.store.Dialect(),
-	})
+	res, err := s.compileQueryWithRowAccess(ctx, qtext, params)
 	if err != nil {
 		return llm.ToolResult{ID: call.ID, Content: "ошибка компиляции запроса: " + err.Error(), IsError: true}
 	}
@@ -181,9 +174,6 @@ func (s *Server) aiRunQuery(ctx context.Context, call llm.ToolCall) llm.ToolResu
 		if denied := s.aiDeniedSource(ctx, res.Sources); denied != "" {
 			return llm.ToolResult{ID: call.ID, Content: "нет доступа к объекту: " + denied, IsError: true}
 		}
-	}
-	if denied := s.deniedRowAccessSource(ctx, res.Sources); denied != "" {
-		return llm.ToolResult{ID: call.ID, Content: "строковые ограничения для объекта " + denied + " пока не поддержаны в произвольных запросах", IsError: true}
 	}
 	rows, err := s.store.QueryAll(ctx, res.SQL, res.Args...)
 	if err != nil {

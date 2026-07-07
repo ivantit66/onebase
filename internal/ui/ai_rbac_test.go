@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/auth"
 	"github.com/ivantit66/onebase/internal/llm"
 	"github.com/ivantit66/onebase/internal/metadata"
@@ -56,7 +57,7 @@ func TestAIRunQuery_DefaultScope_NoFilter(t *testing.T) {
 	}
 }
 
-func TestAIRunQuery_RowAccessFailClosed(t *testing.T) {
+func TestAIRunQuery_RowAccessFiltersRows(t *testing.T) {
 	cat := &metadata.Entity{
 		Name: "Товар", Kind: metadata.KindCatalog,
 		Fields: []metadata.Field{
@@ -64,7 +65,13 @@ func TestAIRunQuery_RowAccessFailClosed(t *testing.T) {
 			{Name: "Owner", Type: metadata.FieldTypeString},
 		},
 	}
-	s, _ := newSubmitTestServer(t, []*metadata.Entity{cat})
+	s, ctx := newSubmitTestServer(t, []*metadata.Entity{cat})
+	if err := s.store.Upsert(ctx, cat.Name, uuid.New(), map[string]any{"Наименование": "Allowed", "Owner": "u"}, cat); err != nil {
+		t.Fatalf("upsert allowed: %v", err)
+	}
+	if err := s.store.Upsert(ctx, cat.Name, uuid.New(), map[string]any{"Наименование": "Hidden", "Owner": "other"}, cat); err != nil {
+		t.Fatalf("upsert hidden: %v", err)
+	}
 
 	user := &auth.User{Login: "u", Roles: []*auth.Role{{
 		Permissions: auth.Permission{
@@ -75,8 +82,11 @@ func TestAIRunQuery_RowAccessFailClosed(t *testing.T) {
 		},
 	}}}
 	res := runAIQuery(s, user)
-	if !res.IsError || !strings.Contains(res.Content, "строковые ограничения") {
-		t.Fatalf("ожидался fail-closed для row_access в произвольном запросе, получено: err=%v content=%s", res.IsError, res.Content)
+	if res.IsError {
+		t.Fatalf("row_access должен фильтровать запрос, а не падать: %s", res.Content)
+	}
+	if !strings.Contains(res.Content, "Allowed") || strings.Contains(res.Content, "Hidden") {
+		t.Fatalf("RLS не отфильтровал строки: %s", res.Content)
 	}
 }
 

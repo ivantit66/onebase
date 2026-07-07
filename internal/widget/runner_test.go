@@ -99,15 +99,27 @@ func TestFormatMoney_Negative(t *testing.T) {
 	}
 }
 
-func TestRunQuery_RowAccessFailsClosed(t *testing.T) {
-	ctx, runner, _ := newRowAccessRunner(t)
+func TestRunQuery_RowAccessFiltersRows(t *testing.T) {
+	ctx, runner, entity := newRowAccessRunner(t)
+	if err := runner.Store.Upsert(ctx, entity.Name, uuid.New(), map[string]any{"Наименование": "Allowed", "Owner": "u"}, entity); err != nil {
+		t.Fatalf("upsert allowed: %v", err)
+	}
+	if err := runner.Store.Upsert(ctx, entity.Name, uuid.New(), map[string]any{"Наименование": "Hidden", "Owner": "other"}, entity); err != nil {
+		t.Fatalf("upsert hidden: %v", err)
+	}
 	res := runner.Run(ctx, &metadata.Widget{
 		Name:  "Товары",
 		Type:  metadata.WidgetTypeList,
 		Query: "ВЫБРАТЬ Наименование ИЗ Справочник.Товар",
 	})
-	if !strings.Contains(res.Error, "строковые ограничения") {
-		t.Fatalf("expected row-access fail-closed error, got %q", res.Error)
+	if res.Error != "" {
+		t.Fatalf("Run list error: %s", res.Error)
+	}
+	if len(res.Rows) != 1 {
+		t.Fatalf("expected one visible row, got %#v", res.Rows)
+	}
+	if got := fmt.Sprint(res.Rows[0]["наименование"]); got != "Allowed" {
+		t.Fatalf("visible row = %s, want Allowed; rows=%#v", got, res.Rows)
 	}
 }
 

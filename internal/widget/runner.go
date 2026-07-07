@@ -449,12 +449,17 @@ func (r *Runner) runQuery(ctx context.Context, w *metadata.Widget) ([]map[string
 	}
 	params = scheduler.ResolveParamTemplates(params)
 
+	rowFilters, err := access.QueryRowFilters(r.User, r.Reg.Entities(), r.Reg.Registers(), r.Reg.InfoRegisters(), r.Reg.AccountRegisters())
+	if err != nil {
+		return nil, nil, err
+	}
 	compiled, err := query.Compile(w.Query, query.CompileOpts{
 		Params:      params,
 		Entities:    r.Reg.Entities(),
 		Registers:   r.Reg.Registers(),
 		InfoRegs:    r.Reg.InfoRegisters(),
 		AccountRegs: r.Reg.AccountRegisters(),
+		RowFilters:  rowFilters,
 		Dialect:     r.Store.Dialect(),
 	})
 	if err != nil {
@@ -462,9 +467,6 @@ func (r *Runner) runQuery(ctx context.Context, w *metadata.Widget) ([]map[string
 	}
 	if denied := r.deniedQuerySource(compiled.Sources); denied != "" {
 		return nil, nil, fmt.Errorf("нет доступа к объекту: %s", denied)
-	}
-	if denied := r.deniedRowAccessSource(compiled.Sources); denied != "" {
-		return nil, nil, fmt.Errorf("строковые ограничения для объекта %s пока не поддержаны в виджетах", denied)
 	}
 	return r.Store.RunQuery(ctx, compiled.SQL, compiled.Args)
 }
@@ -488,15 +490,6 @@ func (r *Runner) rowAllowedID(ctx context.Context, entity *metadata.Entity, op s
 func (r *Runner) deniedQuerySource(sources []query.SourceRef) string {
 	for _, src := range sources {
 		if !r.canRead(src.Kind, src.Name) {
-			return src.Name
-		}
-	}
-	return ""
-}
-
-func (r *Runner) deniedRowAccessSource(sources []query.SourceRef) string {
-	for _, src := range sources {
-		if access.HasRestrictedPolicy(r.User, src.Kind, src.Name, "read") {
 			return src.Name
 		}
 	}
