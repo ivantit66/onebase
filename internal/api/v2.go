@@ -79,6 +79,11 @@ func (h *handler) listObjectsV2(kind metadata.Kind) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, err.Error(), "", 0)
 			return
 		}
+		params, err = applyRowFilter(r.Context(), entity, "read", params)
+		if err != nil {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
+			return
+		}
 		rows, err := h.store.List(r.Context(), entityName, entity, params)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error(), "", 0)
@@ -123,6 +128,10 @@ func (h *handler) getObjectV2(kind metadata.Kind) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, err.Error(), "", 0)
 			return
 		}
+		if !h.rowAllowed(r.Context(), entity, "read", result) {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
+			return
+		}
 		writeJSONV2(w, http.StatusOK, restV2Envelope{Data: result})
 	}
 }
@@ -147,6 +156,14 @@ func (h *handler) createObjectV2(kind metadata.Kind) http.HandlerFunc {
 		}
 		if kind == metadata.KindDocument {
 			ensureDocumentNumber(r.Context(), h.store, entity, body.Fields)
+		}
+		if !h.rowAllowed(r.Context(), entity, "write", body.Fields) {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
+			return
+		}
+		if kind == metadata.KindDocument && isPostAction(body.Action) && !h.rowAllowed(r.Context(), entity, "post", body.Fields) {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
+			return
 		}
 
 		result, err := h.entitySvc.Save(r.Context(), entityservice.SaveRequest{
@@ -184,6 +201,14 @@ func (h *handler) updateObjectV2(kind metadata.Kind) http.HandlerFunc {
 		if kind == metadata.KindDocument && isPostAction(body.Action) && !requireRESTPerm(w, r, kind, entityName, "post") {
 			return
 		}
+		if !h.rowAllowedUpdate(r.Context(), entity, "write", id, body.Fields) {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
+			return
+		}
+		if kind == metadata.KindDocument && isPostAction(body.Action) && !h.rowAllowedUpdate(r.Context(), entity, "post", id, body.Fields) {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
+			return
+		}
 
 		var expectedVersion *int64
 		if ifMatch := r.Header.Get("If-Match"); ifMatch != "" {
@@ -207,7 +232,7 @@ func (h *handler) updateObjectV2(kind metadata.Kind) http.HandlerFunc {
 
 func (h *handler) deleteObjectV2(kind metadata.Kind) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		_, entityName, ok := h.entityFromV2Route(w, r, kind)
+		entity, entityName, ok := h.entityFromV2Route(w, r, kind)
 		if !ok {
 			return
 		}
@@ -217,6 +242,10 @@ func (h *handler) deleteObjectV2(kind metadata.Kind) http.HandlerFunc {
 		id, err := uuid.Parse(chi.URLParam(r, "id"))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid id", "", 0)
+			return
+		}
+		if !h.rowAllowedID(r.Context(), entity, "delete", id) {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
 			return
 		}
 		if err := h.store.WithTx(r.Context(), func(ctx context.Context) error {
@@ -253,6 +282,10 @@ func (h *handler) postDocumentV2() http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid id", "", 0)
 			return
 		}
+		if !h.rowAllowedID(r.Context(), entity, "post", id) {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
+			return
+		}
 
 		fields, tpRows, ok := h.documentPostPayload(w, r, entity, entityName, id)
 		if !ok {
@@ -287,6 +320,10 @@ func (h *handler) unpostDocumentV2() http.HandlerFunc {
 		id, err := uuid.Parse(chi.URLParam(r, "id"))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid id", "", 0)
+			return
+		}
+		if !h.rowAllowedID(r.Context(), entity, "unpost", id) {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
 			return
 		}
 		if err := h.store.WithTx(r.Context(), func(ctx context.Context) error {
@@ -339,6 +376,10 @@ func (h *handler) runReportV2() http.HandlerFunc {
 		})
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "query compile error: "+err.Error(), "", 0)
+			return
+		}
+		if denied := deniedRowAccessSource(r.Context(), compiled.Sources); denied != "" {
+			writeError(w, http.StatusForbidden, "row-level access for "+denied+" is not supported in report queries yet", "", 0)
 			return
 		}
 		rows, cols, truncated, err := h.store.RunQueryLimit(r.Context(), compiled.SQL, compiled.Args, limit)
@@ -410,6 +451,11 @@ func (h *handler) documentPostPayload(w http.ResponseWriter, r *http.Request, en
 		body, err := decodeBody(r)
 		if err != nil {
 			writeDecodeError(w, err)
+			return nil, nil, false
+		}
+		if !h.rowAllowedUpdate(r.Context(), entity, "write", id, body.Fields) ||
+			!h.rowAllowedUpdate(r.Context(), entity, "post", id, body.Fields) {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
 			return nil, nil, false
 		}
 		return body.Fields, body.TablePartRows, true

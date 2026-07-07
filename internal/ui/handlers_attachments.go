@@ -72,6 +72,9 @@ func (s *Server) attachmentsList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", 400)
 		return
 	}
+	if !s.requireOwnerRow(w, r, string(entity.Kind), entity.Name, "read", id) {
+		return
+	}
 
 	atts, err := s.store.ListAttachments(r.Context(), string(entity.Kind), entity.Name, id)
 	if err != nil {
@@ -95,6 +98,9 @@ func (s *Server) attachmentUpload(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "invalid id", 400)
+		return
+	}
+	if !s.requireOwnerRow(w, r, string(entity.Kind), entity.Name, "write", id) {
 		return
 	}
 
@@ -155,7 +161,8 @@ func (s *Server) attachmentDownload(w http.ResponseWriter, r *http.Request) {
 
 	// Авторизация (защита от IDOR): отдаём вложение только тем, у кого есть право
 	// чтения родителя (или записи — чтобы предпросмотр у загрузчика работал сразу).
-	if !s.can(r, att.OwnerKind, att.OwnerName, "read") && !s.can(r, att.OwnerKind, att.OwnerName, "write") {
+	if !s.rowAllowsOwnerID(r, att.OwnerKind, att.OwnerName, "read", att.OwnerID) &&
+		!s.rowAllowsOwnerID(r, att.OwnerKind, att.OwnerName, "write", att.OwnerID) {
 		http.Error(w, s.tr(s.resolveLang(r), "Нет доступа"), http.StatusForbidden)
 		return
 	}
@@ -180,7 +187,7 @@ func (s *Server) attachmentDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, s.tr(s.resolveLang(r), "Файл не найден"), 404)
 		return
 	}
-	if !s.can(r, att.OwnerKind, att.OwnerName, "write") {
+	if !s.rowAllowsOwnerID(r, att.OwnerKind, att.OwnerName, "write", att.OwnerID) {
 		http.Error(w, s.tr(s.resolveLang(r), "Нет доступа"), http.StatusForbidden)
 		return
 	}

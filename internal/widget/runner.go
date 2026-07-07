@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/ivantit66/onebase/internal/access"
+	"github.com/ivantit66/onebase/internal/auth"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/query"
 	"github.com/ivantit66/onebase/internal/runtime"
@@ -20,11 +22,11 @@ import (
 // Result is the rendered output of a single widget. Type mirrors metadata.WidgetType
 // so templates can switch on a single field; other fields are populated based on type.
 type Result struct {
-	Name    string
-	Type    string
-	Title   string
-	Span    int
-	Error   string
+	Name  string
+	Type  string
+	Title string
+	Span  int
+	Error string
 
 	// kpi
 	KPI *KPIResult
@@ -132,6 +134,7 @@ type Runner struct {
 	Reg         *runtime.Registry
 	Store       *storage.DB
 	CurrentUser string // login of the user looking at the dashboard (for recent.scope=current_user)
+	User        *auth.User
 	Cache       *Cache // optional — when set, results are cached by widget name + user
 }
 
@@ -354,6 +357,14 @@ func (r *Runner) runRecent(ctx context.Context, w *metadata.Widget, res *Result)
 		entName, _ := row["entity_name"].(string)
 		kind, _ := row["entity_kind"].(string)
 		id := fmt.Sprintf("%v", row["record_id"])
+		entity := r.Reg.GetEntity(entName)
+		if entity == nil || !r.canRead(kind, entName) {
+			continue
+		}
+		uid, err := uuid.Parse(id)
+		if err != nil || !r.rowAllowedID(ctx, entity, "read", uid) {
+			continue
+		}
 		title := recordPresentation(ctx, r, entName, id)
 		if title == shortID(id) {
 			continue
@@ -392,12 +403,18 @@ func (r *Runner) resolveUUIDs(ctx context.Context, rows []map[string]any) {
 		return
 	}
 	for _, entity := range r.Reg.Entities() {
+		if !r.canRead(string(entity.Kind), entity.Name) {
+			continue
+		}
 		for idStr, label := range uuidToLabel {
 			if label != "" {
 				continue
 			}
 			id, perr := uuid.Parse(idStr)
 			if perr != nil {
+				continue
+			}
+			if !r.rowAllowedID(ctx, entity, "read", id) {
 				continue
 			}
 			if refRow, err := r.Store.GetByID(ctx, entity.Name, id, entity); err == nil {
@@ -443,7 +460,47 @@ func (r *Runner) runQuery(ctx context.Context, w *metadata.Widget) ([]map[string
 	if err != nil {
 		return nil, nil, fmt.Errorf("compile: %w", err)
 	}
+	if denied := r.deniedQuerySource(compiled.Sources); denied != "" {
+		return nil, nil, fmt.Errorf("нет доступа к объекту: %s", denied)
+	}
+	if denied := r.deniedRowAccessSource(compiled.Sources); denied != "" {
+		return nil, nil, fmt.Errorf("строковые ограничения для объекта %s пока не поддержаны в виджетах", denied)
+	}
 	return r.Store.RunQuery(ctx, compiled.SQL, compiled.Args)
+}
+
+func (r *Runner) canRead(kind, name string) bool {
+	return r.User == nil || r.User.Has(kind, name, "read")
+}
+
+func (r *Runner) rowAllowedID(ctx context.Context, entity *metadata.Entity, op string, id uuid.UUID) bool {
+	dec, err := access.Decide(r.User, string(entity.Kind), entity.Name, op, entity)
+	if err != nil || !dec.Allowed {
+		return false
+	}
+	if dec.Unrestricted {
+		return true
+	}
+	row, err := r.Store.GetByID(ctx, entity.Name, id, entity)
+	return err == nil && storage.MatchPredicate(row, dec.Predicate)
+}
+
+func (r *Runner) deniedQuerySource(sources []query.SourceRef) string {
+	for _, src := range sources {
+		if !r.canRead(src.Kind, src.Name) {
+			return src.Name
+		}
+	}
+	return ""
+}
+
+func (r *Runner) deniedRowAccessSource(sources []query.SourceRef) string {
+	for _, src := range sources {
+		if access.HasRestrictedPolicy(r.User, src.Kind, src.Name, "read") {
+			return src.Name
+		}
+	}
+	return ""
 }
 
 func columnsForList(w *metadata.Widget, cols []string) []ColumnSpec {

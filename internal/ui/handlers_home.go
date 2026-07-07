@@ -117,6 +117,7 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	}
 	runner := widget.New(s.reg, s.store)
 	runner.CurrentUser = login
+	runner.User = auth.UserFromContext(r.Context())
 	runner.Cache = s.widgetCache
 
 	lang := s.resolveLang(r)

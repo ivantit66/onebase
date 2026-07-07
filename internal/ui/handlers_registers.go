@@ -28,6 +28,11 @@ func (s *Server) registerMovements(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	flt := parseRegFilter(r, reg.Dimensions, true /*periodic — у движений всегда есть период*/)
+	var ok bool
+	flt, ok = s.applyRegRowFilter(w, r, "register", reg.Name, "read", storage.RegisterPredicateEntity(reg), flt)
+	if !ok {
+		return
+	}
 	rows, err := s.store.GetMovements(r.Context(), name, reg, flt)
 	if err != nil {
 		http.Error(w, s.errText(r, err), 500)
@@ -55,6 +60,11 @@ func (s *Server) registerBalances(w http.ResponseWriter, r *http.Request) {
 	}
 	// Остатки: только «на дату» (to) + измерения; from игнорируется в storage.
 	flt := parseRegFilter(r, reg.Dimensions, true)
+	var ok bool
+	flt, ok = s.applyRegRowFilter(w, r, "register", reg.Name, "read", storage.RegisterPredicateEntity(reg), flt)
+	if !ok {
+		return
+	}
 	rows, err := s.store.GetBalances(r.Context(), name, reg, flt)
 	if err != nil {
 		http.Error(w, s.errText(r, err), 500)
@@ -229,6 +239,11 @@ func (s *Server) infoRegList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	flt := parseRegFilter(r, ir.Dimensions, ir.Periodic)
+	var ok bool
+	flt, ok = s.applyRegRowFilter(w, r, "inforeg", ir.Name, "read", storage.InfoRegisterPredicateEntity(ir), flt)
+	if !ok {
+		return
+	}
 	rows, err := s.store.InfoRegList(r.Context(), ir, flt)
 	if err != nil {
 		http.Error(w, s.errText(r, err), 500)
@@ -306,6 +321,15 @@ func (s *Server) infoRegSubmit(w http.ResponseWriter, r *http.Request) {
 
 	dims := parseInfoRegFields(r, ir.Dimensions)
 	resources := parseInfoRegFields(r, ir.Resources)
+	if existing, ok := s.infoRegExistingPolicyRow(r.Context(), ir, dims, periodPtr); ok {
+		if !s.rowAllowedFor(w, r, "inforeg", ir.Name, "write", storage.InfoRegisterPredicateEntity(ir), existing) {
+			return
+		}
+	}
+	row := infoRegPolicyRow(ir, dims, resources, periodPtr)
+	if !s.rowAllowedFor(w, r, "inforeg", ir.Name, "write", storage.InfoRegisterPredicateEntity(ir), row) {
+		return
+	}
 
 	if err := s.store.InfoRegSet(r.Context(), ir, dims, resources, periodPtr); err != nil {
 		s.render(w, r, "page-inforeg-form", map[string]any{
@@ -343,6 +367,10 @@ func (s *Server) infoRegDelete(w http.ResponseWriter, r *http.Request) {
 		periodPtr = &t
 	}
 	dims := parseInfoRegFields(r, ir.Dimensions)
+	row, _ := s.infoRegExistingPolicyRow(r.Context(), ir, dims, periodPtr)
+	if !s.rowAllowedFor(w, r, "inforeg", ir.Name, "delete", storage.InfoRegisterPredicateEntity(ir), row) {
+		return
+	}
 	if err := s.store.InfoRegDelete(r.Context(), ir, dims, periodPtr); err != nil {
 		http.Error(w, s.errText(r, err), 500)
 		return
@@ -361,6 +389,41 @@ func parseInfoRegFields(r *http.Request, fields []metadata.Field) map[string]any
 		result[f.Name] = parseInfoRegFieldValue(f, val)
 	}
 	return result
+}
+
+func infoRegPolicyRow(ir *metadata.InfoRegister, dims, resources map[string]any, period *time.Time) map[string]any {
+	row := make(map[string]any, len(dims)+len(resources)+1)
+	if period != nil {
+		row["period"] = *period
+	}
+	for k, v := range dims {
+		row[k] = v
+	}
+	for k, v := range resources {
+		row[k] = v
+	}
+	return row
+}
+
+func (s *Server) infoRegExistingPolicyRow(ctx context.Context, ir *metadata.InfoRegister, dims map[string]any, period *time.Time) (map[string]any, bool) {
+	flt := storage.RegFilter{Dims: map[string]string{}}
+	for k, v := range dims {
+		if v != nil {
+			flt.Dims[k] = fmt.Sprintf("%v", v)
+		}
+	}
+	if period != nil {
+		flt.From = period
+		flt.To = period
+	}
+	rows, err := s.store.InfoRegList(ctx, ir, flt)
+	if err == nil && len(rows) > 0 {
+		if period != nil {
+			rows[0]["period"] = *period
+		}
+		return rows[0], true
+	}
+	return infoRegPolicyRow(ir, dims, nil, period), false
 }
 
 func parseInfoRegFieldValue(f metadata.Field, val string) any {

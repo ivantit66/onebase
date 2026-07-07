@@ -123,6 +123,14 @@ func (h *handler) createObject(kind metadata.Kind) http.HandlerFunc {
 				}
 			}
 		}
+		if !h.rowAllowed(r.Context(), entity, "write", body.Fields) {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
+			return
+		}
+		if kind == metadata.KindDocument && isPostAction(body.Action) && !h.rowAllowed(r.Context(), entity, "post", body.Fields) {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
+			return
+		}
 
 		result, err := h.entitySvc.Save(r.Context(), entityservice.SaveRequest{
 			Entity:        entity,
@@ -169,6 +177,10 @@ func (h *handler) getObject(kind metadata.Kind) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, err.Error(), "", 0)
 			return
 		}
+		if !h.rowAllowed(r.Context(), entity, "read", result) {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(result)
 	}
@@ -186,6 +198,11 @@ func (h *handler) listObjects(kind metadata.Kind) http.HandlerFunc {
 		params, err := parseRestListParams(r)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error(), "", 0)
+			return
+		}
+		params, err = applyRowFilter(r.Context(), entity, "read", params)
+		if err != nil {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
 			return
 		}
 		rows, err := h.store.List(r.Context(), entityName, entity, params)
@@ -227,6 +244,14 @@ func (h *handler) updateObject(kind metadata.Kind) http.HandlerFunc {
 			return
 		}
 		if kind == metadata.KindDocument && isPostAction(body.Action) && !requireRESTPerm(w, r, kind, entityName, "post") {
+			return
+		}
+		if !h.rowAllowedUpdate(r.Context(), entity, "write", id, body.Fields) {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
+			return
+		}
+		if kind == metadata.KindDocument && isPostAction(body.Action) && !h.rowAllowedUpdate(r.Context(), entity, "post", id, body.Fields) {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
 			return
 		}
 
@@ -272,7 +297,7 @@ func (h *handler) updateObject(kind metadata.Kind) http.HandlerFunc {
 
 func (h *handler) deleteObject(kind metadata.Kind) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		_, entityName, ok := h.entityFromRoute(w, r, kind)
+		entity, entityName, ok := h.entityFromRoute(w, r, kind)
 		if !ok {
 			return
 		}
@@ -282,6 +307,10 @@ func (h *handler) deleteObject(kind metadata.Kind) http.HandlerFunc {
 		id, err := uuid.Parse(chi.URLParam(r, "id"))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid id", "", 0)
+			return
+		}
+		if !h.rowAllowedID(r.Context(), entity, "delete", id) {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
 			return
 		}
 		if err := h.store.WithTx(r.Context(), func(ctx context.Context) error {
@@ -329,6 +358,10 @@ func (h *handler) postDocument() http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid id", "", 0)
 			return
 		}
+		if !h.rowAllowedID(r.Context(), entity, "post", id) {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
+			return
+		}
 
 		// Тело опционально. Если есть — используем как обновление перед проведением;
 		// если пусто — читаем текущее состояние из БД, чтобы OnPost увидел актуальные
@@ -343,6 +376,11 @@ func (h *handler) postDocument() http.HandlerFunc {
 			body, decErr := decodeBody(r)
 			if decErr != nil {
 				writeDecodeError(w, decErr)
+				return
+			}
+			if !h.rowAllowedUpdate(r.Context(), entity, "write", id, body.Fields) ||
+				!h.rowAllowedUpdate(r.Context(), entity, "post", id, body.Fields) {
+				writeError(w, http.StatusForbidden, "forbidden", "", 0)
 				return
 			}
 			fields = body.Fields

@@ -43,6 +43,7 @@ type refStringer interface{ String() string }
 // колонку регистра ( Если значение — *Ref:
 //   - reference-поле  → UUID (через resolveRefArg)
 //   - не-ref поле     → строка из String() (имя записи)
+//
 // Для не-Ref значений возвращается как есть.
 func normalizeRegArg(d Dialect, v any, isRef bool) any {
 	if isRef {
@@ -223,9 +224,19 @@ func (db *DB) GetMovements(ctx context.Context, regName string, reg *metadata.Re
 		cols = append(cols, metadata.ColumnName(f))
 	}
 	where, args := dimWhereClause(db.dialect, reg.Dimensions, f, 1, true, true)
-	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), table)
+	whereParts := make([]string, 0, 2)
 	if where != "" {
-		query += " WHERE " + where
+		whereParts = append(whereParts, where)
+	}
+	if cond, condArgs, _, err := PredicateSQL(db.dialect, RegisterPredicateEntity(reg), f.RowFilter, len(args)+1); err != nil {
+		return nil, fmt.Errorf("get movements %s row filter: %w", regName, err)
+	} else if cond != "" {
+		whereParts = append(whereParts, cond)
+		args = append(args, condArgs...)
+	}
+	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), table)
+	if len(whereParts) > 0 {
+		query += " WHERE " + strings.Join(whereParts, " AND ")
 	}
 	query += " ORDER BY period, recorder, line_number"
 	rows, err := db.Query(ctx, query, args...)
@@ -336,9 +347,19 @@ func (db *DB) GetBalances(ctx context.Context, regName string, reg *metadata.Reg
 	}
 
 	where, args := dimWhereClause(db.dialect, reg.Dimensions, f, 1, false /*from игнорируем*/, true)
-	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(selectParts, ", "), table)
+	whereParts := make([]string, 0, 2)
 	if where != "" {
-		query += " WHERE " + where
+		whereParts = append(whereParts, where)
+	}
+	if cond, condArgs, _, err := PredicateSQL(db.dialect, RegisterPredicateEntity(reg), f.RowFilter, len(args)+1); err != nil {
+		return nil, fmt.Errorf("get balances %s row filter: %w", regName, err)
+	} else if cond != "" {
+		whereParts = append(whereParts, cond)
+		args = append(args, condArgs...)
+	}
+	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(selectParts, ", "), table)
+	if len(whereParts) > 0 {
+		query += " WHERE " + strings.Join(whereParts, " AND ")
 	}
 	if len(groupBy) > 0 {
 		query += " GROUP BY " + strings.Join(groupBy, ", ")

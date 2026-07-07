@@ -1,8 +1,11 @@
 package storage
 
 import (
+	"context"
+	"path/filepath"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/metadata"
 )
 
@@ -105,5 +108,52 @@ func TestColExprForDoc_MultiFallbackCoalesce(t *testing.T) {
 	expr, _ := colExprForDoc(jcol, entity)
 	if expr != "COALESCE(поставщик, покупатель)" {
 		t.Errorf("ожидался COALESCE, получили %q", expr)
+	}
+}
+
+func TestJournalQueryRowFiltersApplyInsideDocumentUnion(t *testing.T) {
+	ctx := context.Background()
+	db, err := ConnectSQLite(ctx, filepath.Join(t.TempDir(), "journal-rls.db"))
+	if err != nil {
+		t.Fatalf("ConnectSQLite: %v", err)
+	}
+	defer db.Close()
+
+	doc := &metadata.Entity{
+		Name: "Заказ",
+		Kind: metadata.KindDocument,
+		Fields: []metadata.Field{
+			{Name: "Owner", Type: metadata.FieldTypeString},
+			{Name: "Номер", Type: metadata.FieldTypeString},
+		},
+	}
+	if err := db.Migrate(ctx, []*metadata.Entity{doc}); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if err := db.Upsert(ctx, doc.Name, uuid.New(), map[string]any{"Owner": "u", "Номер": "1"}, doc); err != nil {
+		t.Fatalf("upsert allowed: %v", err)
+	}
+	if err := db.Upsert(ctx, doc.Name, uuid.New(), map[string]any{"Owner": "other", "Номер": "2"}, doc); err != nil {
+		t.Fatalf("upsert hidden: %v", err)
+	}
+
+	j := &metadata.Journal{
+		Name:      "Заказы",
+		Documents: []string{doc.Name},
+		Columns:   []metadata.JournalColumn{{Field: "Owner"}, {Field: "Номер"}},
+	}
+	rows, total, _, err := db.JournalQuery(ctx, j, map[string]*metadata.Entity{doc.Name: doc}, ListParams{
+		JournalRowFilters: map[string]*Predicate{
+			doc.Name: {Field: "Owner", Op: "eq", Value: "u"},
+		},
+	}, 20, 0)
+	if err != nil {
+		t.Fatalf("JournalQuery: %v", err)
+	}
+	if total != 1 || len(rows) != 1 {
+		t.Fatalf("total=%d rows=%#v, want one allowed row", total, rows)
+	}
+	if rows[0]["Owner"] != "u" {
+		t.Fatalf("row filter leaked hidden row: %#v", rows[0])
 	}
 }

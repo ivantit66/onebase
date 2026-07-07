@@ -182,6 +182,9 @@ func (s *Server) aiRunQuery(ctx context.Context, call llm.ToolCall) llm.ToolResu
 			return llm.ToolResult{ID: call.ID, Content: "нет доступа к объекту: " + denied, IsError: true}
 		}
 	}
+	if denied := s.deniedRowAccessSource(ctx, res.Sources); denied != "" {
+		return llm.ToolResult{ID: call.ID, Content: "строковые ограничения для объекта " + denied + " пока не поддержаны в произвольных запросах", IsError: true}
+	}
 	rows, err := s.store.QueryAll(ctx, res.SQL, res.Args...)
 	if err != nil {
 		return llm.ToolResult{ID: call.ID, Content: "ошибка выполнения: " + err.Error(), IsError: true}

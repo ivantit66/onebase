@@ -6,6 +6,7 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/storage"
 )
 
@@ -94,13 +96,14 @@ func (s *Server) imageServe(w http.ResponseWriter, r *http.Request) {
 	defer rc.Close()
 
 	// Авторизация (защита от IDOR): если у блоба есть владелец-сущность, отдаём
-	// только тем, у кого есть право чтения (или записи — чтобы превью сразу после
-	// загрузки работало у загрузчика). can() возвращает true для nil-пользователя,
-	// поэтому в открытом деплое без пользователей доступ остаётся свободным.
+	// только тем, у кого есть право чтения видимой строки (или записи — чтобы
+	// превью сразу после загрузки работало у загрузчика). can() возвращает true
+	// для nil-пользователя, поэтому в открытом деплое без пользователей доступ
+	// остаётся свободным.
 	// Легаси-блобы без владельца уже защищены auth-middleware (аноним до сюда
 	// не доходит, если пользователи заведены) — отдельная проверка не нужна.
 	if b.OwnerEntity != "" {
-		if !s.can(r, b.OwnerKind, b.OwnerEntity, "read") && !s.can(r, b.OwnerKind, b.OwnerEntity, "write") {
+		if !s.blobAllowed(r, b) {
 			http.Error(w, s.tr(s.resolveLang(r), "Нет доступа"), http.StatusForbidden)
 			return
 		}
@@ -130,6 +133,59 @@ func (s *Server) imageServe(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "inline")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
 	io.Copy(w, rc)
+}
+
+func (s *Server) blobAllowed(r *http.Request, b storage.Blob) bool {
+	entity := s.ownerEntity(b.OwnerKind, b.OwnerEntity)
+	if entity == nil {
+		return s.can(r, b.OwnerKind, b.OwnerEntity, "read") || s.can(r, b.OwnerKind, b.OwnerEntity, "write")
+	}
+	if s.blobAllowedByRows(r.Context(), entity, "read", b.ID, false) {
+		return true
+	}
+	if s.blobAllowedByRows(r.Context(), entity, "write", b.ID, true) {
+		return true
+	}
+	return !s.blobReferenced(r.Context(), entity, b.ID) && s.can(r, b.OwnerKind, b.OwnerEntity, "write")
+}
+
+func (s *Server) blobAllowedByRows(ctx context.Context, entity *metadata.Entity, op string, id uuid.UUID, requireReference bool) bool {
+	dec, err := s.rowDecision(ctx, entity, op)
+	if err != nil || !dec.Allowed {
+		return false
+	}
+	if dec.Unrestricted {
+		if requireReference {
+			return s.blobReferenced(ctx, entity, id)
+		}
+		return true
+	}
+	return s.blobReferencedWithPolicy(ctx, entity, id, dec.Predicate)
+}
+
+func (s *Server) blobReferenced(ctx context.Context, entity *metadata.Entity, id uuid.UUID) bool {
+	return s.blobReferencedWithPolicy(ctx, entity, id, nil)
+}
+
+func (s *Server) blobReferencedWithPolicy(ctx context.Context, entity *metadata.Entity, id uuid.UUID, rowFilter *storage.Predicate) bool {
+	if entity == nil {
+		return false
+	}
+	for _, f := range entity.Fields {
+		if !metadata.IsImage(f.Type) {
+			continue
+		}
+		imageFilter := storage.Predicate{Field: f.Name, Op: "eq", Value: id.String()}
+		filter := &imageFilter
+		if rowFilter != nil {
+			filter = &storage.Predicate{All: []storage.Predicate{imageFilter, *rowFilter}}
+		}
+		rows, err := s.store.List(ctx, entity.Name, entity, storage.ListParams{Limit: 1, RowFilter: filter})
+		if err == nil && len(rows) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // allowedImageMime определяет тип картинки по её первым байтам (server-side, без

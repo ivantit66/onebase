@@ -40,6 +40,9 @@ func (s *Server) printDocument(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", 400)
 		return
 	}
+	if !s.rowAllowedID(w, r, entity, "read", id) {
+		return
+	}
 	formName := printFormParam(r, "form")
 
 	ref, ok := s.reg.GetPrintFormRef(entity.Name, formName)
@@ -194,6 +197,9 @@ func (s *Server) buildPrintRefs(ctx context.Context, row map[string]any, entity 
 		if err != nil {
 			return
 		}
+		if s.rowAccessRestricted(ctx, refEntity, "read") && !s.rowAllowsID(ctx, refEntity, "read", id) {
+			return
+		}
 		refRow, err := s.store.GetByID(ctx, refEntity.Name, id, refEntity)
 		if err != nil {
 			return
@@ -262,6 +268,9 @@ func (s *Server) printDocumentPDF(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "invalid id", 400)
+		return
+	}
+	if !s.rowAllowedID(w, r, entity, "read", id) {
 		return
 	}
 	formName := printFormParam(r, "form")

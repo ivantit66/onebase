@@ -15,16 +15,18 @@ import (
 
 // ListParams controls filtering, search, sorting and pagination for List queries.
 type ListParams struct {
-	Filters        map[string]FilterValue
-	Sort           string // field Name (empty = default sort by id)
-	Dir            string // "asc" or "desc"
-	ParentStr      string // "" = no filter; "root" = parent IS NULL; "<uuid>" = parent = uuid
-	Search         string // full-text search: ILIKE across all string fields
-	ActivityScope  string // "", "active", "inactive", "all"; applied only for opt-in catalogs
-	Limit          int    // 0 = no limit
-	Offset         int    // for pagination
-	ExcludeFolders bool   // for hierarchical catalogs: only non-folder elements
-	OnlyFolders    bool   // for hierarchical catalogs: only folder elements
+	Filters           map[string]FilterValue
+	RowFilter         *Predicate            // additional SQL-side row-level access predicate
+	JournalRowFilters map[string]*Predicate // per document name row-level predicates for journal UNIONs
+	Sort              string                // field Name (empty = default sort by id)
+	Dir               string                // "asc" or "desc"
+	ParentStr         string                // "" = no filter; "root" = parent IS NULL; "<uuid>" = parent = uuid
+	Search            string                // full-text search: ILIKE across all string fields
+	ActivityScope     string                // "", "active", "inactive", "all"; applied only for opt-in catalogs
+	Limit             int                   // 0 = no limit
+	Offset            int                   // for pagination
+	ExcludeFolders    bool                  // for hierarchical catalogs: only non-folder elements
+	OnlyFolders       bool                  // for hierarchical catalogs: only folder elements
 }
 
 // FilterValue holds a filter for one field.
@@ -407,6 +409,14 @@ func (db *DB) List(ctx context.Context, entityName string, entity *metadata.Enti
 			whereParts = append(whereParts, "("+strings.Join(searchParts, " OR ")+")")
 		}
 	}
+	if cond, condArgs, next, err := PredicateSQL(d, entity, params.RowFilter, argIdx); err != nil {
+		return nil, fmt.Errorf("list %s row filter: %w", entityName, err)
+	} else if cond != "" {
+		whereParts = append(whereParts, cond)
+		args = append(args, condArgs...)
+		argIdx = next
+	}
+	_ = argIdx
 
 	baseQuery := fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), table)
 	whereClause := ""
@@ -570,6 +580,14 @@ func (db *DB) CountList(ctx context.Context, entityName string, entity *metadata
 			whereParts = append(whereParts, "("+strings.Join(searchParts, " OR ")+")")
 		}
 	}
+	if cond, condArgs, next, err := PredicateSQL(d, entity, params.RowFilter, argIdx); err != nil {
+		return 0, fmt.Errorf("count %s row filter: %w", entityName, err)
+	} else if cond != "" {
+		whereParts = append(whereParts, cond)
+		args = append(args, condArgs...)
+		argIdx = next
+	}
+	_ = argIdx
 
 	q := fmt.Sprintf("SELECT COUNT(*) FROM %s", table)
 	if len(whereParts) > 0 {

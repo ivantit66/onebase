@@ -150,6 +150,11 @@ func (s *Server) referenceOptionsWithParams(ctx context.Context, refEntity *meta
 	params.Dir = extra.Dir
 	params.Limit = extra.Limit
 	params.Offset = extra.Offset
+	var err error
+	params, err = s.rowFilterFor(ctx, refEntity, "read", params)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.store.List(ctx, refEntity.Name, refEntity, params)
 	if err != nil {
 		return nil, err
@@ -176,6 +181,10 @@ func (s *Server) referenceOptionsPage(ctx context.Context, refEntity *metadata.E
 	}
 	countParams := s.refListParamsForMode(refEntity, refOptionsChoice)
 	countParams.Search = strings.TrimSpace(search)
+	countParams, err = s.rowFilterFor(ctx, refEntity, "read", countParams)
+	if err != nil {
+		return nil, 0, err
+	}
 	total, err := s.store.CountList(ctx, refEntity.Name, refEntity, countParams)
 	if err != nil {
 		return nil, 0, err
@@ -359,6 +368,9 @@ func (s *Server) appendSelectedRefOptions(ctx context.Context, rows []map[string
 		}
 		row, err := s.store.GetByID(ctx, refEntity.Name, id, refEntity)
 		if err != nil || row == nil {
+			continue
+		}
+		if !s.rowAllowsSelected(ctx, refEntity, row) {
 			continue
 		}
 		row["_label"] = firstStringField(row, refEntity)
@@ -917,10 +929,14 @@ func (s *Server) buildHierarchyBreadcrumbs(ctx context.Context, entity *metadata
 
 // loadFolderOptions returns a bounded folder list for a hierarchical catalog parent select.
 func (s *Server) loadFolderOptions(ctx context.Context, entity *metadata.Entity, selected ...string) []map[string]any {
-	rows, err := s.store.List(ctx, entity.Name, entity, storage.ListParams{
+	params, err := s.rowFilterFor(ctx, entity, "read", storage.ListParams{
 		Limit:       refPickerDefaultLimit,
 		OnlyFolders: true,
 	})
+	if err != nil {
+		return nil
+	}
+	rows, err := s.store.List(ctx, entity.Name, entity, params)
 	if err != nil {
 		return nil
 	}
@@ -952,6 +968,9 @@ func (s *Server) appendSelectedFolderOptions(ctx context.Context, rows []map[str
 		}
 		row, err := s.store.GetByID(ctx, entity.Name, id, entity)
 		if err != nil || row == nil || !asBool(row["is_folder"]) {
+			continue
+		}
+		if !s.rowAllowsSelected(ctx, entity, row) {
 			continue
 		}
 		row["_label"] = firstStringField(row, entity)

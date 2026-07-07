@@ -21,6 +21,11 @@ func (s *Server) listExcel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	params := parseListParams(r, entity, s.store.GetListPageSize(r.Context()))
+	var ok bool
+	params, ok = s.applyRowFilter(w, r, entity, "read", params)
+	if !ok {
+		return
+	}
 	rows, err := s.store.List(r.Context(), entity.Name, entity, params)
 	if err != nil {
 		http.Error(w, s.errText(r, err), 500)

@@ -5,10 +5,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ivantit66/onebase/internal/auth"
 	"github.com/ivantit66/onebase/internal/llm"
+	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/storage"
 )
 
@@ -51,6 +53,30 @@ func TestAIRunQuery_DefaultScope_NoFilter(t *testing.T) {
 	s := aiToolsTestServer(t)
 	if res := runAIQuery(s, catalogUser("Другое", "read")); res.IsError {
 		t.Fatalf("в режиме admin_only фильтрации быть не должно: %s", res.Content)
+	}
+}
+
+func TestAIRunQuery_RowAccessFailClosed(t *testing.T) {
+	cat := &metadata.Entity{
+		Name: "Товар", Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{
+			{Name: "Наименование", Type: metadata.FieldTypeString},
+			{Name: "Owner", Type: metadata.FieldTypeString},
+		},
+	}
+	s, _ := newSubmitTestServer(t, []*metadata.Entity{cat})
+
+	user := &auth.User{Login: "u", Roles: []*auth.Role{{
+		Permissions: auth.Permission{
+			Catalogs: map[string][]string{"Товар": {"read"}},
+			RowAccess: auth.RowAccess{Catalogs: map[string]auth.RowPolicies{
+				"Товар": {"read": {Field: "Owner", Op: "eq", Value: auth.RowValue{User: "login"}}},
+			}},
+		},
+	}}}
+	res := runAIQuery(s, user)
+	if !res.IsError || !strings.Contains(res.Content, "строковые ограничения") {
+		t.Fatalf("ожидался fail-closed для row_access в произвольном запросе, получено: err=%v content=%s", res.IsError, res.Content)
 	}
 }
 

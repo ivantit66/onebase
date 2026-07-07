@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/ivantit66/onebase/internal/auth"
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
 	"github.com/ivantit66/onebase/internal/entityservice"
 	"github.com/ivantit66/onebase/internal/metadata"
@@ -241,5 +242,43 @@ func TestSubmit_NewDocument_AutoNumber(t *testing.T) {
 	}
 	if num == "" {
 		t.Errorf("Номер пустой — auto-number не сработал. Запись: %v", rows[0])
+	}
+}
+
+func TestSubmit_NewDocumentPostChecksRowPolicy(t *testing.T) {
+	doc := &metadata.Entity{
+		Name:    "Заявка",
+		Kind:    metadata.KindDocument,
+		Posting: true,
+		Fields: []metadata.Field{
+			{Name: "Номер", Type: metadata.FieldTypeString},
+			{Name: "Owner", Type: metadata.FieldTypeString},
+		},
+	}
+	s, ctx := newSubmitTestServer(t, []*metadata.Entity{doc})
+	user := &auth.User{Login: "u", Roles: []*auth.Role{{
+		Permissions: auth.Permission{
+			Documents: map[string][]string{doc.Name: {"read", "write", "post"}},
+			RowAccess: auth.RowAccess{Documents: map[string]auth.RowPolicies{
+				doc.Name: {"post": {Field: "Owner", Op: "eq", Value: auth.RowValue{Literal: "allowed"}}},
+			}},
+		},
+	}}}
+
+	form := url.Values{"Owner": {"blocked"}, "_action": {"post"}}
+	r := reqWithChi("POST", "/ui/document/Заявка/new", form, map[string]string{"entity": "Заявка"})
+	r = r.WithContext(auth.ContextWithUser(r.Context(), user))
+	w := httptest.NewRecorder()
+	s.submit(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("ожидался 403, получен %d: %s", w.Code, w.Body.String())
+	}
+	rows, err := s.store.List(ctx, doc.Name, doc, storage.ListParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("запись не должна была создаться: %#v", rows)
 	}
 }

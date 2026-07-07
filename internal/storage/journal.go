@@ -13,9 +13,9 @@ import (
 // Returns ("NULL", nil) if the column has no matching field in the entity.
 //
 // приоритет резолва:
-//   1. jcol.Map[entity.Name] — явный per-doc mapping (новый рекомендуемый путь).
-//   2. Exact match — у документа есть поле с именем jcol.Field.
-//   3. Fallback list — старый fallback (back compat); COALESCE если несколько.
+//  1. jcol.Map[entity.Name] — явный per-doc mapping (новый рекомендуемый путь).
+//  2. Exact match — у документа есть поле с именем jcol.Field.
+//  3. Fallback list — старый fallback (back compat); COALESCE если несколько.
 func colExprForDoc(jcol metadata.JournalColumn, entity *metadata.Entity) (string, *metadata.Field) {
 	// 1. Explicit map для этого документа.
 	if jcol.Map != nil {
@@ -83,6 +83,9 @@ func (db *DB) JournalQuery(
 	}
 
 	colRefMap := make(ColRefMap)
+	var args []any
+	argIdx := 1
+	d := db.dialect
 
 	// Build the column alias list (output names for the CTE)
 	outCols := make([]string, len(j.Columns))
@@ -114,7 +117,21 @@ func (db *DB) JournalQuery(
 				}
 			}
 		}
-		selects = append(selects, fmt.Sprintf("SELECT %s FROM %s", strings.Join(parts, ", "), table))
+		selectSQL := fmt.Sprintf("SELECT %s FROM %s", strings.Join(parts, ", "), table)
+		if params.JournalRowFilters != nil {
+			if pred := params.JournalRowFilters[docName]; pred != nil {
+				cond, condArgs, next, err := PredicateSQL(d, entity, pred, argIdx)
+				if err != nil {
+					return nil, 0, colRefMap, fmt.Errorf("journal %s row filter: %w", docName, err)
+				}
+				if cond != "" {
+					selectSQL += " WHERE " + cond
+					args = append(args, condArgs...)
+					argIdx = next
+				}
+			}
+		}
+		selects = append(selects, selectSQL)
 	}
 
 	if len(selects) == 0 {
@@ -125,10 +142,7 @@ func (db *DB) JournalQuery(
 
 	// Build WHERE from filters
 	var whereParts []string
-	var args []any
-	argIdx := 1
 
-	d := db.dialect
 	for _, jf := range j.Filters {
 		fv, ok := params.Filters[jf.Field]
 		if !ok {

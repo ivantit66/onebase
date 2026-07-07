@@ -13,9 +13,10 @@ import (
 // (для ссылочных — UUID строкой, для прочих — строковое значение) и
 // период от/до включительно (issue #45).
 type RegFilter struct {
-	Dims map[string]string // имя измерения (как в метаданных) → значение
-	From *time.Time
-	To   *time.Time
+	Dims      map[string]string // имя измерения (как в метаданных) → значение
+	From      *time.Time
+	To        *time.Time
+	RowFilter *Predicate // additional SQL-side row-level access predicate
 }
 
 // IsEmpty сообщает, задан ли хоть один критерий отбора.

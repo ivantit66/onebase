@@ -181,6 +181,22 @@ func (s *Server) runReport(w http.ResponseWriter, r *http.Request, rep *reportpk
 		})
 		return
 	}
+	if denied := s.deniedRowAccessSource(opCtx, compiled.Sources); denied != "" {
+		opStatus = "error"
+		s.render(w, r, "page-report", map[string]any{
+			"Report":             rep,
+			"QueryError":         "row-level access for " + denied + " is not supported in report queries yet",
+			"ParamValues":        paramValues,
+			"ReportParams":       reportParams,
+			"ActiveVariant":      variant,
+			"UserSettings":       settings,
+			"ReportSettingsJSON": settingsJSON,
+			"ReportPresets":      presets,
+			"ActivePresetID":     rs.ActivePresetID,
+			"ActivePreset":       activePreset,
+		})
+		return
+	}
 	opAttrs = []slog.Attr{slog.String("sql_hash", sqlHash(compiled.SQL))}
 	rows, cols, truncated, err := s.store.RunQueryLimit(opCtx, compiled.SQL, compiled.Args, s.cfg.Limits.ReportMaxRows)
 	opTruncated = truncated
@@ -569,6 +585,9 @@ func (s *Server) reportExportRowsWithContext(ctx context.Context, r *http.Reques
 	})
 	if err != nil {
 		return nil, nil, newReportExportError(http.StatusBadRequest, "query compile error", err)
+	}
+	if denied := s.deniedRowAccessSource(ctx, compiled.Sources); denied != "" {
+		return nil, nil, newReportExportError(http.StatusForbidden, "row-level access", fmt.Errorf("row-level access for %s is not supported in report queries yet", denied))
 	}
 	if stats != nil {
 		stats.attrs = []slog.Attr{slog.String("sql_hash", sqlHash(compiled.SQL))}

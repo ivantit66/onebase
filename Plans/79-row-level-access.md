@@ -1,7 +1,33 @@
 # План 79 - Row-level access / строковые политики доступа
 
 Дата проектирования: 2026-07-07.
-Статус: проект.
+Статус: первый реализационный срез готов к ревью.
+
+## Реализовано в первом срезе
+
+- декларативный `permissions.row_access` в ролях для `catalogs`,
+  `documents`, `registers`, `inforegs`;
+- `same_as`, `all/any/not`, `eq/ne/in/not_in/empty/not_empty`,
+  `{ user: id|login }`, `{ literal: ... }`, `{ list: [...] }`;
+- единый компилятор безопасных SQL-предикатов для SQLite/PostgreSQL;
+- UI и REST v1/v2 для справочников/документов: list/count/get/create/update/
+  delete/post/unpost;
+- reference picker, выбранные ссылки, folder picker, fill-from-query;
+- печать, экспорт списков, owner-bound вложения и image-blob отдача;
+- регистры накопления и сведений: SQL-side фильтрация списков/движений/
+  остатков, проверка write/delete для ручных записей регистра сведений;
+- отчеты и AI/query: fail-closed gate для источников с активной row policy,
+  пока query compiler не умеет безопасно внедрять alias-aware row predicate.
+
+## Оставшиеся этапы
+
+- alias-aware внедрение row predicates внутрь query compiler для отчетов и AI;
+- расширения политик вроде `{ user_attr: ... }`, условий по реквизитам ссылок и
+  автоустановки владельца при создании;
+- явная модель для trusted DSL/server-code путей и внешних обработок;
+- UI-редактор политик и отдельный lint/diagnostics экран;
+- PostgreSQL native RLS как дополнительный defense-in-depth слой, не как
+  единственный источник истины.
 
 ## Контекст
 

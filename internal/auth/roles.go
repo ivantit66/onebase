@@ -24,6 +24,7 @@ type Permission struct {
 	InfoRegs     map[string][]string `yaml:"inforegs"`
 	Reports      map[string][]string `yaml:"reports"`
 	Processors   map[string][]string `yaml:"processors"`
+	RowAccess    RowAccess           `yaml:"row_access"`
 }
 
 // Role is a named set of permissions.
@@ -74,23 +75,35 @@ func (u *User) Has(kind, entity, op string) bool {
 		return false
 	}
 	for _, r := range u.Roles {
-		var m map[string][]string
-		switch kind {
-		case "catalog":
-			m = r.Permissions.Catalogs
-		case "document":
-			m = r.Permissions.Documents
-		case "register":
-			m = r.Permissions.Registers
-		case "inforeg":
-			m = r.Permissions.InfoRegs
-		case "report":
-			m = r.Permissions.Reports
+		if PermissionHas(r.Permissions, kind, entity, op) {
+			return true
 		}
-		for _, allowed := range m[entity] {
-			if permissionOpMatches(allowed, op) {
-				return true
-			}
+	}
+	return false
+}
+
+func PermissionHas(p Permission, kind, entity, op string) bool {
+	var m map[string][]string
+	switch kind {
+	case "catalog":
+		m = p.Catalogs
+	case "document":
+		m = p.Documents
+	case "register":
+		m = p.Registers
+	case "inforeg":
+		m = p.InfoRegs
+	case "report":
+		m = p.Reports
+	case "processor":
+		if p.Processors == nil {
+			return true
+		}
+		m = p.Processors
+	}
+	for _, allowed := range m[entity] {
+		if permissionOpMatches(allowed, op) {
+			return true
 		}
 	}
 	return false
@@ -126,6 +139,7 @@ func normalizePermission(p Permission) Permission {
 		InfoRegs:     normalizePermissionMap(p.InfoRegs),
 		Reports:      normalizePermissionMap(p.Reports),
 		Processors:   normalizePermissionMap(p.Processors),
+		RowAccess:    normalizeRowAccess(p.RowAccess),
 	}
 }
 
@@ -159,6 +173,7 @@ func mergePermissions(dst, src Permission) Permission {
 	dst.InfoRegs = mergePermissionMap(dst.InfoRegs, src.InfoRegs)
 	dst.Reports = mergePermissionMap(dst.Reports, src.Reports)
 	dst.Processors = mergePermissionMap(dst.Processors, src.Processors)
+	dst.RowAccess = mergeRowAccess(dst.RowAccess, src.RowAccess)
 	return normalizePermission(dst)
 }
 
@@ -190,6 +205,11 @@ func permissionFromYAMLMap(node *yaml.Node) Permission {
 			}
 		case permissionWrapperKey(key):
 			p = mergePermissions(p, permissionFromYAMLMap(value))
+		case rowAccessKey(key):
+			var ra RowAccess
+			if err := value.Decode(&ra); err == nil {
+				p.RowAccess = mergeRowAccess(p.RowAccess, ra)
+			}
 		default:
 			if kind := permissionKindFromKey(key); kind != "" {
 				setPermissionMap(&p, kind, decodeYAMLPermissionMap(value))
@@ -465,6 +485,7 @@ func marshalPermissions(p Permission) (string, error) {
 		InfoRegs     map[string][]string `json:"inforegs,omitempty"`
 		Reports      map[string][]string `json:"reports,omitempty"`
 		Processors   map[string][]string `json:"processors"`
+		RowAccess    RowAccess           `json:"row_access,omitempty"`
 	}
 	b, err := jsonMarshal(permJSON{
 		AIDataAccess: p.AIDataAccess,
@@ -474,6 +495,7 @@ func marshalPermissions(p Permission) (string, error) {
 		InfoRegs:     p.InfoRegs,
 		Reports:      p.Reports,
 		Processors:   p.Processors,
+		RowAccess:    p.RowAccess,
 	})
 	if err != nil {
 		return "{}", err
@@ -506,6 +528,11 @@ func permissionFromJSONMap(raw map[string]json.RawMessage) Permission {
 			var nested map[string]json.RawMessage
 			if err := json.Unmarshal(value, &nested); err == nil {
 				p = mergePermissions(p, permissionFromJSONMap(nested))
+			}
+		case rowAccessKey(key):
+			var ra RowAccess
+			if err := json.Unmarshal(value, &ra); err == nil {
+				p.RowAccess = mergeRowAccess(p.RowAccess, ra)
 			}
 		default:
 			if kind := permissionKindFromKey(key); kind != "" {

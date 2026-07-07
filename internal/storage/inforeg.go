@@ -108,10 +108,20 @@ func (db *DB) InfoRegList(ctx context.Context, ir *metadata.InfoRegister, f RegF
 	}
 
 	where, args := dimWhereClause(db.dialect, ir.Dimensions, f, 1, ir.Periodic, ir.Periodic)
+	whereParts := make([]string, 0, 2)
+	if where != "" {
+		whereParts = append(whereParts, where)
+	}
+	if cond, condArgs, _, err := PredicateSQL(db.dialect, InfoRegisterPredicateEntity(ir), f.RowFilter, len(args)+1); err != nil {
+		return nil, fmt.Errorf("info reg list %s row filter: %w", ir.Name, err)
+	} else if cond != "" {
+		whereParts = append(whereParts, cond)
+		args = append(args, condArgs...)
+	}
 	orderBy := strings.Join(pkCols(ir), ", ")
 	sql := fmt.Sprintf("SELECT %s FROM %s", strings.Join(selCols, ", "), table)
-	if where != "" {
-		sql += " WHERE " + where
+	if len(whereParts) > 0 {
+		sql += " WHERE " + strings.Join(whereParts, " AND ")
 	}
 	sql += " ORDER BY " + orderBy
 

@@ -26,16 +26,14 @@ func (s *Server) journalList(w http.ResponseWriter, r *http.Request) {
 	settings := loadJournalSettings(s.store, r, j)
 	visibleColumns := effectiveJournalColumns(j, settings)
 
-	// Build docs map
-	docs := make(map[string]*metadata.Entity, len(j.Documents))
-	for _, docName := range j.Documents {
-		if e := s.reg.GetEntity(docName); e != nil {
-			docs[docName] = e
-		}
+	docs, rowFilters, ok := s.journalDocsForRead(w, r, j)
+	if !ok {
+		return
 	}
 
 	// Parse filter params from request
 	params := storage.ListParams{Filters: make(map[string]storage.FilterValue)}
+	params.JournalRowFilters = rowFilters
 	for _, jf := range j.Filters {
 		fv := storage.FilterValue{}
 		switch {
@@ -133,6 +131,30 @@ func (s *Server) getJournal(w http.ResponseWriter, r *http.Request) *metadata.Jo
 	return j
 }
 
+func (s *Server) journalDocsForRead(w http.ResponseWriter, r *http.Request, j *metadata.Journal) (map[string]*metadata.Entity, map[string]*storage.Predicate, bool) {
+	docs := make(map[string]*metadata.Entity, len(j.Documents))
+	rowFilters := make(map[string]*storage.Predicate)
+	for _, docName := range j.Documents {
+		entity := s.reg.GetEntity(docName)
+		if entity == nil {
+			continue
+		}
+		if !s.can(r, string(entity.Kind), entity.Name, "read") {
+			continue
+		}
+		dec, err := s.rowDecision(r.Context(), entity, "read")
+		if err != nil || !dec.Allowed {
+			s.renderForbidden(w, r)
+			return nil, nil, false
+		}
+		docs[docName] = entity
+		if !dec.Unrestricted {
+			rowFilters[docName] = dec.Predicate
+		}
+	}
+	return docs, rowFilters, true
+}
+
 func journalColumnFormats(j *metadata.Journal, docs map[string]*metadata.Entity) map[string]string {
 	colFormats := make(map[string]string)
 	for _, jcol := range j.Columns {
@@ -217,14 +239,13 @@ func (s *Server) journalExcel(w http.ResponseWriter, r *http.Request) {
 	}
 	visibleColumns := effectiveJournalColumns(j, loadJournalSettings(s.store, r, j))
 
-	docs := make(map[string]*metadata.Entity, len(j.Documents))
-	for _, docName := range j.Documents {
-		if e := s.reg.GetEntity(docName); e != nil {
-			docs[docName] = e
-		}
+	docs, rowFilters, ok := s.journalDocsForRead(w, r, j)
+	if !ok {
+		return
 	}
 
 	params := storage.ListParams{Filters: make(map[string]storage.FilterValue)}
+	params.JournalRowFilters = rowFilters
 	for _, jf := range j.Filters {
 		fv := storage.FilterValue{}
 		switch {

@@ -35,6 +35,11 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	params := parseListParams(r, entity, s.store.GetListPageSize(r.Context()))
+	var ok bool
+	params, ok = s.applyRowFilter(w, r, entity, "read", params)
+	if !ok {
+		return
+	}
 
 	view := r.URL.Query().Get("view")
 	treeView := entity.Hierarchical && view == "tree"
@@ -87,6 +92,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 		allRows, _ := s.store.List(r.Context(), entity.Name, entity, storage.ListParams{
 			ActivityScope: metadata.ActivityScopeAll,
 			ParentStr:     "root",
+			RowFilter:     params.RowFilter,
 			Limit:         storage.MaxListPageSize,
 		})
 		s.resolveRefs(r.Context(), entity, allRows)
@@ -339,6 +345,9 @@ func (s *Server) applyFillFromQuery(r *http.Request, entity *metadata.Entity, sr
 	if !s.can(r, string(src.Kind), src.Name, "read") {
 		return "Нет прав на чтение источника: " + srcType
 	}
+	if !s.rowAllowsID(r.Context(), src, "read", srcID) {
+		return "Нет прав на чтение строки источника: " + srcType
+	}
 	result, err := s.entitySvc.Fill(r.Context(), entityservice.FillRequest{
 		Receiver:   entity,
 		SourceType: srcType,
@@ -510,6 +519,12 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	}
 	obj, fields, tpRows, action, ok := s.parseSubmitForm(w, r, entity, nil)
 	if !ok {
+		return
+	}
+	if !s.rowAllowed(w, r, entity, "write", obj.Fields) {
+		return
+	}
+	if entity.Posting && (action == "post" || action == "post_and_close") && !s.rowAllowed(w, r, entity, "post", obj.Fields) {
 		return
 	}
 
@@ -734,11 +749,16 @@ func (s *Server) treeChildrenJSON(w http.ResponseWriter, r *http.Request) {
 		parentDepth = n
 	}
 	const limit = storage.MaxListPageSize
-	rows, err := s.store.List(r.Context(), ent.Name, ent, storage.ListParams{
+	params := storage.ListParams{
 		ActivityScope: metadata.ActivityScopeAll,
 		ParentStr:     parentStr,
 		Limit:         limit,
-	})
+	}
+	params, ok := s.applyRowFilter(w, r, ent, "read", params)
+	if !ok {
+		return
+	}
+	rows, err := s.store.List(r.Context(), ent.Name, ent, params)
 	if err != nil {
 		http.Error(w, s.errText(r, err), http.StatusInternalServerError)
 		return
@@ -907,6 +927,9 @@ func (s *Server) formEdit(w http.ResponseWriter, r *http.Request) {
 	row, err := s.store.GetByID(r.Context(), entity.Name, id, entity)
 	if err != nil {
 		http.Error(w, s.errText(r, err), 404)
+		return
+	}
+	if !s.rowAllowed(w, r, entity, "read", row) {
 		return
 	}
 	// Issue #148: серверный обработчик ПриЧтенииНаСервере исполняется ДО рендера
@@ -1102,6 +1125,12 @@ func (s *Server) submitEdit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.rowAllowedUpdate(w, r, entity, "write", id, obj.Fields) {
+		return
+	}
+	if entity.Posting && (action == "post" || action == "post_and_close") && !s.rowAllowedUpdate(w, r, entity, "post", id, obj.Fields) {
+		return
+	}
 
 	// Серверные события записи формы (ПередЗаписью/ПриЗаписи) — до Save. Бросок
 	// ВызватьИсключение в обработчике отменяет запись и перерисовывает форму.
@@ -1198,6 +1227,9 @@ func (s *Server) postDocument(w http.ResponseWriter, r *http.Request) {
 	row, err := s.store.GetByID(r.Context(), entity.Name, id, entity)
 	if err != nil {
 		http.Error(w, s.errText(r, err), 404)
+		return
+	}
+	if !s.rowAllowed(w, r, entity, "post", row) {
 		return
 	}
 
@@ -1310,6 +1342,9 @@ func (s *Server) unpostDocument(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", 400)
 		return
 	}
+	if !s.rowAllowedID(w, r, entity, "unpost", id) {
+		return
+	}
 
 	if err := s.store.WithTx(r.Context(), func(ctx context.Context) error {
 		if err := s.clearMovements(ctx, entity.Name, id); err != nil {
@@ -1345,6 +1380,9 @@ func (s *Server) setRecordActivity(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "invalid id", 400)
+		return
+	}
+	if !s.rowAllowedID(w, r, entity, "write", id) {
 		return
 	}
 	active := r.URL.Query().Get("active") == "1" || strings.EqualFold(r.URL.Query().Get("active"), "true")
@@ -1385,6 +1423,9 @@ func (s *Server) deleteRecord(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "invalid id", 400)
+		return
+	}
+	if !s.rowAllowedID(w, r, entity, "delete", id) {
 		return
 	}
 
