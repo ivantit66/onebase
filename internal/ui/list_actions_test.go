@@ -11,7 +11,8 @@ import (
 
 // TestPageList_HasActionsButton — smoke-тест плана 41: страница списка
 // рендерится и содержит кнопку «Действия» на панели (id="list-actions-btn"),
-// а JS-runtime списка живёт в /static/ui.js и читает JSON-конфиг страницы.
+// а JS-runtime списка живёт в /static/ui.js, читает JSON-конфиг страницы и
+// вызывается через data-ob-* вместо inline handlers.
 func TestPageList_HasActionsButton(t *testing.T) {
 	ent := &metadata.Entity{
 		Name: "Контрагент",
@@ -49,6 +50,26 @@ func TestPageList_HasActionsButton(t *testing.T) {
 	if !strings.Contains(html, `id="list-actions-btn"`) {
 		t.Error("на панели списка нет кнопки «Действия» (id=list-actions-btn)")
 	}
+	for _, want := range []string{
+		`data-ob-list-actions`,
+		`data-ob-auto-submit="320"`,
+		`data-ob-list-row`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("страница списка не содержит delegated marker %q", want)
+		}
+	}
+	for _, old := range []string{
+		`onclick="listActionsBtnClick(event)"`,
+		`oninput="clearTimeout(window._srch)`,
+		`onclick="listRowClick(event,this)"`,
+		`ondblclick="listRowDblClick(event,this)"`,
+		`oncontextmenu="listCtxMenu(event,this)"`,
+	} {
+		if strings.Contains(html, old) {
+			t.Errorf("страница списка содержит старый inline handler %q", old)
+		}
+	}
 
 	if !strings.Contains(html, `id="ob-list-config"`) {
 		t.Error("список не содержит JSON-конфиг ob-list-config")
@@ -57,7 +78,7 @@ func TestPageList_HasActionsButton(t *testing.T) {
 		t.Error("runtime списка должен жить в /static/ui.js, а не в HTML")
 	}
 	js := string(uiJS)
-	for _, want := range []string{"function listMenuItems", "function showListMenu", "function listActionsBtnClick"} {
+	for _, want := range []string{"function listMenuItems", "function showListMenu", "function listActionsBtnClick", "function obInitListDelegates"} {
 		if !strings.Contains(js, want) {
 			t.Errorf("/static/ui.js не содержит %q", want)
 		}
@@ -153,7 +174,7 @@ func TestPageList_TilesView(t *testing.T) {
 	}
 	html := buf.String()
 
-	for _, want := range []string{"tile-grid", "tile-card", "Болт М6", "view-switch", "data-open-url="} {
+	for _, want := range []string{"tile-grid", "tile-card", "Болт М6", "view-switch", "data-open-url=", "data-ob-list-row"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("плиточный режим: в выводе нет ожидаемого фрагмента %q", want)
 		}

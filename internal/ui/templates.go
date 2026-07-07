@@ -751,7 +751,7 @@ body{padding-bottom:32px}
 const tplNav = `
 {{define "nav"}}
 <header class="topbar">
-  <button class="nav-toggle" type="button" aria-label="{{t $.Lang "Меню"}}" aria-controls="ob-nav" aria-expanded="false" onclick="obNavToggle()">&#9776;</button>
+  <button class="nav-toggle" type="button" aria-label="{{t $.Lang "Меню"}}" aria-controls="ob-nav" aria-expanded="false" data-ob-nav-toggle>&#9776;</button>
   <a href="/ui/" class="topbar-title" style="text-decoration:none;color:inherit" title="{{t $.Lang "Главная"}}">{{if .Cfg.Logo}}<img src="/ui/logo" alt="" style="height:22px;max-width:90px;vertical-align:middle;margin-right:6px;border-radius:2px">{{end}}⚡ {{if .Cfg.AppName}}{{.Cfg.AppName}}{{else}}onebase{{end}}</a>
   <form method="post" action="/ui/form-mode" style="display:inline;margin:0">
     {{if eq (printf "%v" .FormOpenMode) "tabs"}}
@@ -763,7 +763,7 @@ const tplNav = `
     {{end}}
   </form>
   <div class="sys-menu">
-    <button class="sys-btn" onclick="var d=document.getElementById('sysd');d.classList.toggle('open')">&#9881; {{t $.Lang "Система"}} &#9660;</button>
+    <button class="sys-btn" type="button" data-ob-toggle-target="sysd">&#9881; {{t $.Lang "Система"}} &#9660;</button>
     <div class="sys-drop" id="sysd">
       <a href="/ui/about">{{t $.Lang "О программе"}}</a>
       {{if .IsAdmin}}
@@ -783,7 +783,7 @@ const tplNav = `
       {{if .IsAdmin}}<a href="/ui/admin/extreports">{{t $.Lang "Внешние отчёты"}}</a>{{end}}
       {{if .IsAdmin}}<a href="/ui/admin/extprocessors">{{t $.Lang "Внешние обработки"}}</a>{{end}}
       {{if .IsAdmin}}<a href="/ui/all-functions">{{t $.Lang "Все функции"}}</a>{{end}}
-      {{if .IsAdmin}}<div class="sys-sub"><a href="#" onclick="event.preventDefault()">{{t $.Lang "Инструменты разработчика"}} &#9654;</a>
+      {{if .IsAdmin}}<div class="sys-sub"><a href="#" data-ob-prevent>{{t $.Lang "Инструменты разработчика"}} &#9654;</a>
       <div class="sys-submenu">
         <a href="/ui/dev/query-console">{{t $.Lang "Консоль запросов"}}</a>
         <a href="/ui/dev/code-console">{{t $.Lang "Консоль кода"}}</a>
@@ -986,12 +986,12 @@ const tplList = `
     {{else}}
       {{if .CanWrite}}<a class="btn btn-primary" href="/ui/{{lower (str .Entity.Kind)}}/{{lower .Entity.Name}}/new{{if $.CurrentSubsystem}}?subsystem={{$.CurrentSubsystem}}{{end}}">{{t $.Lang "+ Создать"}}</a>{{end}}
     {{end}}
-    <button type="button" id="list-actions-btn" class="btn btn-secondary" onclick="listActionsBtnClick(event)" title="{{t $.Lang "Команды для выбранной строки"}}">⚙ {{t $.Lang "Действия"}} ▾</button>
+    <button type="button" id="list-actions-btn" class="btn btn-secondary" data-ob-list-actions title="{{t $.Lang "Команды для выбранной строки"}}">⚙ {{t $.Lang "Действия"}} ▾</button>
     <a class="btn btn-sm" href="/ui/{{lower (str .Entity.Kind)}}/{{lower .Entity.Name}}/excel{{listQuerySuffix .Params}}" style="background:#16a34a;color:#fff" title="{{t $.Lang "Скачать Excel"}}">{{t $.Lang "Excel ↓"}}</a>
   </div>
 </div>
 <form method="GET" style="display:flex;gap:8px;margin-bottom:12px;max-width:460px">
-  <input type="text" name="q" value="{{.Params.Search}}" placeholder="{{t $.Lang "Поиск..."}}" style="flex:1;padding:7px 12px;border:1px solid #e2e8f0;border-radius:6px;font-size:14px" oninput="clearTimeout(window._srch);window._srch=setTimeout(()=>this.form.submit(),320)">
+  <input type="text" name="q" value="{{.Params.Search}}" placeholder="{{t $.Lang "Поиск..."}}" style="flex:1;padding:7px 12px;border:1px solid #e2e8f0;border-radius:6px;font-size:14px" data-ob-auto-submit="320">
   {{if .Params.Search}}<a class="btn btn-sm" href="?" style="background:#e2e8f0;color:#475569;align-self:center">✕</a>{{end}}
   {{if .Entity.Activity}}<input type="hidden" name="activity" value="{{.Params.ActivityScope}}">{{end}}
   {{if $.CurrentSubsystem}}<input type="hidden" name="subsystem" value="{{$.CurrentSubsystem}}">{{end}}
@@ -1030,7 +1030,7 @@ const tplList = `
             <option value="{{index . "id"}}" {{if eq (index . "id") (filterVal $params $f.Name).Value}}selected{{end}}>{{index . "_label"}}</option>
             {{end}}
           </select>
-          <button type="button" onclick="openRefPicker('flt-{{$f.Name}}')" style="padding:7px 10px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px;flex-shrink:0" title="{{t $.Lang "Выбрать из списка"}}">...</button>
+          <button type="button" data-ob-ref-picker="flt-{{$f.Name}}" style="padding:7px 10px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px;flex-shrink:0" title="{{t $.Lang "Выбрать из списка"}}">...</button>
         </div>
       </div>
     {{else}}
@@ -1064,9 +1064,7 @@ const tplList = `
 </tr></thead><tbody>
 {{range .TreeRows}}{{$row := .}}{{$isFolder := index $row "is_folder"}}{{$depth := index $row "_depth"}}
 <tr {{if index $row "deletion_mark"}}style="opacity:0.45;text-decoration:line-through;cursor:pointer"{{else}}style="cursor:pointer"{{end}}
-  onclick="listRowClick(event,this)"
-  ondblclick="listRowDblClick(event,this)"
-  oncontextmenu="listCtxMenu(event,this)"
+  data-ob-list-row
   data-tree-id="{{index $row "id"}}"
   data-tree-depth="{{$depth}}"
   data-tree-parent="{{index $row "parent_id"}}"
@@ -1120,9 +1118,7 @@ const tplList = `
 <div class="tile-grid">
 {{range .Rows}}{{$row := .}}{{$isFolder := index $row "is_folder"}}
 <div class="tile-card{{if index $row "deletion_mark"}} tile-deleted{{end}}"
-  onclick="listRowClick(event,this)"
-  ondblclick="listRowDblClick(event,this)"
-  oncontextmenu="listCtxMenu(event,this)"
+  data-ob-list-row
   data-predefined="{{if index $row "_is_predefined"}}1{{end}}"
   data-is-folder="{{if $isFolder}}1{{end}}"
   data-folder-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}?parent={{index $row "id"}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}"
@@ -1178,9 +1174,7 @@ const tplList = `
 </tr></thead><tbody id="list-body">
 {{range .Rows}}{{$row := .}}{{$isFolder := index $row "is_folder"}}
 <tr {{if index $row "deletion_mark"}}style="opacity:0.45;text-decoration:line-through;cursor:pointer"{{else}}style="cursor:pointer"{{end}}
-  onclick="listRowClick(event,this)"
-  ondblclick="listRowDblClick(event,this)"
-  oncontextmenu="listCtxMenu(event,this)"
+  data-ob-list-row
   data-predefined="{{if index $row "_is_predefined"}}1{{end}}"
   data-is-folder="{{if $isFolder}}1{{end}}"
   data-folder-url="/ui/{{lower (str $.Entity.Kind)}}/{{lower $.Entity.Name}}?parent={{index $row "id"}}{{if $.CurrentSubsystem}}&subsystem={{$.CurrentSubsystem}}{{end}}"
