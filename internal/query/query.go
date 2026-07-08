@@ -1362,6 +1362,68 @@ func (tr *translator) buildTotalsMomentSQL(reg *metadata.Register, mkPH, msPH, c
 	return sql
 }
 
+// genBalancesAndTurnoversFromTotals строит ОстаткиИОбороты(&start, &end) из
+// итогов. Начальный остаток (period < start) = обороты месяцев до месяца start
+// (из итоги_*) + знаковый хвост движений месяца start до start (из рег_*).
+// Приход/расход = движения в [start, end] по виду. Конечный = начальный +
+// приход − расход. Колонки совпадают с обычным genBalancesAndTurnovers.
+func (tr *translator) genBalancesAndTurnoversFromTotals(reg *metadata.Register, start, end time.Time) string {
+	d := dialectOrDefault(tr.opts.Dialect)
+	totals := metadata.RegisterTotalsTableName(reg.Name)
+	src := metadata.RegisterTableName(reg.Name)
+	dims := dimCols(reg.Dimensions)
+
+	// Аргументы в порядке появления плейсхолдеров в SQL.
+	tr.args = append(tr.args, start.Format("2006-01"))
+	mkPH := d.Placeholder(len(tr.args))
+	tr.args = append(tr.args, monthStartOf(start))
+	msPH := d.Placeholder(len(tr.args))
+	tr.args = append(tr.args, start)
+	s1PH := d.Placeholder(len(tr.args))
+	tr.args = append(tr.args, start)
+	s2PH := d.Placeholder(len(tr.args))
+	tr.args = append(tr.args, end)
+	ePH := d.Placeholder(len(tr.args))
+
+	// Внутренние алиасы на ресурс i: n=начальный вклад, p=приход, r=расход.
+	priorCols := append([]string{}, dims...)
+	ntailCols := append([]string{}, dims...)
+	turnCols := append([]string{}, dims...)
+	for i, res := range reg.Resources {
+		c := strings.ToLower(res.Name)
+		n, p, r := fmt.Sprintf("n%d", i), fmt.Sprintf("p%d", i), fmt.Sprintf("r%d", i)
+		priorCols = append(priorCols, c+" AS "+n, "0 AS "+p, "0 AS "+r)
+		ntailCols = append(ntailCols,
+			"CASE WHEN вид_движения = 'Приход' THEN "+c+" ELSE -"+c+" END AS "+n, "0 AS "+p, "0 AS "+r)
+		turnCols = append(turnCols, "0 AS "+n,
+			"CASE WHEN вид_движения = 'Приход' THEN "+c+" ELSE 0 END AS "+p,
+			"CASE WHEN вид_движения = 'Расход' THEN "+c+" ELSE 0 END AS "+r)
+	}
+	prior := "SELECT " + strings.Join(priorCols, ", ") + " FROM " + totals +
+		" WHERE " + metadata.RegisterTotalsMonthCol + " < " + mkPH
+	ntail := "SELECT " + strings.Join(ntailCols, ", ") + " FROM " + src +
+		" WHERE period >= " + msPH + " AND period < " + s1PH
+	turn := "SELECT " + strings.Join(turnCols, ", ") + " FROM " + src +
+		" WHERE period >= " + s2PH + " AND period <= " + ePH
+	inner := prior + " UNION ALL " + ntail + " UNION ALL " + turn
+
+	outer := append([]string{}, dimSelCols(reg.Dimensions)...)
+	for i, res := range reg.Resources {
+		c := strings.ToLower(res.Name)
+		n, p, r := fmt.Sprintf("n%d", i), fmt.Sprintf("p%d", i), fmt.Sprintf("r%d", i)
+		outer = append(outer,
+			"SUM("+n+") AS "+c+"начальный",
+			"SUM("+p+") AS "+c+"приход",
+			"SUM("+r+") AS "+c+"расход",
+			"SUM("+n+") + SUM("+p+") - SUM("+r+") AS "+c+"конечный")
+	}
+	sql := "SELECT " + strings.Join(outer, ", ") + " FROM (" + inner + ") AS оио_" + strings.ToLower(reg.Name)
+	if len(dims) > 0 {
+		sql += " GROUP BY " + strings.Join(dims, ", ")
+	}
+	return sql
+}
+
 func (tr *translator) genTurnovers(reg *metadata.Register, args [][]tok) (string, string, error) {
 	tableName := metadata.RegisterTableName(reg.Name)
 	alias := "обороты_" + strings.ToLower(reg.Name)
@@ -1466,6 +1528,21 @@ func (tr *translator) genBalancesAndTurnovers(reg *metadata.Register, args [][]t
 	alias := "остаткиоборотов_" + strings.ToLower(reg.Name)
 	dims := dimCols(reg.Dimensions)
 	selDims := dimSelCols(reg.Dimensions)
+
+	// План 80, этап 3: быстрый путь ОстаткиИОбороты(&Начало, &Конец). Начальный
+	// остаток (вся история до начала — самая дорогая часть) берётся из итогов,
+	// приход/расход — сканом движений, ограниченным периодом [начало, конец];
+	// конечный = начальный + приход − расход (выводится). Только когда обе
+	// границы — даты-значения, нет отбора (args[2]) и активной строковой политики;
+	// иначе обычный расчёт ниже.
+	if reg.TotalsUsable() && tr.sourceRowFilter("register", reg.Name) == nil &&
+		!(len(args) > 2 && len(args[2]) > 0) && len(args) >= 2 {
+		if start, ok1 := tr.firstArgDate(args[0]); ok1 {
+			if end, ok2 := tr.firstArgDate(args[1]); ok2 {
+				return tr.genBalancesAndTurnoversFromTotals(reg, start, end), alias, nil
+			}
+		}
+	}
 
 	var startSQL, endSQL, filterSQL string
 	if len(args) > 0 && len(args[0]) > 0 {
