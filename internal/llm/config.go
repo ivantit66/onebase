@@ -7,6 +7,8 @@ package llm
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -148,7 +150,9 @@ func (c Config) Redacted() Config {
 	out := c
 	out.Endpoints = make([]Endpoint, len(c.Endpoints))
 	for i, e := range c.Endpoints {
-		if e.APIKey != "" {
+		// ${env:VAR}-ссылка — не секрет (это имя переменной окружения, а не сам
+		// ключ): показываем её админу как есть, маскируем только реальные ключи.
+		if e.APIKey != "" && !isEnvRef(e.APIKey) {
 			e.APIKey = maskKey(e.APIKey)
 		}
 		out.Endpoints[i] = e
@@ -161,6 +165,45 @@ func maskKey(k string) string {
 		return "****"
 	}
 	return "****" + k[len(k)-4:]
+}
+
+// envRefPattern сопоставляет ссылки вида ${env:VAR}: они подставляются из
+// переменных окружения процесса, чтобы секреты (API-ключи, кастомные
+// auth-заголовки) жили в окружении, а не в конфиге базы (_settings/app.yaml/
+// .obz/git). Тот же синтаксис использует project-загрузчик для app.yaml.
+var envRefPattern = regexp.MustCompile(`\$\{env:([^}]+)\}`)
+
+func isEnvRef(s string) bool { return envRefPattern.MatchString(s) }
+
+// expandSecretEnv разыменовывает все ${env:VAR} в строке. Отсутствующая
+// переменная → пустая подстановка (как в project-загрузчике app.yaml).
+func expandSecretEnv(s string) string {
+	if !strings.Contains(s, "${env:") {
+		return s
+	}
+	return envRefPattern.ReplaceAllStringFunc(s, func(m string) string {
+		return os.Getenv(strings.TrimSpace(envRefPattern.FindStringSubmatch(m)[1]))
+	})
+}
+
+// resolveSecrets возвращает копию endpoint'а с разыменованными ${env:VAR} в
+// ключе, base_url и заголовках. Разыменование делается в Resolve (перед вызовом
+// провайдера), а не при загрузке/сохранении: секрет не оседает в _settings/
+// describe/экспорте открытым текстом (тот же приём, что у SMTP-пароля в
+// internal/mailer). Раньше ${env:...} подставлялся только на пути app.yaml
+// (project-загрузчик) — базы из веб-конфигуратора (_settings) слали ссылку
+// провайдеру буквально.
+func (e Endpoint) resolveSecrets() Endpoint {
+	e.APIKey = expandSecretEnv(e.APIKey)
+	e.BaseURL = expandSecretEnv(e.BaseURL)
+	if len(e.Headers) > 0 {
+		h := make(map[string]string, len(e.Headers))
+		for k, v := range e.Headers {
+			h[k] = expandSecretEnv(v)
+		}
+		e.Headers = h
+	}
+	return e
 }
 
 // UnmaskKeys восстанавливает реальные API-ключи для endpoint'ов, чьи ключи пришли
@@ -233,7 +276,7 @@ func (c Config) Resolve(task string) ([]ResolvedModel, error) {
 		if !ok {
 			continue
 		}
-		out = append(out, ResolvedModel{Model: m, Endpoint: ep})
+		out = append(out, ResolvedModel{Model: m, Endpoint: ep.resolveSecrets()})
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("профиль задачи %q не содержит ни одной настроенной модели", p.Task)

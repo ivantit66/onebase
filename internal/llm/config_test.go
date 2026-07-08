@@ -21,6 +21,56 @@ func TestParseConfig_LogHistory(t *testing.T) {
 	}
 }
 
+// TestResolveExpandsEnvRefs проверяет, что ${env:VAR} в ключе/base_url/заголовках
+// endpoint'а разыменовывается в Resolve — так секрет работает и на пути _settings
+// (базы из веб-конфигуратора), а не только в app.yaml. Оригинальный конфиг при
+// этом не мутируется (в _settings/describe остаётся ссылка, не сам ключ).
+func TestResolveExpandsEnvRefs(t *testing.T) {
+	t.Setenv("ONEBASE_TEST_RESOLVE_KEY", "secret-xyz")
+	t.Setenv("ONEBASE_TEST_RESOLVE_HDR", "hval")
+	cfg := Config{
+		Enabled: true,
+		Endpoints: []Endpoint{{
+			Name:    "z_ai",
+			Kind:    KindAnthropic,
+			BaseURL: "https://api.z.ai/${env:ONEBASE_TEST_RESOLVE_MISSING}",
+			APIKey:  "${env:ONEBASE_TEST_RESOLVE_KEY}",
+			Headers: map[string]string{"X-Extra": "${env:ONEBASE_TEST_RESOLVE_HDR}"},
+		}},
+		Models:   []Model{{Name: "glm", Endpoint: "z_ai"}},
+		Profiles: []Profile{{Task: "чат", Models: []string{"glm"}}},
+	}
+	rm, err := cfg.Resolve("чат")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := rm[0].Endpoint.APIKey; got != "secret-xyz" {
+		t.Errorf("ключ не разыменован: %q", got)
+	}
+	if got := rm[0].Endpoint.Headers["X-Extra"]; got != "hval" {
+		t.Errorf("заголовок не разыменован: %q", got)
+	}
+	// Отсутствующая переменная → пустая подстановка.
+	if got := rm[0].Endpoint.BaseURL; got != "https://api.z.ai/" {
+		t.Errorf("base_url разыменован неверно: %q", got)
+	}
+	// Оригинал не тронут: в конфиге по-прежнему ссылка, а не секрет.
+	if cfg.Endpoints[0].APIKey != "${env:ONEBASE_TEST_RESOLVE_KEY}" {
+		t.Errorf("Resolve мутировал исходный конфиг: %q", cfg.Endpoints[0].APIKey)
+	}
+}
+
+// TestRedactedKeepsEnvRef — ${env:VAR}-ссылка не секрет, поэтому Redacted
+// оставляет её видимой (иначе админ не понял бы, откуда берётся ключ), а
+// UnmaskKeys не должен путать её с реальным значением.
+func TestRedactedKeepsEnvRef(t *testing.T) {
+	cfg := Config{Endpoints: []Endpoint{{Name: "e", APIKey: "${env:MY_LLM_KEY}"}}}
+	red := cfg.Redacted()
+	if red.Endpoints[0].APIKey != "${env:MY_LLM_KEY}" {
+		t.Errorf("env-ссылка не должна маскироваться: %q", red.Endpoints[0].APIKey)
+	}
+}
+
 func TestParseConfig_ModelProviderAlias(t *testing.T) {
 	c, err := ParseConfig(`{
 		"enabled": true,
