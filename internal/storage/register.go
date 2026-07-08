@@ -174,6 +174,17 @@ func (db *DB) WriteMovements(ctx context.Context, regName, recorderType string, 
 	d := db.dialect
 	table := metadata.RegisterTableName(regName)
 
+	// План 80: до удаления движений снимаем кортежи измерений регистратора —
+	// после записи их итоги пересчитываются (в этой же транзакции). Так строка
+	// итогов затронутого набора измерений остаётся согласованной с движениями.
+	var oldTuples [][]any
+	if reg.TotalsEnabled() {
+		var err error
+		if oldTuples, err = db.distinctDimTuples(ctx, reg, recorderType, idArg(d, recorderID)); err != nil {
+			return fmt.Errorf("totals %s: capture old tuples: %w", regName, err)
+		}
+	}
+
 	if err := db.exec(ctx,
 		fmt.Sprintf("DELETE FROM %s WHERE recorder = %s AND recorder_type = %s",
 			table, d.Placeholder(1), d.Placeholder(2)),
@@ -209,6 +220,12 @@ func (db *DB) WriteMovements(ctx context.Context, regName, recorderType string, 
 		sql := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", table, strings.Join(cols, ", "), strings.Join(phs, ", "))
 		if err := db.exec(ctx, sql, args...); err != nil {
 			return fmt.Errorf("write movement %s row %d: %w", regName, i+1, err)
+		}
+	}
+
+	if reg.TotalsEnabled() {
+		if err := db.updateTotalsForRecorder(ctx, reg, recorderType, idArg(d, recorderID), oldTuples); err != nil {
+			return fmt.Errorf("update totals %s: %w", regName, err)
 		}
 	}
 	return nil

@@ -190,6 +190,12 @@ type rawRegister struct {
 	Dimensions []rawField        `yaml:"dimensions"`
 	Resources  []rawField        `yaml:"resources"`
 	Attributes []rawField        `yaml:"attributes"`
+	Totals     rawTotals         `yaml:"totals"`
+}
+
+// rawTotals — секция totals регистра: `totals: { enabled: true }` (план 80).
+type rawTotals struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 // normalizeRegisterKind приводит вид регистра к каноническому значению.
@@ -215,7 +221,7 @@ func LoadRegisterFile(path string) (*Register, error) {
 	if raw.Name == "" {
 		return nil, fmt.Errorf("%s: missing name", path)
 	}
-	reg := &Register{Name: raw.Name, Title: raw.Title, Titles: raw.Titles, Kind: normalizeRegisterKind(raw.Kind)}
+	reg := &Register{Name: raw.Name, Title: raw.Title, Titles: raw.Titles, Kind: normalizeRegisterKind(raw.Kind), Totals: RegisterTotals{Enabled: raw.Totals.Enabled}}
 	for _, rf := range raw.Dimensions {
 		reg.Dimensions = append(reg.Dimensions, parseField(rf))
 	}

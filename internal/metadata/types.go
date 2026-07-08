@@ -247,11 +247,28 @@ type Register struct {
 	Dimensions []Field // form the grouping key for balances
 	Resources  []Field // accumulated (summed with sign based on movement type)
 	Attributes []Field // extra data, stored but not aggregated
+	Totals     RegisterTotals // предрасчёт итогов (план 80)
+}
+
+// RegisterTotals — настройки предрасчёта итогов регистра накопления (план 80).
+// Enabled включает таблицу текущих итогов итоги_<рег>: чистый знаковый остаток
+// ресурсов по каждому набору измерений, поддерживаемый в той же транзакции, что
+// и движения (см. storage.WriteMovements). Ускоряет текущие Остатки() с
+// O(все движения) до O(число комбинаций измерений). Периодические итоги (для
+// Остатки(&Момент)/ОстаткиИОбороты) — следующий этап плана 80.
+type RegisterTotals struct {
+	Enabled bool
 }
 
 // IsTurnover сообщает, что регистр оборотный (его нельзя сворачивать в остаток).
 func (r *Register) IsTurnover() bool {
 	return r.Kind == RegisterKindTurnover
+}
+
+// TotalsEnabled сообщает, ведёт ли регистр таблицу текущих итогов. Оборотные
+// регистры остатков не имеют — итоги к ним неприменимы.
+func (r *Register) TotalsEnabled() bool {
+	return r.Totals.Enabled && !r.IsTurnover()
 }
 
 // DisplayName возвращает заголовок регистра накопления с учётом языка.
@@ -291,6 +308,11 @@ func (ir *InfoRegister) DisplayName(lang string) string {
 
 func RegisterTableName(regName string) string {
 	return "рег_" + strings.ToLower(regName)
+}
+
+// RegisterTotalsTableName — таблица предрасчитанных итогов регистра (план 80).
+func RegisterTotalsTableName(regName string) string {
+	return "итоги_" + strings.ToLower(regName)
 }
 
 func InfoRegTableName(regName string) string {
