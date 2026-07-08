@@ -136,7 +136,7 @@ func (i *Interpreter) Call(proc *ast.ProcedureDecl, this This, args []any, extra
 	}()
 	for _, m := range extraVars {
 		for k, v := range m {
-			e.set(k, v)
+			e.setLocal(k, v)
 		}
 	}
 	result = i.callUserProc(proc, e, args)
@@ -164,7 +164,7 @@ func (i *Interpreter) RunWithResult(proc *ast.ProcedureDecl, this This, result *
 	}()
 	for _, m := range extraVars {
 		for k, v := range m {
-			e.set(k, v)
+			e.setLocal(k, v)
 		}
 	}
 	if i.StrictLexicalScope {
@@ -199,7 +199,7 @@ func (i *Interpreter) Run(proc *ast.ProcedureDecl, this This, extraVars ...map[s
 	}()
 	for _, m := range extraVars {
 		for k, v := range m {
-			e.set(k, v)
+			e.setLocal(k, v)
 		}
 	}
 	if i.StrictLexicalScope {
@@ -318,35 +318,35 @@ func (i *Interpreter) execStmt(s ast.Stmt, e *env) {
 		switch items := coll.(type) {
 		case []map[string]any:
 			for _, row := range items {
-				e.set(v.Var.Literal, &MapThis{M: row})
+				e.setLocal(v.Var.Literal, &MapThis{M: row})
 				if !i.execLoopBody(v.Body, e) {
 					break
 				}
 			}
 		case []any:
 			for _, item := range items {
-				e.set(v.Var.Literal, item)
+				e.setLocal(v.Var.Literal, item)
 				if !i.execLoopBody(v.Body, e) {
 					break
 				}
 			}
 		case *Array:
 			for _, item := range items.Iterate() {
-				e.set(v.Var.Literal, item)
+				e.setLocal(v.Var.Literal, item)
 				if !i.execLoopBody(v.Body, e) {
 					break
 				}
 			}
 		case *Map:
 			for idx, key := range items.keys {
-				e.set(v.Var.Literal, &KeyValue{Key: key, Value: items.vals[idx]})
+				e.setLocal(v.Var.Literal, &KeyValue{Key: key, Value: items.vals[idx]})
 				if !i.execLoopBody(v.Body, e) {
 					break
 				}
 			}
 		case interface{ IterateThis() []This }:
 			for _, item := range items.IterateThis() {
-				e.set(v.Var.Literal, item)
+				e.setLocal(v.Var.Literal, item)
 				if !i.execLoopBody(v.Body, e) {
 					break
 				}
@@ -359,7 +359,7 @@ func (i *Interpreter) execStmt(s ast.Stmt, e *env) {
 			// .Добавить()/.Очистить().
 			if it, ok := coll.(interface{ IterateRows() []map[string]any }); ok {
 				for _, row := range it.IterateRows() {
-					e.set(v.Var.Literal, &MapThis{M: row})
+					e.setLocal(v.Var.Literal, &MapThis{M: row})
 					if !i.execLoopBody(v.Body, e) {
 						break
 					}
@@ -377,7 +377,11 @@ func (i *Interpreter) execStmt(s ast.Stmt, e *env) {
 		i.evalExpr(v.X, e)
 	case *ast.VarDecl:
 		for _, n := range v.Names {
-			e.set(n.Literal, nil)
+			if v.ModuleLevel {
+				e.declareModule(n.Literal, nil)
+			} else {
+				e.declare(n.Literal, nil)
+			}
 		}
 	case *ast.NumericForStmt:
 		start := toFloatOr0(i.evalExpr(v.Start, e))
@@ -392,7 +396,7 @@ func (i *Interpreter) execStmt(s ast.Stmt, e *env) {
 				}
 				RaiseUserError("Цикл «Для»: превышено максимальное число итераций — вероятно, ошибка в границах цикла")
 			}
-			e.set(v.Var.Literal, counter)
+			e.setLocal(v.Var.Literal, counter)
 			if !i.execLoopBody(v.Body, e) {
 				break
 			}
@@ -779,6 +783,45 @@ func (i *Interpreter) callEntryProc(proc *ast.ProcedureDecl, root *env, args []a
 	return i.callUserProcAtDepth(proc, root, args, root.depth)
 }
 
+func (i *Interpreter) moduleEnvFor(proc *ast.ProcedureDecl, root *env) *env {
+	if proc == nil || root == nil || len(proc.ModuleVars) == 0 {
+		return nil
+	}
+	key := proc.ModuleKey
+	if key == "" {
+		key = proc.Name.File
+	}
+	if key == "" {
+		return nil
+	}
+	if root.ec.moduleEnvs == nil {
+		root.ec.moduleEnvs = make(map[string]*env)
+	}
+	if me := root.ec.moduleEnvs[key]; me != nil {
+		return me
+	}
+	names := make(map[string]bool)
+	vars := make(map[string]any)
+	for _, decl := range proc.ModuleVars {
+		for _, tok := range decl.Names {
+			name := strings.ToLower(tok.Literal)
+			if name == "" {
+				continue
+			}
+			names[name] = true
+			vars[name] = nil
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	me := root.frameWithModule(root, nil, root.depth)
+	me.vars = vars
+	me.moduleVars = names
+	root.ec.moduleEnvs[key] = me
+	return me
+}
+
 func (i *Interpreter) callUserProcAtDepth(proc *ast.ProcedureDecl, callEnv *env, args []any, frameDepth int) (retVal any) {
 	// Страж рекурсии: env нового кадра будет на уровень глубже вызывающего.
 	// Обрываем ДО создания кадра и проброса в отладчик, иначе бесконечная
@@ -806,25 +849,31 @@ func (i *Interpreter) callUserProcAtDepth(proc *ast.ProcedureDecl, callEnv *env,
 	}()
 	parentEnv := callEnv
 	defaultEnv := callEnv
+	moduleEnv := i.moduleEnvFor(proc, callEnv.rootEnv())
 	if i.StrictLexicalScope {
 		parentEnv = callEnv.rootEnv()
+		if moduleEnv != nil {
+			parentEnv = moduleEnv
+		}
 		defaultEnv = parentEnv
+	} else if moduleEnv != nil {
+		defaultEnv = callEnv.frameWithModule(callEnv, moduleEnv, callEnv.depth)
 	}
-	child := callEnv.frame(parentEnv, frameDepth)
+	child := callEnv.frameWithModule(parentEnv, moduleEnv, frameDepth)
 	for idx, param := range proc.Params {
 		if idx < len(args) {
-			child.set(param.Literal, args[idx])
+			child.setLocal(param.Literal, args[idx])
 			continue
 		}
-			// Параметр без переданного значения — пробуем дефолт. В legacy
-			// дефолт вычисляется в callEnv; в strict lexical — в root-env, чтобы
-			// не оставлять обходной доступ к локальным переменным caller-а. child
-			// ещё не имеет других параметров — сознательно не даём дефолтам
-			// ссылаться на «соседей» (1С-семантика).
+		// Параметр без переданного значения — пробуем дефолт. В legacy
+		// дефолт вычисляется в callEnv; в strict lexical — в module-env/root,
+		// чтобы не оставлять обходной доступ к локальным переменным caller-а.
+		// child ещё не имеет других параметров — сознательно не даём дефолтам
+		// ссылаться на «соседей» (1С-семантика).
 		if idx < len(proc.Defaults) && proc.Defaults[idx] != nil {
-			child.set(param.Literal, i.evalExpr(proc.Defaults[idx], defaultEnv))
+			child.setLocal(param.Literal, i.evalExpr(proc.Defaults[idx], defaultEnv))
 		} else {
-			child.set(param.Literal, nil)
+			child.setLocal(param.Literal, nil)
 		}
 	}
 	i.execBlock(proc.Body, child)

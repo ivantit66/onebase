@@ -38,6 +38,11 @@ type ProcedureDecl struct {
 	// (pageAction) вызывают ТОЛЬКО экспортные процедуры, чтобы внутренние
 	// вспомогательные с побочными эффектами нельзя было дёрнуть POST-запросом.
 	Export bool
+	// ModuleKey identifies the source module this procedure belongs to.
+	// ModuleVars are module-level declarations shared by procedures of that
+	// module during one interpreter run.
+	ModuleKey  string
+	ModuleVars []*VarDecl
 }
 
 // NewProcedureFromBody собирает процедуру entryName из исполняемого раздела
@@ -51,8 +56,10 @@ func NewProcedureFromBody(entryName, file string, moduleVars []*VarDecl, body []
 	}
 	stmts = append(stmts, body...)
 	return &ProcedureDecl{
-		Name: token.Token{Type: token.IDENT, Literal: entryName, File: file, Line: 1, Col: 1},
-		Body: stmts,
+		Name:       token.Token{Type: token.IDENT, Literal: entryName, File: file, Line: 1, Col: 1},
+		Body:       stmts,
+		ModuleKey:  file,
+		ModuleVars: moduleVars,
 	}
 }
 
@@ -79,8 +86,9 @@ type AssignStmt struct {
 // VarDecl — объявление переменных: Перем а, б, в [Экспорт];. Exported отражает
 // модификатор «Экспорт» (значим для переменных модуля, см. ast.Program.ModuleVars).
 type VarDecl struct {
-	Names    []token.Token
-	Exported bool
+	Names       []token.Token
+	Exported    bool
+	ModuleLevel bool
 }
 
 type ForEachStmt struct {

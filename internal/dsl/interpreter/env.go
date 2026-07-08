@@ -50,6 +50,7 @@ type execCtx struct {
 	debug        DebugHook // hook этого запуска; nil = без отладки, нулевые накладные
 	deadline     time.Time // wall-clock запуска; zero = без лимита
 	maxLoopIters int       // потолок итераций цикла; 0 = maxWhileIter
+	moduleEnvs   map[string]*env
 }
 
 // loopLimit — действующий потолок итераций цикла для запуска.
@@ -69,11 +70,13 @@ func (ec *execCtx) checkDeadline() {
 }
 
 type env struct {
-	vars   map[string]any
-	parent *env
-	root   *env
-	this   This
-	ec     *execCtx
+	vars       map[string]any
+	parent     *env
+	root       *env
+	module     *env
+	moduleVars map[string]bool
+	this       This
+	ec         *execCtx
 	// depth — глубина вызова процедур/функций (корень = 1). Растёт на каждый
 	// callUserProc; используется стражем рекурсии (см. limits.go). O(1) и
 	// потокобезопасно: счётчик живёт в цепочке env конкретного запуска.
@@ -91,11 +94,15 @@ func (e *env) child() *env {
 }
 
 func (e *env) frame(parent *env, depth int) *env {
+	return e.frameWithModule(parent, e.module, depth)
+}
+
+func (e *env) frameWithModule(parent, module *env, depth int) *env {
 	root := e.root
 	if root == nil {
 		root = e
 	}
-	return &env{vars: make(map[string]any), parent: parent, root: root, this: e.this, ec: e.ec, depth: depth}
+	return &env{vars: make(map[string]any), parent: parent, root: root, module: module, this: e.this, ec: e.ec, depth: depth}
 }
 
 func (e *env) rootEnv() *env {
@@ -114,6 +121,11 @@ func (e *env) get(name string) (any, bool) {
 	if v, ok := e.vars[name]; ok {
 		return v, true
 	}
+	if e.module != nil {
+		if v, ok := e.module.vars[name]; ok {
+			return v, true
+		}
+	}
 	if e.parent != nil {
 		return e.parent.get(name)
 	}
@@ -122,6 +134,31 @@ func (e *env) get(name string) (any, bool) {
 
 func (e *env) set(name string, v any) {
 	name = strings.ToLower(name)
+	if e.module != nil && e.module.moduleVars[name] {
+		if _, local := e.vars[name]; !local {
+			e.module.vars[name] = v
+			return
+		}
+	}
+	e.vars[name] = v
+}
+
+func (e *env) setLocal(name string, v any) {
+	name = strings.ToLower(name)
+	e.vars[name] = v
+}
+
+func (e *env) declare(name string, v any) {
+	name = strings.ToLower(name)
+	e.vars[name] = v
+}
+
+func (e *env) declareModule(name string, v any) {
+	name = strings.ToLower(name)
+	if e.module != nil && e.module.moduleVars[name] {
+		e.module.vars[name] = v
+		return
+	}
 	e.vars[name] = v
 }
 

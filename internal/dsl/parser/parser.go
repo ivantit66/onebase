@@ -78,7 +78,39 @@ func (p *Parser) ParseProgram() (*ast.Program, error) {
 		}
 		prog.Body = append(prog.Body, stmt)
 	}
+	attachModuleContext(prog)
 	return prog, nil
+}
+
+func attachModuleContext(prog *ast.Program) {
+	if prog == nil {
+		return
+	}
+	moduleKey := ""
+	for _, decl := range prog.ModuleVars {
+		decl.ModuleLevel = true
+		for _, tok := range decl.Names {
+			if tok.File != "" {
+				moduleKey = tok.File
+				break
+			}
+		}
+		if moduleKey != "" {
+			break
+		}
+	}
+	if moduleKey == "" {
+		for _, pr := range prog.Procedures {
+			if pr.Name.File != "" {
+				moduleKey = pr.Name.File
+				break
+			}
+		}
+	}
+	for _, pr := range prog.Procedures {
+		pr.ModuleKey = moduleKey
+		pr.ModuleVars = prog.ModuleVars
+	}
 }
 
 func (p *Parser) parseProcedure() (*ast.ProcedureDecl, error) {

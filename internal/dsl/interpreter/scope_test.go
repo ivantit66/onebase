@@ -443,3 +443,71 @@ func TestStrictLexicalScope_DefaultParamDoesNotReadCallerLocal(t *testing.T) {
 		t.Fatalf("strict default param result = %v, want hidden", got)
 	}
 }
+
+func TestStrictLexicalScope_ModuleVarSharedWithHelper(t *testing.T) {
+	code := `Перем Счетчик;
+
+Функция Тест()
+  Счетчик = 1;
+  Помощник();
+  Возврат Счетчик;
+КонецФункции
+
+Процедура Помощник()
+  Счетчик = Счетчик + 1;
+КонецПроцедуры`
+	got, err := runScopeProgramResult(t, code, true, nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !numEq(got, 2) {
+		t.Fatalf("strict module var result = %v, want 2", got)
+	}
+}
+
+func TestStrictLexicalScope_ModuleVarDoesNotExposeCallerLocal(t *testing.T) {
+	code := `Перем Общая;
+
+Функция Тест()
+  Общая = "module";
+  Секрет = "caller";
+  Возврат Помощник();
+КонецФункции
+
+Функция Помощник()
+  Возврат Общая + ":" + ?(Секрет = Неопределено, "hidden", Секрет);
+КонецФункции`
+	got, err := runScopeProgramResult(t, code, true, nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got != "module:hidden" {
+		t.Fatalf("strict module/caller scope result = %v, want module:hidden", got)
+	}
+}
+
+func TestStrictLexicalScope_LocalVarShadowsModuleVar(t *testing.T) {
+	code := `Перем Значение;
+
+Функция Тест()
+  Перем Значение;
+  Значение = "local";
+  ЗаписатьМодуль();
+  Возврат Значение + ":" + ПрочитатьМодуль();
+КонецФункции
+
+Процедура ЗаписатьМодуль()
+  Значение = "module";
+КонецПроцедуры
+
+Функция ПрочитатьМодуль()
+  Возврат Значение;
+КонецФункции`
+	got, err := runScopeProgramResult(t, code, true, nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got != "local:module" {
+		t.Fatalf("strict local/module shadow result = %v, want local:module", got)
+	}
+}

@@ -106,11 +106,20 @@ func (e *env) GetLocals() map[string]any {
 func (e *env) GetAllVariables() map[string]any {
 	result := make(map[string]any)
 	current := e
+	seenModule := false
 	for current != nil {
 		for k, v := range current.vars {
 			if _, exists := result[k]; !exists {
 				result[k] = v
 			}
+		}
+		if !seenModule && current.module != nil {
+			for k, v := range current.module.vars {
+				if _, exists := result[k]; !exists {
+					result[k] = v
+				}
+			}
+			seenModule = true
 		}
 		current = current.parent
 	}

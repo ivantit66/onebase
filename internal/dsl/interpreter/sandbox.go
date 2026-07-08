@@ -134,7 +134,7 @@ func (i *Interpreter) RunSandboxed(proc *ast.ProcedureDecl, this This, p Sandbox
 	}()
 	for _, m := range extraVars {
 		for k, v := range m {
-			e.set(k, v)
+			e.setLocal(k, v)
 		}
 	}
 	// Запреты профиля навязываем ПОСЛЕДНИМИ: они перекрывают любые extraVars,
@@ -142,7 +142,7 @@ func (i *Interpreter) RunSandboxed(proc *ast.ProcedureDecl, this This, p Sandbox
 	// запрещённую возможность. Раньше Vars() передавался вызывающим вручную —
 	// забытый или неверно упорядоченный вызов молча открывал песочницу.
 	for k, v := range p.Vars() {
-		e.set(k, v)
+		e.setLocal(k, v)
 	}
 	if i.StrictLexicalScope {
 		if result != nil {
@@ -179,11 +179,11 @@ func (i *Interpreter) CallSandboxed(proc *ast.ProcedureDecl, this This, args []a
 	}()
 	for _, m := range extraVars {
 		for k, v := range m {
-			e.set(k, v)
+			e.setLocal(k, v)
 		}
 	}
 	for k, v := range p.Vars() {
-		e.set(k, v)
+		e.setLocal(k, v)
 	}
 	result = i.callUserProc(proc, e, args)
 	return
