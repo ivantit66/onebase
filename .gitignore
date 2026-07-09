@@ -63,6 +63,7 @@ docs/*
 !docs/roadmap.json
 !docs/users-load-limits.md
 !docs/release-template.md
+!docs/DEPLOYMENT.md
 
 # Локальные демо-артефакты (выгрузки, скриншоты печати)
 demo/
