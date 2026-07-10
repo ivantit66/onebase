@@ -31,6 +31,15 @@
     });
   }
   function el(html) { var d = document.createElement('div'); d.innerHTML = html; return d.firstElementChild; }
+  // маска ключа для read-only показа. Сервер отдаёт ключи уже как «****xxxx»
+  // (llm.Redacted), но только что введённый в форме ключ лежит в памяти открытым —
+  // маскируем и его. Уже замаскированные и ${env:VAR}-ссылки показываем как есть.
+  function isEnvRefJS(s) { s = String(s == null ? '' : s).trim(); return /^\$\{env:[^}]+\}$/.test(s); }
+  function maskKeyDisplay(k) {
+    k = String(k == null ? '' : k);
+    if (!k || k.indexOf('****') === 0 || isEnvRefJS(k)) return k;
+    return k.length <= 4 ? '****' : '****' + k.slice(-4);
+  }
   function modelByName(n) { for (var i = 0; i < cfg.models.length; i++) if (cfg.models[i].name === n) return cfg.models[i]; return null; }
   function modelEndpoint(m) { return m.endpoint || m.provider || ''; }
   function setModelEndpoint(m, endpoint) { m.endpoint = endpoint; if (Object.prototype.hasOwnProperty.call(m, 'provider')) delete m.provider; }
@@ -93,7 +102,7 @@
     en.querySelector('input').checked = !!cfg.enabled;
     en.querySelector('input').onchange = function () { cfg.enabled = this.checked; };
     head.appendChild(en);
-    var jb = el('<span style="color:#64748b;font-size:11px;cursor:pointer">⚙ Показать JSON</span>');
+    var jb = el('<span style="color:#64748b;font-size:11px;cursor:pointer">⧉ Копировать / вставить (JSON)</span>');
     jb.onclick = function () { commitActiveEditors(); jsonMode = true; render(); };
     head.appendChild(jb);
     root.appendChild(head);
@@ -247,10 +256,10 @@
   function endpointRow(e, i) {
     if (editingEndpointIndex === i) return endpointEditRow(e, i);
     var r = el('<div style="display:flex;padding:5px 8px;align-items:center;font-size:12px' + (i % 2 ? ';background:#f9fafb' : '') + '"></div>');
-    r.appendChild(el('<span style="flex:2">' + esc(e.name) + '</span>'));
-    r.appendChild(el('<span style="flex:2">' + esc(e.kind) + '</span>'));
-    r.appendChild(el('<span style="flex:3">' + esc(e.base_url || '—') + '</span>'));
-    r.appendChild(el('<span style="flex:2">' + esc(e.api_key || '') + '</span>'));
+    r.appendChild(roCell(2, e.name, e.name));
+    r.appendChild(roCell(2, e.kind));
+    r.appendChild(roCell(3, e.base_url || '—', e.base_url || ''));
+    r.appendChild(roCell(2, maskKeyDisplay(e.api_key)));
     var act = actionCell();
     var edit = el('<span style="color:#94a3b8;cursor:pointer" title="редактировать">✎</span>');
     var del = el('<span style="color:#c00;cursor:pointer" title="удалить">🗑</span>');
@@ -324,8 +333,8 @@
     normalizeModel(m);
     if (editingModelIndex === i) return modelEditRow(m, i);
     var r = el('<div style="display:flex;padding:5px 8px;align-items:center;font-size:12px' + (i % 2 ? ';background:#f9fafb' : '') + '"></div>');
-    r.appendChild(el('<span style="flex:3">' + esc(m.name) + '</span>'));
-    r.appendChild(el('<span style="flex:2">' + esc(modelEndpoint(m) || '—') + '</span>'));
+    r.appendChild(roCell(3, m.name, m.name));
+    r.appendChild(roCell(2, modelEndpoint(m) || '—', modelEndpoint(m) || ''));
     r.appendChild(el('<span style="flex:1">' + (m.vision ? '✓' : '—') + '</span>'));
     r.appendChild(el('<span style="flex:1">' + (m.max_tokens || '') + '</span>'));
     var act = actionCell();
@@ -406,6 +415,12 @@
       ? 'flex:' + spec + ';min-width:0'
       : 'width:' + spec + ';flex-shrink:0';
   }
+  // roCell — ячейка read-only строки: обрезает длинное значение (в т.ч. ключ/URL без
+  // пробелов), чтобы оно не распирало flex-колонку и не наезжало на соседние.
+  function roCell(flex, text, title) {
+    return el('<span style="flex:' + flex + ';min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"'
+      + (title ? ' title="' + esc(title) + '"' : '') + '>' + esc(text) + '</span>');
+  }
   function rowHTML(cols, head, flexes) {
     var r = el('<div style="display:flex;padding:4px 8px;font-size:12px' + (head ? ';background:#f8fafc;font-weight:600' : '') + '"></div>');
     flexes = flexes || ENDPOINT_COLS;
@@ -413,21 +428,55 @@
     return r;
   }
 
-  // --- режим сырого JSON ---
+  // --- режим сырого JSON: вся конфигурация одним текстом (копировать/вставить) ---
   function renderJson() {
     root.innerHTML = '';
-    var bar = el('<div style="display:flex;justify-content:space-between;margin-bottom:8px"><span style="font-size:11px;color:#666">Режим JSON — правьте конфиг целиком</span><span style="color:#2563eb;cursor:pointer;font-size:11px">▦ Вернуть формы</span></div>');
-    bar.querySelector('span:last-child').onclick = function () {
+    var bar = el('<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px"></div>');
+    bar.appendChild(el('<span style="font-size:11px;color:#666">Вся конфигурация ИИ одним текстом — можно скопировать или вставить</span>'));
+    var actions = el('<div style="display:flex;gap:12px;white-space:nowrap;font-size:11px"></div>');
+    var copyBtn = el('<span style="color:#2563eb;cursor:pointer">⧉ Копировать</span>');
+    var pasteBtn = el('<span style="color:#2563eb;cursor:pointer">⇩ Вставить</span>');
+    var backBtn = el('<span style="color:#2563eb;cursor:pointer">▦ Вернуть формы</span>');
+    actions.append(copyBtn, pasteBtn, backBtn);
+    bar.appendChild(actions);
+
+    var ta = el('<textarea spellcheck="false" style="width:100%;height:340px;font-family:monospace;font-size:12px;padding:8px;border:1px solid #cbd5e1;border-radius:4px;resize:vertical"></textarea>');
+    ta.value = JSON.stringify(cfg, null, 2);
+    var hint = el('<div style="font-size:11px;color:#94a3b8;margin:6px 0 0">Сохранённые ключи показаны замаскированными (<code>****</code>). Чтобы переносить конфигурацию между базами целиком, храните ключи как <code>${env:ИМЯ}</code> — такие ссылки не маскируются и работают на любой базе, где задана переменная окружения.</div>');
+
+    copyBtn.onclick = function () { copyText(ta.value, ta); };
+    pasteBtn.onclick = function () { pasteText(ta); };
+    backBtn.onclick = function () {
       try { var v = JSON.parse(ta.value); cfg = v; normalizeConfig(); jsonMode = false; render(); }
       catch (e) { msg('Некорректный JSON: ' + e.message, '#c00'); }
     };
-    var ta = el('<textarea spellcheck="false" style="width:100%;height:340px;font-family:monospace;font-size:12px;padding:8px;border:1px solid #cbd5e1;border-radius:4px;resize:vertical"></textarea>');
-    ta.value = JSON.stringify(cfg, null, 2);
+
     var foot = el('<div style="margin-top:10px;display:flex;justify-content:flex-end;gap:10px"><span id="ais-msg" style="font-size:11px"></span><button style="background:#16a34a;color:#fff;border:none;padding:6px 16px;border-radius:3px;cursor:pointer;font-size:12px">Сохранить</button></div>');
     foot.querySelector('button').onclick = function () {
       try { cfg = JSON.parse(ta.value); normalizeConfig(); save(); } catch (e) { msg('Некорректный JSON: ' + e.message, '#c00'); }
     };
-    root.appendChild(bar); root.appendChild(ta); root.appendChild(foot);
+    root.appendChild(bar); root.appendChild(ta); root.appendChild(hint); root.appendChild(foot);
+  }
+
+  // --- буфер обмена: writeText/readText с фолбэком на execCommand и ручной ввод ---
+  function copyText(text, ta) {
+    function ok() { msg('Скопировано в буфер обмена', '#16a34a'); }
+    function fallback() {
+      if (ta) { ta.focus(); ta.select(); }
+      try { document.execCommand('copy'); ok(); }
+      catch (e) { msg('Не удалось скопировать — выделите текст и нажмите Ctrl+C', '#c00'); }
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, fallback);
+    else fallback();
+  }
+  function pasteText(ta) {
+    function manual() { ta.focus(); msg('Вставьте вручную: Ctrl+V в поле', '#666'); }
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      navigator.clipboard.readText().then(
+        function (t) { ta.value = t; msg('Вставлено — проверьте и нажмите «Сохранить»', '#16a34a'); },
+        manual
+      );
+    } else { manual(); }
   }
 
   function msg(text, color) { var m = document.getElementById('ais-msg'); if (m) { m.textContent = text; m.style.color = color; } }
