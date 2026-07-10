@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ivantit66/onebase/internal/storage"
 )
@@ -71,6 +72,13 @@ func DemoReset(ctx context.Context, db *storage.DB, backupPath string) (*ImportR
 			continue
 		}
 		outPath := filepath.Join(tmpDir, filepath.FromSlash(zf.Name))
+		// Zip-slip guard (как в universal.go): путь распаковки не должен выходить
+		// за пределы tmpDir. Источник .obz здесь — локальный файл, но защита от
+		// «../» в именах записей архива нужна и тут — для консистентности.
+		if rel, err := filepath.Rel(tmpDir, outPath); err != nil ||
+			rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("недопустимый путь в архиве: %s", zf.Name)
+		}
 		if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 			return nil, err
 		}
