@@ -121,15 +121,18 @@ func (h *handler) configImportZip(w http.ResponseWriter, r *http.Request) {
 	defer os.RemoveAll(tmpDir)
 
 	for _, f := range reader.File {
+		outPath, err := safeArchivePath(tmpDir, f.Name)
+		if err != nil {
+			continue // zip-slip: запись с выходом за пределы tmpDir — пропускаем
+		}
 		if f.FileInfo().IsDir() {
-			os.MkdirAll(filepath.Join(tmpDir, f.Name), 0o755)
+			os.MkdirAll(outPath, 0o755)
 			continue
 		}
 		rc, err := f.Open()
 		if err != nil {
 			continue
 		}
-		outPath := filepath.Join(tmpDir, f.Name)
 		os.MkdirAll(filepath.Dir(outPath), 0o755)
 		outFile, err := os.Create(outPath)
 		if err != nil {

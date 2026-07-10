@@ -60,6 +60,33 @@ func safeBackupPath(dir, file string) (string, error) {
 	return fp, nil
 }
 
+// safeArchivePath joins dir with a ZIP/OBZ archive entry name, guaranteeing the
+// result stays inside dir. Unlike safeBackupPath (flat backup file names), an
+// archive entry may legitimately contain subdirectories (config/module.yaml),
+// but must never escape dir via "../" or an absolute path — that would be a
+// zip-slip (CWE-22/CWE-23), letting a crafted archive overwrite arbitrary files.
+func safeArchivePath(dir, name string) (string, error) {
+	if name == "" || strings.ContainsRune(name, 0) {
+		return "", i18nerr.Errorf("недопустимое имя записи архива: %s", name)
+	}
+	// Записи бывают с «\» вместо «/» — нормализуем, чтобы обратный слэш не
+	// проскочил мимо проверок на не-Windows хостах (там «\» — обычный символ).
+	norm := strings.ReplaceAll(name, `\`, "/")
+	clean := filepath.FromSlash(norm)
+	// Абсолютные пути в записях архива недопустимы: ни «/etc/passwd»,
+	// ни «C:\Windows\...» (иначе — запись вне каталога распаковки).
+	if filepath.IsAbs(clean) || strings.HasPrefix(norm, "/") {
+		return "", i18nerr.Errorf("недопустимое имя записи архива: %s", name)
+	}
+	outPath := filepath.Join(dir, clean)
+	// «../» не должен выводить за пределы dir (собственно zip-slip).
+	rel, err := filepath.Rel(dir, outPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", i18nerr.Errorf("недопустимое имя записи архива: %s", name)
+	}
+	return outPath, nil
+}
+
 func (h *handler) loadBackupDirSetting(b *Base) string {
 	if b.ConfigSource == "database" {
 		db, err := OpenDB(context.Background(), b)
@@ -586,11 +613,14 @@ func (h *handler) backupFullImport(w http.ResponseWriter, r *http.Request) {
 	var configDir string
 
 	for _, f := range reader.File {
+		outPath, err := safeArchivePath(tmpDir, f.Name)
+		if err != nil {
+			continue // zip-slip: запись с выходом за пределы tmpDir — пропускаем
+		}
 		if f.FileInfo().IsDir() {
-			os.MkdirAll(filepath.Join(tmpDir, f.Name), 0o755)
+			os.MkdirAll(outPath, 0o755)
 			continue
 		}
-		outPath := filepath.Join(tmpDir, f.Name)
 		os.MkdirAll(filepath.Dir(outPath), 0o755)
 		rc, err := f.Open()
 		if err != nil {
