@@ -608,19 +608,30 @@ func (i *Interpreter) evalBinary(b *ast.BinaryExpr, e *env) any {
 				return dateAddSeconds(rt, sec)
 			}
 		}
-		ld, lok := toDecimal(l)
-		rd, rok := toDecimal(r)
-		if lok && rok {
-			return ld.Add(rd)
-		}
-		// nil-toleration: пустое число + N → N, иначе `Объект.Сумма + 100`
-		// при пустом поле дало бы concat «<nil>100», который потом ломает
-		// запись в numeric (SQLSTATE 22P02).
-		if l == nil && rok {
-			return rd
-		}
-		if r == nil && lok {
-			return ld
+		// Строка + Строка — ВСЕГДА конкатенация, даже если обе строки состоят
+		// из одних цифр ("0" + "7" → "07", а не 7). Раньше toDecimal приводил
+		// числовые строки к числам и складывал их: ломалась доливка ведущих
+		// нулей и любая сборка идентификаторов из цифровых фрагментов (issue
+		// #316). Числовые поля из БД приходят в DSL как decimal.Decimal (см.
+		// storage.normalizeNumber), поэтому арифметика `Объект.Сумма + 100`
+		// не затрагивается — гейт срабатывает только на настоящих строках.
+		_, lStr := l.(string)
+		_, rStr := r.(string)
+		if !(lStr && rStr) {
+			ld, lok := toDecimal(l)
+			rd, rok := toDecimal(r)
+			if lok && rok {
+				return ld.Add(rd)
+			}
+			// nil-toleration: пустое число + N → N, иначе `Объект.Сумма + 100`
+			// при пустом поле дало бы concat «<nil>100», который потом ломает
+			// запись в numeric (SQLSTATE 22P02).
+			if l == nil && rok {
+				return rd
+			}
+			if r == nil && lok {
+				return ld
+			}
 		}
 		return fmt.Sprintf("%v", l) + fmt.Sprintf("%v", r)
 	case token.MINUS:
