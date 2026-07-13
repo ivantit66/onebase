@@ -45,7 +45,11 @@ func New(reg *runtime.Registry, store *storage.DB, interp *interpreter.Interpret
 	if metricsReg != nil {
 		registerRuntimeMetrics(metricsReg, authRepo, uiSrv, sched, uiCfg.Webhooks)
 	}
-	h := &handler{reg: reg, store: store, interp: interp, entitySvc: uiSrv.EntitySvc(), hooks: uiCfg.Webhooks}
+	h := &handler{
+		reg: reg, store: store, interp: interp, entitySvc: uiSrv.EntitySvc(), hooks: uiCfg.Webhooks,
+		maxFileSizeBytes:       int64(uiCfg.MaxFileSizeMB) * 1024 * 1024,
+		allowedAttachmentTypes: uiCfg.AllowedTypes,
+	}
 	r := chi.NewRouter()
 	r.Use(requestLogger()) // как middleware.Logger, но режет токены/коды из URI (план 53)
 	r.Use(middleware.Recoverer)

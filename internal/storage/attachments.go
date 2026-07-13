@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/i18n/i18nerr"
@@ -23,6 +25,73 @@ type Attachment struct {
 	SizeBytes  int64     `json:"size_bytes"`
 	UploadedAt time.Time `json:"uploaded_at"`
 	UploadedBy string    `json:"uploaded_by"`
+}
+
+// SanitizeAttachmentName нормализует имя загружаемого файла, пришедшее из
+// заголовка multipart-формы (header.Filename) — оно полностью контролируется
+// клиентом и НЕ доверенное. Защищает от:
+//   - подмены пути (../, абсолютные/Windows-пути) — берём filepath.Base + срез
+//     по обоим разделителям, т.к. на Linux '\\' не считается разделителем;
+//   - хранимого XSS и порчи UI — вырезаем управляющие символы (в т.ч. \r\n);
+//   - DoS по длине — ограничиваем 255 байтами (граница имени файла в большинстве ФС).
+//
+// Экранирование при выводе всё равно делается на стороне рендера (DOM/textContent),
+// эта функция — вторая линия защиты «на входе». Живёт в storage (единый источник),
+// чтобы и UI-, и REST-путь загрузки нормализовали имя одинаково.
+func SanitizeAttachmentName(name string) string {
+	// Срезаем как posix-, так и windows-путь независимо от ОС сервера.
+	name = filepath.Base(name)
+	if i := strings.LastIndexAny(name, `/\`); i >= 0 {
+		name = name[i+1:]
+	}
+	// Убираем управляющие символы (включая \r, \n, \t, NUL) и невалидный UTF-8.
+	var b strings.Builder
+	for _, r := range name {
+		if r == utf8.RuneError || r < 0x20 || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	name = strings.TrimSpace(b.String())
+	// Имена-«пути» и спецзначения после очистки сводим к безопасному дефолту.
+	if name == "" || name == "." || name == ".." {
+		return "file"
+	}
+	// Ограничение длины (байтовое — граница имени файла в типовых ФС).
+	const maxLen = 255
+	if len(name) > maxLen {
+		name = name[:maxLen]
+		// Не оставляем «обрезанный» хвост невалидного UTF-8.
+		for len(name) > 0 && !utf8.ValidString(name) {
+			name = name[:len(name)-1]
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return "file"
+		}
+	}
+	return name
+}
+
+// AttachmentExtAllowed сообщает, разрешено ли расширение файла настройкой
+// attachments.allowed_types из app.yaml. Пустой список = без ограничений
+// (разрешено всё). Сравнение регистронезависимое; элементы списка могут быть
+// с ведущей точкой или без (".pdf" и "pdf" эквивалентны). Файл без расширения
+// при непустом списке считается недопустимым — тип нельзя подтвердить.
+func AttachmentExtAllowed(allowed []string, filename string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(filename), "."))
+	if ext == "" {
+		return false
+	}
+	for _, a := range allowed {
+		if strings.ToLower(strings.TrimPrefix(strings.TrimSpace(a), ".")) == ext {
+			return true
+		}
+	}
+	return false
 }
 
 // EnsureAttachmentTable creates the _attachments table if it does not exist.

@@ -220,8 +220,11 @@ func runDev(cmd *cobra.Command, _ []string) error {
 		uiCfg.AppCopyright = appCfg.Copyright
 		uiCfg.AppLicense = appCfg.License
 		uiCfg.Lang = appCfg.Lang
-		if appCfg.Attachments != nil && appCfg.Attachments.MaxFileSizeMB > 0 {
-			uiCfg.MaxFileSizeMB = appCfg.Attachments.MaxFileSizeMB
+		if appCfg.Attachments != nil {
+			if appCfg.Attachments.MaxFileSizeMB > 0 {
+				uiCfg.MaxFileSizeMB = appCfg.Attachments.MaxFileSizeMB
+			}
+			uiCfg.AllowedTypes = appCfg.Attachments.AllowedTypes
 		}
 		uiCfg.Limits = runtimeLimitsFromApp(appCfg.Limits)
 		if appCfg.Email != nil {

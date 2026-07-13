@@ -42,7 +42,8 @@ type Config struct {
 	PlatDate      string // дата коммита сборки, дд.мм.гг (version.CommitDate())
 	Logo          string // path to logo file (png/svg/jpg)
 	Mailer        *mailer.Mailer
-	MaxFileSizeMB int // 0 = use default 50
+	MaxFileSizeMB int      // 0 = use default 50
+	AllowedTypes  []string // attachments.allowed_types (расширения); пусто = без ограничений
 	DemoMode      bool
 	DemoMessage   string
 	Lang          string       // base language from config
@@ -64,29 +65,30 @@ type Config struct {
 }
 
 type Server struct {
-	reg              *runtime.Registry
-	store            *storage.DB
-	interp           *interpreter.Interpreter
-	authRepo         *auth.Repo
-	cfg              Config
-	sched            *scheduler.Scheduler
-	mailer           *mailer.Mailer
-	maxFileSizeBytes int64
-	globalDebug      *debugger.GlobalDebugController
-	messages         *MessageStore
-	widgetCache      *widget.Cache
-	lockMgr          *runtime.LockManager   // #2 managed locks
-	entitySvc        *entityservice.Service // упсёрт + ТЧ + движения + проведение, разделяется с api
-	aiChatLimit      *aiWindowLimiter       // лимит частоты ИИ-чата на пользователя (план 54)
-	endpointLimit    endpointLimiter        // rate-limit HTTP-сервисов (план 61)
-	loginLimit       *auth.LoginLimiter     // брутфорс-защита basic-auth сервисов (общий с формой входа)
-	extforms         *extform.Repo          // внешний контур: печатные формы из БД
-	extreports       *extform.ReportRepo    // внешний контур: отчёты из БД
-	extprocessors    *extform.ProcessorRepo // внешний контур: обработки из БД
-	tmpl             *template.Template
-	hub              *realtime.Hub // real-time-шина уведомлений сервер→браузер (план 74)
-	ops              *operationLimiter
-	exportJobs       *exportJobStore
+	reg                    *runtime.Registry
+	store                  *storage.DB
+	interp                 *interpreter.Interpreter
+	authRepo               *auth.Repo
+	cfg                    Config
+	sched                  *scheduler.Scheduler
+	mailer                 *mailer.Mailer
+	maxFileSizeBytes       int64
+	allowedAttachmentTypes []string // расширения из attachments.allowed_types; пусто = без ограничений
+	globalDebug            *debugger.GlobalDebugController
+	messages               *MessageStore
+	widgetCache            *widget.Cache
+	lockMgr                *runtime.LockManager   // #2 managed locks
+	entitySvc              *entityservice.Service // упсёрт + ТЧ + движения + проведение, разделяется с api
+	aiChatLimit            *aiWindowLimiter       // лимит частоты ИИ-чата на пользователя (план 54)
+	endpointLimit          endpointLimiter        // rate-limit HTTP-сервисов (план 61)
+	loginLimit             *auth.LoginLimiter     // брутфорс-защита basic-auth сервисов (общий с формой входа)
+	extforms               *extform.Repo          // внешний контур: печатные формы из БД
+	extreports             *extform.ReportRepo    // внешний контур: отчёты из БД
+	extprocessors          *extform.ProcessorRepo // внешний контур: обработки из БД
+	tmpl                   *template.Template
+	hub                    *realtime.Hub // real-time-шина уведомлений сервер→браузер (план 74)
+	ops                    *operationLimiter
+	exportJobs             *exportJobStore
 }
 
 func New(reg *runtime.Registry, store *storage.DB, interp *interpreter.Interpreter, authRepo *auth.Repo, cfg Config, sched *scheduler.Scheduler) *Server {
@@ -98,7 +100,7 @@ func New(reg *runtime.Registry, store *storage.DB, interp *interpreter.Interpret
 	if loginLimit == nil {
 		loginLimit = auth.NewLoginLimiter(5, time.Minute)
 	}
-	s := &Server{reg: reg, store: store, interp: interp, authRepo: authRepo, cfg: cfg, sched: sched, mailer: cfg.Mailer, maxFileSizeBytes: maxBytes, globalDebug: debugger.NewGlobalDebugController(), messages: NewMessageStore(), widgetCache: widget.NewCache(60 * time.Second), lockMgr: runtime.NewLockManager(), aiChatLimit: newAIWindowLimiter(10, time.Minute), loginLimit: loginLimit, extforms: extform.New(store), extreports: extform.NewReports(store), extprocessors: extform.NewProcessors(store), tmpl: template.Must(newTemplate(cfg.Bundle)), hub: realtime.NewHub(), ops: newOperationLimiter(), exportJobs: newExportJobStore(defaultExportJobTTL)}
+	s := &Server{reg: reg, store: store, interp: interp, authRepo: authRepo, cfg: cfg, sched: sched, mailer: cfg.Mailer, maxFileSizeBytes: maxBytes, allowedAttachmentTypes: cfg.AllowedTypes, globalDebug: debugger.NewGlobalDebugController(), messages: NewMessageStore(), widgetCache: widget.NewCache(60 * time.Second), lockMgr: runtime.NewLockManager(), aiChatLimit: newAIWindowLimiter(10, time.Minute), loginLimit: loginLimit, extforms: extform.New(store), extreports: extform.NewReports(store), extprocessors: extform.NewProcessors(store), tmpl: template.Must(newTemplate(cfg.Bundle)), hub: realtime.NewHub(), ops: newOperationLimiter(), exportJobs: newExportJobStore(defaultExportJobTTL)}
 	s.entitySvc = &entityservice.Service{
 		Store:  store,
 		Reg:    reg,

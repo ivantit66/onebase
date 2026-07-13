@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/access"
@@ -51,6 +52,18 @@ func (h *handler) rowAllowedID(ctx context.Context, entity *metadata.Entity, op 
 	}
 	row, err := h.store.GetByID(ctx, entity.Name, id, entity)
 	return err == nil && h.matchRowPredicate(ctx, row, dec.Predicate)
+}
+
+// rowAllowsOwnerID проверяет доступ к строке-владельцу вложения (защита от IDOR
+// в REST attachments, issue #315). Если сущность-владелец есть в реестре —
+// полная RLS-проверка через rowAllowedID; иначе (метаданных нет) — откат к RBAC
+// canREST, как в UI-пути (ui.Server.rowAllowsOwnerID).
+func (h *handler) rowAllowsOwnerID(ctx context.Context, ownerKind, ownerName, op string, id uuid.UUID) bool {
+	entity := h.reg.GetEntity(ownerName)
+	if entity == nil || !strings.EqualFold(string(entity.Kind), ownerKind) {
+		return canREST(ctx, ownerKind, ownerName, op)
+	}
+	return h.rowAllowedID(ctx, entity, op, id)
 }
 
 func (h *handler) rowAllowedUpdate(ctx context.Context, entity *metadata.Entity, op string, id uuid.UUID, fields map[string]any) bool {

@@ -6,9 +6,6 @@ package ui
 import (
 	"encoding/json"
 	"net/http"
-	"path/filepath"
-	"strings"
-	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -16,50 +13,8 @@ import (
 	"github.com/ivantit66/onebase/internal/storage"
 )
 
-// sanitizeAttachmentName нормализует имя загружаемого файла, пришедшее из
-// заголовка multipart-формы (header.Filename) — оно полностью контролируется
-// клиентом и НЕ доверенное. Защищает от:
-//   - подмены пути (../, абсолютные/Windows-пути) — берём filepath.Base + срез
-//     по обоим разделителям, т.к. на Linux '\\' не считается разделителем;
-//   - хранимого XSS и порчи UI — вырезаем управляющие символы (в т.ч. \r\n);
-//   - DoS по длине — ограничиваем 255 байтами (граница имени файла в большинстве ФС).
-//
-// Экранирование при выводе всё равно делается на стороне рендера (DOM/textContent),
-// эта функция — вторая линия защиты «на входе».
-func sanitizeAttachmentName(name string) string {
-	// Срезаем как posix-, так и windows-путь независимо от ОС сервера.
-	name = filepath.Base(name)
-	if i := strings.LastIndexAny(name, `/\`); i >= 0 {
-		name = name[i+1:]
-	}
-	// Убираем управляющие символы (включая \r, \n, \t, NUL) и невалидный UTF-8.
-	var b strings.Builder
-	for _, r := range name {
-		if r == utf8.RuneError || r < 0x20 || r == 0x7f {
-			continue
-		}
-		b.WriteRune(r)
-	}
-	name = strings.TrimSpace(b.String())
-	// Имена-«пути» и спецзначения после очистки сводим к безопасному дефолту.
-	if name == "" || name == "." || name == ".." {
-		return "file"
-	}
-	// Ограничение длины (байтовое — граница имени файла в типовых ФС).
-	const maxLen = 255
-	if len(name) > maxLen {
-		name = name[:maxLen]
-		// Не оставляем «обрезанный» хвост невалидного UTF-8.
-		for len(name) > 0 && !utf8.ValidString(name) {
-			name = name[:len(name)-1]
-		}
-		name = strings.TrimSpace(name)
-		if name == "" {
-			return "file"
-		}
-	}
-	return name
-}
+// Нормализация имени вложения (защита от path-traversal/XSS/DoS) вынесена в
+// storage.SanitizeAttachmentName — единый источник для UI- и REST-пути загрузки.
 
 // attachmentsList returns JSON list of attachments for a record.
 func (s *Server) attachmentsList(w http.ResponseWriter, r *http.Request) {
@@ -132,7 +87,11 @@ func (s *Server) attachmentUpload(w http.ResponseWriter, r *http.Request) {
 		uploadedBy = u.Login
 	}
 
-	filename := sanitizeAttachmentName(header.Filename)
+	filename := storage.SanitizeAttachmentName(header.Filename)
+	if !storage.AttachmentExtAllowed(s.allowedAttachmentTypes, filename) {
+		http.Error(w, s.tr(lang, "Недопустимый тип файла"), http.StatusUnsupportedMediaType)
+		return
+	}
 
 	_, err = s.store.UploadAttachment(r.Context(), string(entity.Kind), entity.Name, id,
 		filename, mimeType, uploadedBy, file, maxSize)

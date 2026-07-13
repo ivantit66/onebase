@@ -61,6 +61,9 @@ func (h *handler) mountV2(r chi.Router) {
 		r.Post("/document/{name}/{id}/unpost", h.unpostDocumentV2())
 
 		r.Get("/report/{name}", h.runReportV2())
+
+		// Вложения (issue #315) — та же RBAC/RLS-проверка владельца, что и в UI.
+		h.mountV2Attachments(r)
 	})
 }
 
@@ -808,6 +811,12 @@ func buildOpenAPIV2(entities []*metadata.Entity, reports []*reportpkg.Report) ma
 		"type":  "array",
 		"items": map[string]any{"$ref": "#/components/schemas/DocumentObject"},
 	}, map[string]any{"$ref": "#/components/schemas/ListMeta"})
+	schemas["Attachment"] = attachmentOpenAPISchema()
+	schemas["AttachmentEnvelope"] = dataEnvelopeSchema(map[string]any{"$ref": "#/components/schemas/Attachment"}, nil)
+	schemas["AttachmentListEnvelope"] = dataEnvelopeSchema(map[string]any{
+		"type":  "array",
+		"items": map[string]any{"$ref": "#/components/schemas/Attachment"},
+	}, nil)
 	for _, rep := range reports {
 		schemas[reportSchemaName(rep)] = reportOpenAPISchema(rep)
 	}
@@ -847,6 +856,7 @@ func dataEnvelopeSchema(dataSchema, metaSchema map[string]any) map[string]any {
 func openAPIV2Paths() map[string]any {
 	nameParam := map[string]any{"name": "name", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}
 	idParam := map[string]any{"name": "id", "in": "path", "required": true, "schema": map[string]any{"type": "string", "format": "uuid"}}
+	aidParam := map[string]any{"name": "aid", "in": "path", "required": true, "schema": map[string]any{"type": "string", "format": "uuid"}}
 	ifMatchParam := map[string]any{
 		"name":        "If-Match",
 		"in":          "header",
@@ -933,14 +943,70 @@ func openAPIV2Paths() map[string]any {
 			},
 		}
 	}
+	attachmentsCollection := func(tag string) map[string]any {
+		title := titleAPIName(tag)
+		return map[string]any{
+			"get": map[string]any{
+				"operationId": "list" + title + "Attachments",
+				"summary":     "List attachments of a " + tag + " record",
+				"tags":        []string{"attachments"},
+				"parameters":  []any{nameParam, idParam},
+				"responses":   mergeResponses(map[string]any{"200": responseWithSchema("OK", "#/components/schemas/AttachmentListEnvelope")}, errorResponses),
+			},
+			"post": map[string]any{
+				"operationId": "upload" + title + "Attachment",
+				"summary":     "Upload an attachment to a " + tag + " record",
+				"tags":        []string{"attachments"},
+				"parameters":  []any{nameParam, idParam},
+				"requestBody": map[string]any{
+					"required": true,
+					"content": map[string]any{
+						"multipart/form-data": map[string]any{
+							"schema": map[string]any{
+								"type":       "object",
+								"required":   []string{"file"},
+								"properties": map[string]any{"file": map[string]any{"type": "string", "format": "binary"}},
+							},
+						},
+					},
+				},
+				"responses": mergeResponses(map[string]any{
+					"201": responseWithSchema("Created", "#/components/schemas/AttachmentEnvelope"),
+					"415": responseWithSchema("Unsupported Media Type", "#/components/schemas/Error"),
+				}, errorResponses),
+			},
+		}
+	}
+	attachmentItem := map[string]any{
+		"get": map[string]any{
+			"operationId": "downloadAttachment",
+			"summary":     "Download an attachment",
+			"tags":        []string{"attachments"},
+			"parameters":  []any{aidParam},
+			"responses": mergeResponses(map[string]any{"200": map[string]any{
+				"description": "Binary file",
+				"content":     map[string]any{"application/octet-stream": map[string]any{"schema": map[string]any{"type": "string", "format": "binary"}}},
+			}}, errorResponses),
+		},
+		"delete": map[string]any{
+			"operationId": "deleteAttachment",
+			"summary":     "Delete an attachment",
+			"tags":        []string{"attachments"},
+			"parameters":  []any{aidParam},
+			"responses":   mergeResponses(map[string]any{"204": noContent}, errorResponses),
+		},
+	}
 	return map[string]any{
-		"/api/v2/catalog/{name}":              crud("catalog"),
-		"/api/v2/catalog/{name}/{id}":         item("catalog"),
-		"/api/v2/document/{name}":             crud("document"),
-		"/api/v2/document/{name}/{id}":        item("document"),
-		"/api/v2/document/{name}/{id}/post":   actionPath("postDocument", "Post document", nameParam, idParam, mutationEnvelope, errorResponses),
-		"/api/v2/document/{name}/{id}/unpost": actionPath("unpostDocument", "Unpost document", nameParam, idParam, mutationEnvelope, errorResponses),
-		"/api/v2/report/{name}":               reportPath(nameParam, reportEnvelope, errorResponses),
+		"/api/v2/catalog/{name}":                   crud("catalog"),
+		"/api/v2/catalog/{name}/{id}":              item("catalog"),
+		"/api/v2/catalog/{name}/{id}/attachments":  attachmentsCollection("catalog"),
+		"/api/v2/document/{name}":                  crud("document"),
+		"/api/v2/document/{name}/{id}":             item("document"),
+		"/api/v2/document/{name}/{id}/attachments": attachmentsCollection("document"),
+		"/api/v2/attachments/{aid}":                attachmentItem,
+		"/api/v2/document/{name}/{id}/post":        actionPath("postDocument", "Post document", nameParam, idParam, mutationEnvelope, errorResponses),
+		"/api/v2/document/{name}/{id}/unpost":      actionPath("unpostDocument", "Unpost document", nameParam, idParam, mutationEnvelope, errorResponses),
+		"/api/v2/report/{name}":                    reportPath(nameParam, reportEnvelope, errorResponses),
 		"/api/v2/openapi.json": map[string]any{
 			"get": map[string]any{
 				"operationId": "getOpenAPI",

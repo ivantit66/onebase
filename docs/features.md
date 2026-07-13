@@ -1116,6 +1116,27 @@ CRUD справочников и документов, фильтры `filter[П
 **Как попробовать.** Откройте [`docs/rest-api-v2.md`](rest-api-v2.md), выполните curl-пример
 списка справочника или отчёта и проверьте `/api/v2/openapi.json`.
 
+## REST API v2: вложения (attachments)
+<!-- status: testing -->
+<!-- date: 2026-07-13 -->
+<!-- issue: 315 -->
+
+Загрузка, список, скачивание и удаление вложений к документам и справочникам теперь
+доступны в `/api/v2` под Bearer-токеном, а не только по сессионной куке UI. Интеграции
+работают с файлами по публичному контракту с теми же проверками владельца (RBAC +
+построчный доступ), что и в интерфейсе. Эндпоинты:
+`GET/POST /api/v2/{catalog|document}/{Имя}/{id}/attachments` (список и multipart-загрузка,
+поле `file`), `GET /api/v2/attachments/{aid}` (скачать), `DELETE /api/v2/attachments/{aid}`
+(удалить) — описаны в `openapi.json`. Серверная проверка `attachments.allowed_types`
+(по расширению файла) теперь применяется и к REST-, и к UI-загрузке.
+
+**Как настроить.** Блок `attachments:` в `config/app.yaml` (`max_file_size_mb`,
+`allowed_types`); доступ — по Bearer API-токену с правами на сущность-владельца.
+
+**Как попробовать.** Bearer-токеном загрузите файл
+`POST /api/v2/catalog/<Справочник>/<id>/attachments` (multipart, поле `file`), затем
+получите список тем же URL и скачайте бинарник по `GET /api/v2/attachments/<aid>`.
+
 ## Webhook-уведомления
 <!-- status: stable -->
 
