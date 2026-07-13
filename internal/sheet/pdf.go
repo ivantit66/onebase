@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/go-pdf/fpdf"
@@ -80,6 +82,46 @@ func formatSizeMM(format string) (w, h float64) {
 	default: // A4
 		return 210, 297
 	}
+}
+
+// customFormatRe распознаёт кастомный размер страницы вида "229x162",
+// "229x162mm", "229 × 162 мм", "210,5x297" — Ш×В в миллиметрах. Разделитель —
+// латинские x/X, кириллическая х, знак умножения × или *. Десятичный разделитель
+// — точка или запятая. Суффикс mm/мм необязателен.
+var customFormatRe = regexp.MustCompile(`^\s*([0-9]+(?:[.,][0-9]+)?)\s*[xXхХ×*]\s*([0-9]+(?:[.,][0-9]+)?)\s*(?:mm|мм)?\s*$`)
+
+// customFormatMM разбирает кастомный размер страницы в мм. Возвращает
+// (ширина, высота, true) при совпадении с customFormatRe; иначе (0,0,false) —
+// формат считается именованным (A4/A5/…). Размер трактуется ЛИТЕРАЛЬНО (как
+// CSS @page size: W H): ориентация к нему не применяется. Позволяет печатать
+// нестандартные бланки (конверты, ярлыки) без новых полей — через тот же
+// page.format в макете и РазмерСтраницы в DSL.
+func customFormatMM(format string) (w, h float64, ok bool) {
+	m := customFormatRe.FindStringSubmatch(format)
+	if m == nil {
+		return 0, 0, false
+	}
+	w, err1 := strconv.ParseFloat(strings.Replace(m[1], ",", ".", 1), 64)
+	h, err2 := strconv.ParseFloat(strings.Replace(m[2], ",", ".", 1), 64)
+	if err1 != nil || err2 != nil || w <= 0 || h <= 0 {
+		return 0, 0, false
+	}
+	return w, h, true
+}
+
+// pageSizeMM возвращает ФИНАЛЬНЫЙ размер страницы (мм) с учётом ориентации:
+// для именованного формата — портретные размеры со свопом в ландшафте; для
+// кастомного "Ш×В" — литерально (ориентация уже заложена в размер). Единая точка
+// для пагинации (usablePageHeightMM) и сборки fpdf.
+func pageSizeMM(page PageSetup) (w, h float64) {
+	if cw, ch, ok := customFormatMM(page.Format); ok {
+		return cw, ch
+	}
+	w, h = formatSizeMM(page.Format)
+	if orientLandscape(page.Orientation) {
+		w, h = h, w
+	}
+	return w, h
 }
 
 // resolveFont выбирает семейство и начертание PT-шрифта по стилю ячейки.
@@ -199,7 +241,18 @@ func (d *Document) PDF(opts PDFOptions) ([]byte, error) {
 	if page.Format == "" {
 		page = DefaultPageSetup()
 	}
-	pdf := fpdf.New(orientFlag(page.Orientation), "mm", pageFormat(page.Format), "")
+	var pdf *fpdf.Fpdf
+	if cw, ch, ok := customFormatMM(page.Format); ok {
+		// Кастомный размер: литеральные Ш×В в портретной ориентации fpdf
+		// (свопа нет — ориентация уже в размере). Size приоритетнее SizeStr.
+		pdf = fpdf.NewCustom(&fpdf.InitType{
+			OrientationStr: "P",
+			UnitStr:        "mm",
+			Size:           fpdf.SizeType{Wd: cw, Ht: ch},
+		})
+	} else {
+		pdf = fpdf.New(orientFlag(page.Orientation), "mm", pageFormat(page.Format), "")
+	}
 	registerFonts(pdf)
 
 	m := page.MarginsMM

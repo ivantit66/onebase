@@ -1342,8 +1342,17 @@ function _ldGridCols(n){var c=_ldColCount(n);return c>8?c:8;}
 // ── Границы листа (формат/ориентация/поля) ────────────────────────
 // Чтобы вписать форму в размер: печатная ширина = ширина формата − левое − правое
 // поле; колонки px→мм при 96dpi (как pxToMM в sheet/pdf.go).
+// _ldCustomDims — кастомный размер "Ш×В" в мм ("229x162mm"), как customFormatMM
+// в sheet/pdf.go; null если формат именованный. Размер литеральный (без свопа).
+function _ldCustomDims(fmt){
+  var m=/^\s*(\d+(?:[.,]\d+)?)\s*[xх×*]\s*(\d+(?:[.,]\d+)?)\s*(?:mm|мм)?\s*$/i.exec(String(fmt||''));
+  if(!m)return null;
+  var w=parseFloat(m[1].replace(',','.')),h=parseFloat(m[2].replace(',','.'));
+  return (w>0&&h>0)?[w,h]:null;
+}
 // _ldFmtDims — портретные размеры формата (мм), как formatSizeMM в sheet/pdf.go.
 function _ldFmtDims(fmt){
+  var c=_ldCustomDims(fmt);if(c)return c;
   var t={A4:[210,297],A5:[148,210],A3:[297,420],LETTER:[215.9,279.4],LEGAL:[215.9,355.6]};
   return t[String(fmt||'A4').toUpperCase().trim()]||t.A4;
 }
@@ -1358,15 +1367,19 @@ function _ldEffMargins(n){
 // _ldPageInfo — печатная ширина листа (мм и CSS-px) + подпись формата.
 function _ldPageInfo(n){
   var s=_led[n],p=(s&&s.data&&s.data.page)?s.data.page:null;
-  var fmt=String((p&&p.format)||'A4').toUpperCase().trim();
-  var dm=_ldFmtDims(fmt),w=dm[0],hh=dm[1];
+  var raw=String((p&&p.format)||'A4').trim();
+  var cust=_ldCustomDims(raw),fmt=raw.toUpperCase();
+  var dm=cust||_ldFmtDims(fmt),w=dm[0],hh=dm[1];
   var land=/^(land|альб|гор)/i.test((p&&p.orientation)||'');
-  if(land){var tmp=w;w=hh;hh=tmp;}
+  if(land&&!cust){var tmp=w;w=hh;hh=tmp;} // кастомный размер литеральный — без свопа
   var em=_ldEffMargins(n);
   var cmm=w-em.left-em.right;if(cmm<10)cmm=10;
-  var disp={A4:'A4',A5:'A5',A3:'A3',LETTER:'Letter',LEGAL:'Legal'}[fmt]||'A4';
-  return {contentMM:cmm,contentPx:cmm*96/25.4,fmt:disp,land:land,
-          label:disp+(land?' '+T("альбомная"):' '+T("книжная"))+' · '+Math.round(cmm)+' '+T("мм")};
+  // Для хранения (ldEnsurePage) кастом отдаёт СЫРУЮ строку формата, а красивую
+  // подпись — только в label; иначе p.format затёрся бы «229×162 мм».
+  var disp=cust?(w+'×'+hh+' '+T("мм")):({A4:'A4',A5:'A5',A3:'A3',LETTER:'Letter',LEGAL:'Legal'}[fmt]||'A4');
+  var lbl=cust?(disp+' · '+Math.round(cmm)+' '+T("мм")):
+               (disp+(land?' '+T("альбомная"):' '+T("книжная"))+' · '+Math.round(cmm)+' '+T("мм"));
+  return {contentMM:cmm,contentPx:cmm*96/25.4,fmt:(cust?raw:disp),land:land,label:lbl};
 }
 // ldEnsurePage создаёт page с действующими значениями (вывод не меняется).
 function ldEnsurePage(n){

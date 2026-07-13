@@ -156,7 +156,9 @@ type Margins struct {
 
 // PageSetup — параметры страницы для PDF-рендера (план 64, этап 2).
 // Orientation: "portrait"/"landscape" (плюс рус. синонимы нормализуются
-// в DSL-обвязке). Format: "A4"/"A5"/"Letter" и т.п. (передаётся в fpdf).
+// в DSL-обвязке). Format: именованный "A4"/"A5"/"Letter" и т.п. либо кастомный
+// "Ш×В" в мм ("229x162mm") — литеральный размер бланка (ориентация к нему не
+// применяется).
 // MarginsMM — поля в мм; YAML-ключ — естественный margins: (поле остаётся
 // MarginsMM в Go). Наполняется из page: YAML-макета (план 64, этап 3+).
 type PageSetup struct {
@@ -322,11 +324,7 @@ func (d *Document) PageBreak() {
 // usablePageHeightMM возвращает доступную высоту страницы (мм) по PageSetup:
 // высота формата минус верхнее и нижнее поля.
 func (d *Document) usablePageHeightMM() float64 {
-	w, h := formatSizeMM(d.Page.Format)
-	if orientLandscape(d.Page.Orientation) {
-		w, h = h, w
-	}
-	_ = w
+	_, h := pageSizeMM(d.Page)
 	usable := h - d.Page.MarginsMM.Top - d.Page.MarginsMM.Bottom
 	if usable <= 0 {
 		return h
