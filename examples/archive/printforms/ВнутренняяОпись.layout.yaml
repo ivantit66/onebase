@@ -1,0 +1,113 @@
+name: ВнутренняяОпись
+document: АрхивноеДело
+# Многостраничная регламентная форма: шапка таблицы (ШапкаТаблицы) повторяется
+# на каждой странице PDF через binding.repeat_header, строки описи выводятся по
+# табличной части «Документы» через binding.repeat, авто-разрыв страниц — по
+# высоте. Ничего HTML-в-поле не требуется (issue #313).
+columns:
+    - width: 40px # № п/п
+    - width: 70px # Индекс документа
+    - width: 70px # Дата документа
+    - {} # Заголовок документа (авто, самая широкая)
+    - width: 55px # Номера листов дела
+    - width: 80px # Примечание
+areas:
+    - name: Заголовок
+      rows:
+        - cells:
+            - text: ВНУТРЕННЯЯ ОПИСЬ
+              bold: true
+              align: center
+              fontSize: 14
+              colspan: 6
+        - cells:
+            - text: документов дела № {{ИндексДела}} «{{ЗаголовокДела}}»
+              align: center
+              colspan: 6
+        - cells:
+            - colspan: 6
+    - name: ШапкаТаблицы
+      rows:
+        - cells:
+            - text: № п/п
+              bold: true
+              align: center
+              border: all
+            - text: Индекс документа
+              bold: true
+              align: center
+              border: all
+            - text: Дата документа
+              bold: true
+              align: center
+              border: all
+            - text: Заголовок документа
+              bold: true
+              align: center
+              border: all
+            - text: Номера листов дела
+              bold: true
+              align: center
+              border: all
+            - text: Примечание
+              bold: true
+              align: center
+              border: all
+    - name: Строка
+      rows:
+        - cells:
+            - parameter: Ном
+              align: center
+              border: all
+            - parameter: Индекс
+              align: center
+              border: all
+            - parameter: Дата
+              align: center
+              border: all
+            - parameter: Заголовок
+              align: left
+              border: all
+            - parameter: Листы
+              align: center
+              border: all
+            - parameter: Примечание
+              align: left
+              border: all
+    - name: Заверитель
+      rows:
+        - cells:
+            - colspan: 6
+        - cells:
+            - text: 'Итого в опись включено _____________________ документов,'
+              colspan: 6
+        - cells:
+            - text: 'в них листов _____________________ (цифрами и прописью).'
+              colspan: 6
+        - cells:
+            - colspan: 6
+        - cells:
+            - text: 'Ответственный за делопроизводство: {{Ответственный}}  ____________  _______________'
+              colspan: 6
+        - cells:
+            - text: '(должность, подпись, расшифровка подписи)'
+              align: center
+              fontSize: 9
+              colspan: 6
+binding:
+    sequence:
+        - Заголовок
+        - ШапкаТаблицы
+        - Строка
+        - Заверитель
+    repeat_header: ШапкаТаблицы
+    repeat:
+        - area: Строка
+          source: Документы
+          parameters:
+            Ном: '@row'
+            Индекс: Индекс
+            Дата: ДатаДокумента
+            Заголовок: Заголовок
+            Листы: Листы
+            Примечание: Примечание

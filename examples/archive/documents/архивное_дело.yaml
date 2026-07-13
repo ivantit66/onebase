@@ -1,0 +1,32 @@
+name: АрхивноеДело
+posting: false
+numerator:
+  prefix: "Д-"
+  length: 6
+  period: year
+fields:
+  - name: Номер
+    type: string
+  - name: Дата
+    type: date
+  - name: ИндексДела
+    type: string
+  - name: ЗаголовокДела
+    type: string
+  - name: СрокХранения
+    type: string
+  - name: Ответственный
+    type: string
+tableparts:
+  - name: Документы
+    fields:
+      - name: Индекс
+        type: string
+      - name: ДатаДокумента
+        type: string
+      - name: Заголовок
+        type: string
+      - name: Листы
+        type: string
+      - name: Примечание
+        type: string
