@@ -1148,9 +1148,23 @@ obReady(function () {
         render(d.messages || []);
       }).catch(function () {});
     }
+    window.obReloadMessages = load;
     load();
     setInterval(load, 3000);
     document.addEventListener('submit', function () { setTimeout(load, 400); }, true);
+  }
+  // Во вкладочной оболочке (issue #322/#323) панель сообщений держит только
+  // верхнее окно: каждый iframe со своим setInterval(/ui/messages) + SSE упирал
+  // браузер в лимит ~6 соединений на хост, и переключение вкладок «зависало».
+  // Во фрейме панель не строим и не поллим — после submit просим верхнее окно
+  // обновиться, чтобы сообщение появилось сразу, а не через интервал.
+  if (window.__obEmbedded) {
+    document.addEventListener('submit', function () {
+      setTimeout(function () {
+        try { if (window.top && window.top.obReloadMessages) window.top.obReloadMessages(); } catch (e) {}
+      }, 400);
+    }, true);
+    return;
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
@@ -2111,6 +2125,13 @@ window.onebaseDevice = {
     };
     es.onerror = function () {};
   }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', connect);
-  else connect();
+  // Вкладочная оболочка (issue #322/#323): единственный SSE-поток /ui/events
+  // держит верхнее окно оболочки. Во фрейме не подключаемся — иначе N вкладок =
+  // N постоянных соединений (упор в лимит браузера ~6/хост) и дубли тостов
+  // (Hub.Publish доставляет каждому подписчику). События /ui/events глобальные
+  // для пользователя (уведомления, звонки) — формам во фреймах поток не нужен.
+  if (!window.__obEmbedded) {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', connect);
+    else connect();
+  }
 })();

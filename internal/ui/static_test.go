@@ -124,6 +124,30 @@ func TestToggleNextSingleHandler(t *testing.T) {
 	}
 }
 
+// TestTabShellSingleSSE фиксирует инвариант issue #322/#323: во вкладочной
+// оболочке /ui/app каждая вкладка — это <iframe>, который грузит полный ui.js.
+// Если каждый фрейм открывает свой EventSource('/ui/events') и поллит
+// /ui/messages, то N вкладок дают N+1 постоянных соединений: браузер упирается
+// в лимит ~6 соединений на хост, переключение вкладок «зависает» (а тосты
+// дублируются — Hub.Publish доставляет каждому подписчику). Поэтому оба
+// постоянных канала во фрейме (window.__obEmbedded) должны быть отключены —
+// единственное соединение держит верхнее окно оболочки, которое тоже грузит ui.js.
+func TestTabShellSingleSSE(t *testing.T) {
+	src := string(uiJS)
+	// SSE /ui/events подключается только в верхнем окне, не во фрейме оболочки.
+	if !strings.Contains(src, "if (!window.__obEmbedded) {") {
+		t.Error("ui.js должен подключать SSE /ui/events только вне вкладочного фрейма (гейт window.__obEmbedded)")
+	}
+	// Верхнее окно выставляет хук, которым фрейм после submit просит обновить
+	// панель сообщений — иначе сообщение появлялось бы только к следующему поллу.
+	if !strings.Contains(src, "window.obReloadMessages = load") {
+		t.Error("ui.js: верхнее окно должно выставлять window.obReloadMessages для фреймов оболочки")
+	}
+	if !strings.Contains(src, "window.top.obReloadMessages") {
+		t.Error("ui.js: embedded-фрейм после submit должен просить верхнее окно обновить сообщения")
+	}
+}
+
 func TestStaticQueryBuilderJS(t *testing.T) {
 	r := chi.NewRouter()
 	mountStatic(r)
