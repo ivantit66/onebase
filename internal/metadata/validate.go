@@ -20,7 +20,7 @@ func ValidateConstants(constants []*Constant, entities []*Entity, enums []*Enum)
 		if c.RefEntity != "" && !entityNames[c.RefEntity] {
 			return fmt.Errorf("constant %s references unknown entity %s", c.Name, c.RefEntity)
 		}
-		if c.EnumName != "" && len(enums) > 0 && !enumNames[c.EnumName] {
+		if c.EnumName != "" && !enumNames[c.EnumName] {
 			return fmt.Errorf("constant %s references unknown enum %s", c.Name, c.EnumName)
 		}
 	}

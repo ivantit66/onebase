@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/runtime"
 )
@@ -45,6 +46,8 @@ func TestValidateConstant(t *testing.T) {
 		{"string required: пусто → ошибка", byName["Организация"], "", true},
 		{"string required: заполнено → ок", byName["Организация"], "СТ ГК", false},
 		{"string необязательная: пусто → ок", byName["Комментарий"], "", false},
+		{"enum: описание не загружено → ошибка", &metadata.Constant{Name: "НДС", EnumName: "Нет"}, "20", true},
+		{"reference: описание не загружено → ошибка", &metadata.Constant{Name: "Орг", RefEntity: "Нет"}, uuid.NewString(), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

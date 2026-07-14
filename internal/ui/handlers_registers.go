@@ -550,7 +550,7 @@ func (s *Server) validateConstant(ctx context.Context, c *metadata.Constant, lan
 	case c.EnumName != "":
 		en := s.reg.GetEnum(c.EnumName)
 		if en == nil {
-			return ""
+			return fmt.Sprintf("Константа «%s»: перечисление %s не найдено", label, c.EnumName)
 		}
 		for _, v := range en.Values {
 			if v == val {
@@ -561,7 +561,7 @@ func (s *Server) validateConstant(ctx context.Context, c *metadata.Constant, lan
 	case c.RefEntity != "":
 		ent := s.reg.GetEntity(c.RefEntity)
 		if ent == nil {
-			return ""
+			return fmt.Sprintf("Константа «%s»: справочник %s не найден", label, c.RefEntity)
 		}
 		id, err := uuid.Parse(val)
 		if err != nil {

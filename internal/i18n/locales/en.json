@@ -1018,5 +1018,6 @@
   "Реквизит активности «%s» должен иметь тип bool": "Activity attribute \"%s\" must have type bool",
   "Скрытые": "Hidden",
   "Скрыть из выбора": "Hide from choices",
-  "Скрыть из выбора?": "Hide from choices?"
+  "Скрыть из выбора?": "Hide from choices?",
+  "Обязательное поле": "Required field"
 }
