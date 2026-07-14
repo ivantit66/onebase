@@ -30,11 +30,11 @@ type EntityResolver interface {
 
 // Package — конверт обмена.
 type Package struct {
-	Format    string          `json:"format"`
-	Plan      string          `json:"plan"`
-	FromNode  string          `json:"from_node"`
-	ToNode    string          `json:"to_node"`
-	MessageNo int64           `json:"message_no"`
+	Format    string `json:"format"`
+	Plan      string `json:"plan"`
+	FromNode  string `json:"from_node"`
+	ToNode    string `json:"to_node"`
+	MessageNo int64  `json:"message_no"`
 	// AckNo — «я получил от тебя сообщения вплоть до этого номера». Приёмник по
 	// нему очищает свою очередь к отправителю (подтверждение приёма пакетов,
 	// доставленных ранее в обратную сторону). 0 = нечего подтверждать.
@@ -46,13 +46,13 @@ type Package struct {
 // значения (числа — точной строкой, даты — RFC3339, ссылки — UUID-строкой),
 // пригодные для обратной записи через тот же путь, что и обычное сохранение.
 type PackageObject struct {
-	Type       string                       `json:"type"`
-	ID         string                       `json:"id"`
-	Version    int64                        `json:"version"`
-	Deletion   bool                         `json:"deletion,omitempty"`
-	ChangedAt  int64                        `json:"changed_at"`
-	Fields     map[string]any               `json:"fields,omitempty"`
-	TableParts map[string][]map[string]any  `json:"table_parts,omitempty"`
+	Type       string                      `json:"type"`
+	ID         string                      `json:"id"`
+	Version    int64                       `json:"version"`
+	Deletion   bool                        `json:"deletion,omitempty"`
+	ChangedAt  int64                       `json:"changed_at"`
+	Fields     map[string]any              `json:"fields,omitempty"`
+	TableParts map[string][]map[string]any `json:"table_parts,omitempty"`
 }
 
 // LoadResult — итог загрузки пакета.
@@ -70,11 +70,24 @@ func BuildPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 	if plan == nil {
 		return nil, fmt.Errorf("exchange: plan is nil")
 	}
+	toNodeDef := plan.Node(toNode)
+	if toNodeDef == nil {
+		return nil, fmt.Errorf("exchange: узел-получатель %q не описан в плане %q", toNode, plan.Name)
+	}
+	toNode = toNodeDef.Code
 	var out []byte
 	err := store.WithTx(ctx, func(ctx context.Context) error {
 		thisNode, err := store.GetExchangeThisNode(ctx, plan.Name)
 		if err != nil {
 			return err
+		}
+		thisNodeDef := plan.Node(thisNode)
+		if thisNode == "" || thisNodeDef == nil {
+			return fmt.Errorf("exchange: текущий узел базы не задан или не описан в плане %q", plan.Name)
+		}
+		thisNode = thisNodeDef.Code
+		if strings.EqualFold(thisNode, toNode) {
+			return fmt.Errorf("exchange: нельзя выгрузить пакет текущему узлу %q", toNode)
 		}
 		changes, err := store.PendingExchangeChanges(ctx, plan.Name, toNode)
 		if err != nil {
@@ -105,6 +118,13 @@ func BuildPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 			if err != nil {
 				continue // объект недоступен (например, физически удалён) — пропускаем
 			}
+			// Между чтением очереди и объекта могла завершиться новая запись.
+			// Не смешиваем её поля со старой версией пакета: новая строка очереди
+			// останется sent_no=0 и попадёт в следующий пакет.
+			version, err := store.EntityVersion(ctx, ent.Name, id)
+			if err != nil || version != ch.Version {
+				continue
+			}
 			obj := PackageObject{
 				Type:      ch.ObjectType,
 				ID:        ch.ObjectID,
@@ -113,20 +133,17 @@ func BuildPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 				ChangedAt: ch.ChangedAt,
 				Fields:    canonicalHeader(ent, row),
 			}
+			if len(ent.TableParts) > 0 {
+				obj.TableParts = make(map[string][]map[string]any, len(ent.TableParts))
+			}
 			for _, tp := range ent.TableParts {
 				rows, err := store.GetTablePartRows(ctx, ent.Name, tp.Name, id, tp)
 				if err != nil {
 					return err
 				}
-				if len(rows) == 0 {
-					continue
-				}
 				canon := make([]map[string]any, 0, len(rows))
 				for _, r := range rows {
 					canon = append(canon, canonicalRow(tp.Fields, r))
-				}
-				if obj.TableParts == nil {
-					obj.TableParts = map[string][]map[string]any{}
 				}
 				obj.TableParts[tp.Name] = canon
 			}
@@ -183,11 +200,38 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 		if err != nil {
 			return err
 		}
+		thisNodeDef := plan.Node(thisNode)
+		if thisNode == "" || thisNodeDef == nil {
+			return fmt.Errorf("exchange: текущий узел базы не задан или не описан в плане %q", plan.Name)
+		}
+		thisNode = thisNodeDef.Code
+		fromNodeDef := plan.Node(pkg.FromNode)
+		if pkg.FromNode == "" || fromNodeDef == nil {
+			return fmt.Errorf("exchange: узел-источник %q не описан в плане %q", pkg.FromNode, plan.Name)
+		}
+		fromNode := fromNodeDef.Code
+		if pkg.ToNode == "" || !strings.EqualFold(pkg.ToNode, thisNode) {
+			return fmt.Errorf("exchange: пакет адресован узлу %q, текущий узел %q", pkg.ToNode, thisNode)
+		}
+		if strings.EqualFold(fromNode, thisNode) {
+			return fmt.Errorf("exchange: пакет не может быть отправлен текущим узлом %q самому себе", thisNode)
+		}
+		// Сначала применяем подтверждение. Подтверждённая отправителем строка
+		// очереди уже не является встречной правкой и не должна участвовать в
+		// разрешении конфликта (особенно при by_node_priority).
+		if pkg.AckNo > 0 {
+			if _, err := store.AckExchangeChanges(ctx, plan.Name, fromNode, pkg.AckNo); err != nil {
+				return err
+			}
+		}
 		for _, obj := range pkg.Objects {
 			ent := resolver.GetEntity(obj.Type)
 			if ent == nil {
 				res.Skipped++ // сущность неизвестна приёмнику
 				continue
+			}
+			if !plan.Includes(ent) {
+				return fmt.Errorf("exchange: сущность %q не входит в состав плана %q", obj.Type, plan.Name)
 			}
 			id, err := uuid.Parse(obj.ID)
 			if err != nil {
@@ -196,13 +240,14 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 			}
 			// Встречная правка: приёмник менял тот же объект и ещё не отправил
 			// изменение источнику → конфликт, разрешаемый правилом плана.
-			local, hasLocal, err := store.GetExchangeChange(ctx, plan.Name, obj.Type, obj.ID, pkg.FromNode)
+			objectID := id.String()
+			local, hasLocal, err := store.GetExchangeChange(ctx, plan.Name, ent.Name, objectID, fromNode)
 			if err != nil {
 				return err
 			}
 			if hasLocal {
 				res.Conflicts++
-				win, err := resolveConflict(ctx, store, plan, thisNode, pkg.FromNode, ent, id, obj, local.ChangedAt, opts.Hook)
+				win, err := resolveConflict(ctx, store, plan, thisNode, fromNode, ent, id, obj, local.ChangedAt, opts.Hook)
 				if err != nil {
 					return err
 				}
@@ -211,6 +256,9 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 					continue
 				}
 				if err := applyObject(ctx, store, ent, id, obj); err != nil {
+					return err
+				}
+				if err := store.DeleteExchangeChange(ctx, plan.Name, ent.Name, objectID, fromNode); err != nil {
 					return err
 				}
 				if obj.Deletion {
@@ -235,18 +283,9 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 				res.Applied++
 			}
 		}
-		if pkg.FromNode != "" {
-			// Подтверждение из пакета очищает нашу очередь к отправителю: он
-			// сообщил, что принял наши сообщения вплоть до AckNo.
-			if pkg.AckNo > 0 {
-				if _, err := store.AckExchangeChanges(ctx, plan.Name, pkg.FromNode, pkg.AckNo); err != nil {
-					return err
-				}
-			}
-			// Запоминаем номер принятого сообщения от узла-источника.
-			if err := store.SetExchangeRecvNo(ctx, plan.Name, pkg.FromNode, pkg.MessageNo); err != nil {
-				return err
-			}
+		// Запоминаем номер принятого сообщения от узла-источника.
+		if err := store.SetExchangeRecvNo(ctx, plan.Name, fromNode, pkg.MessageNo); err != nil {
+			return err
 		}
 		return nil
 	})

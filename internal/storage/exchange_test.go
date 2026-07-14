@@ -4,6 +4,8 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func newExchangeDB(t *testing.T) (*DB, context.Context) {
@@ -57,7 +59,10 @@ func TestExchangeRegisterAndPending(t *testing.T) {
 		}
 	}
 	// Повторная правка (upsert) поднимает версию и сбрасывает sent_no.
-	sent := []ExchangeChange{{Plan: "Обмен", ObjectType: "Номенклатура", ObjectID: "id-1", NodeCode: "fil01"}}
+	sent, err := db.PendingExchangeChanges(ctx, "Обмен", "fil01")
+	if err != nil || len(sent) != 1 {
+		t.Fatalf("pending перед отправкой: %+v, %v", sent, err)
+	}
 	if err := db.MarkExchangeChangesSent(ctx, sent, 5); err != nil {
 		t.Fatal(err)
 	}
@@ -169,5 +174,32 @@ func TestExchangeRecvNoMonotonic(t *testing.T) {
 	peer, _ := db.GetExchangePeer(ctx, "Обмен", "center")
 	if peer.RecvNo != 5 {
 		t.Errorf("recv_no = %d, want 5 (монотонно)", peer.RecvNo)
+	}
+}
+
+func TestMarkExchangeChangesSentDoesNotHideNewerChange(t *testing.T) {
+	db, ctx := newExchangeDB(t)
+	old := ExchangeChange{
+		Plan: "Обмен", ObjectType: "Товар", ObjectID: uuid.NewString(), NodeCode: "fil01",
+		Version: 1, ChangedAt: 1000,
+	}
+	if err := db.RegisterExchangeChange(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	newer := old
+	newer.Version = 2
+	newer.ChangedAt = 2000
+	if err := db.RegisterExchangeChange(ctx, newer); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkExchangeChangesSent(ctx, []ExchangeChange{old}, 7); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := db.PendingExchangeChanges(ctx, "Обмен", "fil01")
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending: %+v, %v", pending, err)
+	}
+	if pending[0].Version != 2 || pending[0].SentNo != 0 {
+		t.Fatalf("новая правка была ошибочно помечена старым пакетом: %+v", pending[0])
 	}
 }

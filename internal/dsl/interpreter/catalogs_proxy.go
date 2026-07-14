@@ -500,7 +500,7 @@ func (w *CatalogRecordWriter) CallMethod(method string, args []any) any {
 		}
 		return &Ref{
 			UUID: id, Name: name, Type: w.entity.Name,
-			Manager: &CatalogProxy{entity: w.entity, db: w.db, ctxSrc: w.ctxSrc, access: w.access},
+			Manager: &CatalogProxy{entity: w.entity, db: w.db, ctxSrc: w.ctxSrc, access: w.access, registrar: w.registrar},
 		}
 	case "установитьзначение", "setvalue":
 		if len(args) >= 2 {

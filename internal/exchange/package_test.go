@@ -2,6 +2,7 @@ package exchange_test
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -90,6 +91,8 @@ func TestPackageRoundTrip(t *testing.T) {
 	res := fakeResolver{"Товар": ent}
 	a, ctxA := newBase(t, ent)
 	b, ctxB := newBase(t, ent)
+	_ = a.SaveExchangeThisNode(ctxA, "Обмен", "center")
+	_ = b.SaveExchangeThisNode(ctxB, "Обмен", "fil01")
 
 	id := uuid.New()
 	registerObj(t, a, ctxA, ent, id, map[string]any{
@@ -143,6 +146,8 @@ func TestPackageVersionRule(t *testing.T) {
 	res := fakeResolver{"Товар": ent}
 	a, ctxA := newBase(t, ent)
 	b, ctxB := newBase(t, ent)
+	_ = a.SaveExchangeThisNode(ctxA, "Обмен", "center")
+	_ = b.SaveExchangeThisNode(ctxB, "Обмен", "fil01")
 
 	id := uuid.New()
 	// В B заранее лежит объект версии 3.
@@ -183,6 +188,8 @@ func TestPackageTableParts(t *testing.T) {
 	res := fakeResolver{"Продажа": doc}
 	a, ctxA := newBase(t, doc)
 	b, ctxB := newBase(t, doc)
+	_ = a.SaveExchangeThisNode(ctxA, "Обмен", "center")
+	_ = b.SaveExchangeThisNode(ctxB, "Обмен", "fil01")
 
 	id := uuid.New()
 	if err := a.Upsert(ctxA, doc.Name, id, map[string]any{"Номер": "0001"}, doc); err != nil {
@@ -225,6 +232,54 @@ func TestPackageTableParts(t *testing.T) {
 	// Документ приходит непроведённым.
 	if row, _ := b.GetByID(ctxB, doc.Name, id, doc); toBoolT(row["posted"]) {
 		t.Error("документ должен прийти непроведённым (posted=false)")
+	}
+
+	// Очистка ТЧ тоже должна реплицироваться. Пустой слайс в пакете отличает
+	// «очистить» от старого/частичного пакета, где ключ ТЧ отсутствует.
+	if err := a.Upsert(ctxA, doc.Name, id, map[string]any{"Номер": "0001"}, doc); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.UpsertTablePartRows(ctxA, doc.Name, "Строки", id, []map[string]any{}, doc.TableParts[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := exchange.RegisterOnSave(ctxA, a, []*metadata.ExchangePlan{plan}, doc, id, false); err != nil {
+		t.Fatal(err)
+	}
+	data, err = exchange.BuildPackage(ctxA, a, res, plan, "fil01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exchange.ApplyPackage(ctxB, b, res, plan, data, exchange.ApplyOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = b.GetTablePartRows(ctxB, doc.Name, "Строки", id, doc.TableParts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("очистка ТЧ не реплицировалась: %+v", rows)
+	}
+}
+
+func TestPackageRejectsEntityOutsidePlanContent(t *testing.T) {
+	allowed := catalogTovar()
+	other := &metadata.Entity{
+		Name: "Секрет", Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{{Name: "Наименование", Type: metadata.FieldTypeString}},
+	}
+	db, ctx := newBase(t, allowed, other)
+	_ = db.SaveExchangeThisNode(ctx, "Обмен", "fil01")
+	pkg := exchange.Package{
+		Format: exchange.FormatV1, Plan: "Обмен", FromNode: "center", ToNode: "fil01", MessageNo: 1,
+		Objects: []exchange.PackageObject{{
+			Type: other.Name, ID: uuid.NewString(), Version: 1, ChangedAt: 1,
+			Fields: map[string]any{"Наименование": "нельзя"},
+		}},
+	}
+	data, _ := json.Marshal(pkg)
+	_, err := exchange.ApplyPackage(ctx, db, fakeResolver{"Товар": allowed, "Секрет": other}, planTovar(), data, exchange.ApplyOptions{})
+	if err == nil || !strings.Contains(err.Error(), "не входит в состав") {
+		t.Fatalf("ожидался отказ для сущности вне состава плана, got %v", err)
 	}
 }
 
@@ -278,8 +333,10 @@ func TestPackageAckDrains(t *testing.T) {
 }
 
 func markVersion(db *storage.DB, ctx context.Context, ent *metadata.Entity, id uuid.UUID, v int64) error {
-	// Обновляем и объект (реальная версия для BuildPackage не важна — берётся из
-	// строки очереди), и строку очереди.
+	// Обновляем и объект, и строку очереди до одной версии.
+	if err := db.SetExchangeObjectState(ctx, ent, id, v, false); err != nil {
+		return err
+	}
 	return db.RegisterExchangeChange(ctx, storage.ExchangeChange{
 		Plan: "Обмен", ObjectType: ent.Name, ObjectID: id.String(), NodeCode: "fil01", Version: v, ChangedAt: 1000,
 	})

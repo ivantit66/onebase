@@ -76,7 +76,7 @@ func TestExchangeHookResolvesConflict(t *testing.T) {
 	}
 	incoming := func(id uuid.UUID, name string) []byte {
 		pkg := exchange.Package{
-			Format: exchange.FormatV1, Plan: "Обмен", FromNode: "center", MessageNo: 1,
+			Format: exchange.FormatV1, Plan: "Обмен", FromNode: "center", ToNode: "fil01", MessageNo: 1,
 			Objects: []exchange.PackageObject{{Type: "Товар", ID: id.String(), Version: 2, ChangedAt: 500,
 				Fields: map[string]any{"Наименование": name}}},
 		}

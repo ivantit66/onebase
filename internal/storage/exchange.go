@@ -231,17 +231,35 @@ func (db *DB) GetExchangeChange(ctx context.Context, plan, objectType, objectID,
 	return ch, true, nil
 }
 
-// MarkExchangeChangesSent проставляет sent_no выгруженным строкам (по точным
-// первичным ключам, чтобы не задеть строки, зарегистрированные после выборки).
+// MarkExchangeChangesSent проставляет sent_no только той версии строки, которая
+// была выбрана в пакет. Если параллельная запись уже подняла version/changed_at
+// и сбросила sent_no, оптимистическое условие оставит новую правку в очереди.
 func (db *DB) MarkExchangeChangesSent(ctx context.Context, changes []ExchangeChange, messageNo int64) error {
 	d := db.dialect
 	q := fmt.Sprintf(`UPDATE _exchange_changes SET sent_no = %s
-		WHERE plan = %s AND object_type = %s AND object_id = %s AND node_code = %s`,
-		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4), d.Placeholder(5))
+		WHERE plan = %s AND object_type = %s AND object_id = %s AND node_code = %s
+		  AND version = %s AND changed_at = %s`,
+		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4), d.Placeholder(5),
+		d.Placeholder(6), d.Placeholder(7))
 	for _, ch := range changes {
-		if _, err := db.Exec(ctx, q, messageNo, ch.Plan, ch.ObjectType, ch.ObjectID, ch.NodeCode); err != nil {
+		if _, err := db.Exec(ctx, q, messageNo, ch.Plan, ch.ObjectType, ch.ObjectID, ch.NodeCode,
+			ch.Version, ch.ChangedAt); err != nil {
 			return fmt.Errorf("exchange: mark sent: %w", err)
 		}
+	}
+	return nil
+}
+
+// DeleteExchangeChange снимает конкретную встречную правку из очереди. Это
+// нужно, когда конфликт разрешён в пользу входящего объекта: проигравшее
+// локальное изменение больше не должно уехать источнику следующим пакетом.
+func (db *DB) DeleteExchangeChange(ctx context.Context, plan, objectType, objectID, nodeCode string) error {
+	d := db.dialect
+	q := fmt.Sprintf(`DELETE FROM _exchange_changes
+		WHERE plan = %s AND object_type = %s AND object_id = %s AND node_code = %s`,
+		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4))
+	if _, err := db.Exec(ctx, q, plan, objectType, objectID, nodeCode); err != nil {
+		return fmt.Errorf("exchange: delete change: %w", err)
 	}
 	return nil
 }

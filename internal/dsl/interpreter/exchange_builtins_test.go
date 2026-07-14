@@ -141,7 +141,8 @@ func TestCatalogWriteRegistersExchange(t *testing.T) {
 	proxy := root.Get("Товар").(*CatalogProxy)
 	w := proxy.CallMethod("создать", nil).(*CatalogRecordWriter)
 	w.CallMethod("установитьзначение", []any{"Наименование", "Гвоздь"})
-	if ref := w.CallMethod("записать", nil); ref == nil {
+	ref, ok := w.CallMethod("записать", nil).(*Ref)
+	if !ok || ref == nil {
 		t.Fatal("Записать вернул nil")
 	}
 
@@ -152,5 +153,23 @@ func TestCatalogWriteRegistersExchange(t *testing.T) {
 	}
 	if len(pend) != 1 || pend[0].ObjectType != "Товар" {
 		t.Fatalf("прямая запись справочника не зарегистрирована: %+v", pend)
+	}
+
+	// Менеджер возвращённой ссылки обязан сохранить registrar: иначе цепочка
+	// Создать().Записать().ПолучитьОбъект().Записать() регистрирует только
+	// первое изменение.
+	if err := db.DeleteExchangeChange(ctx, "Обмен", "Товар", ref.UUID, "fil01"); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := ref.Manager.LoadObject(ref.UUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := loaded.(*CatalogRecordWriter)
+	updated.CallMethod("установитьзначение", []any{"Наименование", "Шуруп"})
+	updated.CallMethod("записать", nil)
+	pend, err = db.PendingExchangeChanges(ctx, "Обмен", "fil01")
+	if err != nil || len(pend) != 1 {
+		t.Fatalf("повторная запись через ссылку не зарегистрирована: %+v, %v", pend, err)
 	}
 }
