@@ -42,9 +42,10 @@ type Project struct {
 	ServicePrograms  map[string]*ast.Program // план 61: service name → обработчики .service.os (отдельный namespace, чтобы не затирать модуль одноимённого документа)
 	PagePrograms     map[string]*ast.Program // план 66: page name → обработчики .page.os (отдельный namespace, как у сервисов)
 	Processors       []*processor.Processor
-	HTTPServices     []*httpservice.Service  // план 61: опубликованные HTTP-сервисы
-	Pages            []*page.Page            // план 66: страницы (произвольные представления на DSL)
-	Modules          map[string]*ast.Program // module name → parsed procs
+	HTTPServices     []*httpservice.Service   // план 61: опубликованные HTTP-сервисы
+	Pages            []*page.Page             // план 66: страницы (произвольные представления на DSL)
+	ExchangePlans    []*metadata.ExchangePlan // план 86: планы обмена данными между базами
+	Modules          map[string]*ast.Program  // module name → parsed procs
 	Subsystems       []*metadata.Subsystem
 	Journals         []*metadata.Journal
 	ScheduledJobs    []*metadata.ScheduledJob
@@ -269,6 +270,9 @@ func Load(dir string) (*Project, error) {
 	if err := p.loadPages(); err != nil {
 		return nil, err
 	}
+	if err := p.loadExchangePlans(); err != nil {
+		return nil, err
+	}
 	if err := p.loadSubsystems(); err != nil {
 		return nil, err
 	}
@@ -382,6 +386,17 @@ func (p *Project) loadPages() error {
 		return fmt.Errorf("project: load pages: %w", err)
 	}
 	p.Pages = pages
+	return nil
+}
+
+// loadExchangePlans читает exchange/*.yaml (план 86). Обработчики конфликтов
+// (.exchange.os) грузятся отдельно; для файлового цикла достаточно метаданных.
+func (p *Project) loadExchangePlans() error {
+	plans, err := metadata.LoadExchangePlanDir(filepath.Join(p.Dir, "exchange"))
+	if err != nil {
+		return fmt.Errorf("project: load exchange plans: %w", err)
+	}
+	p.ExchangePlans = plans
 	return nil
 }
 
