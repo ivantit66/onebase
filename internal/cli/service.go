@@ -21,6 +21,11 @@ var serviceCmd = &cobra.Command{
 var serviceInstallCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install onebase as a system service (systemd on Linux, sc.exe on Windows)",
+	Long: `Install onebase as a system service (systemd on Linux, sc.exe on Windows).
+
+На Windows сервис запускается от LocalSystem. Эта учётная запись не видит
+сетевые диски, подключённые в пользовательской сессии (Z:, X: и т.п.). Для
+проекта и SQLite используйте локальный путь или UNC (\\server\share\...).`,
 	Example: `  onebase service install --id <base-id>
   onebase service install --db "postgres://..." --port 8080 --name myapp
   onebase service install --sqlite ./base.db --project ./project --config-source file --port 8080 --name myapp`,
@@ -226,31 +231,59 @@ func installSystemd(exe, svcName, displayName, dsn, sqlitePath, dbType, configSo
 // ── Windows service ───────────────────────────────────────────────────────────
 
 func installWindowsService(exe, svcName, displayName, dsn, sqlitePath, dbType, configSource, proj string, port int, watch, printOnly bool) error {
-	dbArg := fmt.Sprintf(`--db "%s"`, dsn)
+	servicePaths := []namedPath{{Label: "каталог проекта", Path: proj}}
 	if dbType == "sqlite" {
-		dbArg = fmt.Sprintf(`--sqlite "%s"`, sqlitePath)
+		servicePaths = append(servicePaths, namedPath{Label: "файл SQLite", Path: sqlitePath})
 	}
-	args := fmt.Sprintf(`run --config-source %s %s --port %d`, configSource, dbArg, port)
-	if proj != "" {
-		args += fmt.Sprintf(` --project "%s"`, proj)
+	mapped, err := findMappedNetworkPaths(servicePaths, detectMappedNetworkDrive)
+	if err != nil {
+		return fmt.Errorf("проверка путей Windows-сервиса: %w", err)
 	}
-	if watch {
-		args += " --watch"
+	if len(mapped) > 0 {
+		advice := mappedDriveAdvice(mapped)
+		if !printOnly {
+			return fmt.Errorf("%s", advice)
+		}
+		fmt.Fprintln(os.Stderr, "Предупреждение:", advice)
 	}
 
-	scCmd := fmt.Sprintf(`sc.exe create "%s" binPath= "%s %s" start= auto DisplayName= "OneBase — %s"`,
-		svcName, exe, args, displayName)
+	dbFlag, dbValue := "--db", dsn
+	if dbType == "sqlite" {
+		dbFlag, dbValue = "--sqlite", sqlitePath
+	}
+	serviceArgs := []string{
+		"run", "--config-source", quoteWindowsCommandArg(configSource),
+		dbFlag, quoteWindowsCommandArgAlways(dbValue),
+		"--port", fmt.Sprint(port),
+	}
+	if proj != "" {
+		serviceArgs = append(serviceArgs, "--project", quoteWindowsCommandArgAlways(proj))
+	}
+	if watch {
+		serviceArgs = append(serviceArgs, "--watch")
+	}
+
+	// SCM хранит binPath как готовую командную строку. Кавычки должны окружать
+	// только executable, иначе CreateProcess обрежет путь на первом пробеле.
+	// Значение остаётся отдельным аргументом exec.Command — shell не участвует.
+	binPath := quoteWindowsCommandArgAlways(exe) + " " + strings.Join(serviceArgs, " ")
+	scCmd := strings.Join([]string{
+		"sc.exe", "create", quoteWindowsCommandArg(svcName),
+		"binPath=", quoteWindowsCommandArg(binPath),
+		"start=", "auto",
+		"DisplayName=", quoteWindowsCommandArg("OneBase — " + displayName),
+	}, " ")
 
 	if printOnly {
 		fmt.Println("# Выполните от имени администратора:")
 		fmt.Println(scCmd)
-		fmt.Printf(`sc.exe description "%s" "OneBase business platform"`+"\n", svcName)
-		fmt.Printf(`sc.exe start "%s"`+"\n", svcName)
+		fmt.Printf("sc.exe description %s %s\n", quoteWindowsCommandArg(svcName), quoteWindowsCommandArg("OneBase business platform"))
+		fmt.Printf("sc.exe start %s\n", quoteWindowsCommandArg(svcName))
 		return nil
 	}
 
 	out, err := exec.Command("sc.exe", "create", svcName,
-		"binPath=", exe+" "+args,
+		"binPath=", binPath,
 		"start=", "auto",
 		"DisplayName=", "OneBase — "+displayName).CombinedOutput()
 	if err != nil {
