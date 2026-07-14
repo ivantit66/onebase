@@ -260,6 +260,10 @@ func (s *Server) Mount(r chi.Router) {
 	r.Post("/ui/admin/users/{id}/passwd", s.adminUserPasswd)
 	r.Post("/ui/admin/users/{id}/deny-passwd", s.adminUserDenyPasswd)
 
+	// Admin: монитор обмена данными (план 86)
+	r.Get("/ui/admin/exchange", s.exchangeMonitor)
+	r.Post("/ui/admin/exchange/sync", s.exchangeMonitorSync)
+
 	// Self-service: change own password
 	r.Get("/ui/profile/passwd", s.selfPasswd)
 	r.Post("/ui/profile/passwd", s.selfPasswd)

@@ -328,21 +328,7 @@ func runExchangeSync(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("узел этой базы не задан — выполните `onebase exchange init --node <код>`")
 	}
 
-	// Отправляем свои изменения партнёру.
-	out, err := exchange.BuildPackage(sp.ctx, sp.db, sp.resolver(), plan, with)
-	if err != nil {
-		return err
-	}
-	pushRes, err := exchange.PushPackage(sp.ctx, peer.URL, plan.Name, token, out)
-	if err != nil {
-		return err
-	}
-	// Забираем изменения партнёра, адресованные нам (пакет несёт и подтверждение).
-	pulled, err := exchange.PullPackage(sp.ctx, peer.URL, plan.Name, token, thisNode)
-	if err != nil {
-		return err
-	}
-	loadRes, err := exchange.ApplyPackage(sp.ctx, sp.db, sp.resolver(), plan, pulled, exchange.ApplyOptions{Hook: sp.hook()})
+	pushRes, loadRes, err := exchange.SyncWithNode(sp.ctx, sp.db, sp.resolver(), plan, thisNode, with, peer.URL, token, exchange.ApplyOptions{Hook: sp.hook()})
 	if err != nil {
 		return err
 	}
