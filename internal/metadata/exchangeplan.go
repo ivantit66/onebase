@@ -43,6 +43,10 @@ type ExchangeNode struct {
 	Code     string `yaml:"code"`
 	Name     string `yaml:"name"`
 	Priority int    `yaml:"priority"` // используется правилом by_node_priority
+	// URL — сетевой адрес базы узла для онлайн-обмена (например
+	// http://fil01:8080). Пусто — узел доступен только файловым обменом.
+	// Не секрет; поддерживает ${env:VAR} (раскрывается загрузчиком).
+	URL string `yaml:"url"`
 }
 
 // ContentEntry — разобранная запись состава обмена. Kind == "" означает «любой

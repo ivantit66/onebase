@@ -48,10 +48,17 @@ var exchangeStatusCmd = &cobra.Command{
 	RunE:  runExchangeStatus,
 }
 
+var exchangeSyncCmd = &cobra.Command{
+	Use:   "sync",
+	Short: "Обменяться изменениями с узлом по сети (push + pull)",
+	RunE:  runExchangeSync,
+}
+
 func init() {
 	addBaseFlags(exchangeInitCmd)
 	exchangeInitCmd.Flags().String("plan", "", "имя плана обмена (обязательно)")
 	exchangeInitCmd.Flags().String("node", "", "код текущего узла (обязательно)")
+	exchangeInitCmd.Flags().String("token", "", "общий токен плана для онлайн-обмена (одинаковый на всех участниках)")
 
 	addBaseFlags(exchangeDumpCmd)
 	exchangeDumpCmd.Flags().String("plan", "", "имя плана обмена (обязательно)")
@@ -64,7 +71,11 @@ func init() {
 	addBaseFlags(exchangeStatusCmd)
 	exchangeStatusCmd.Flags().String("plan", "", "имя плана обмена (обязательно)")
 
-	exchangeCmd.AddCommand(exchangeInitCmd, exchangeDumpCmd, exchangeLoadCmd, exchangeStatusCmd)
+	addBaseFlags(exchangeSyncCmd)
+	exchangeSyncCmd.Flags().String("plan", "", "имя плана обмена (обязательно)")
+	exchangeSyncCmd.Flags().String("with", "", "код узла-партнёра для обмена по сети (обязательно)")
+
+	exchangeCmd.AddCommand(exchangeInitCmd, exchangeDumpCmd, exchangeLoadCmd, exchangeStatusCmd, exchangeSyncCmd)
 	rootCmd.AddCommand(exchangeCmd)
 }
 
@@ -139,6 +150,12 @@ func runExchangeInit(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stdout, "Текущий узел для плана %q: %s\n", plan.Name, node)
+	if token, _ := cmd.Flags().GetString("token"); strings.TrimSpace(token) != "" {
+		if err := sp.db.SaveExchangeToken(sp.ctx, plan.Name, token); err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stdout, "Токен онлайн-обмена сохранён.")
+	}
 	return nil
 }
 
@@ -249,6 +266,66 @@ func runExchangeStatus(cmd *cobra.Command, _ []string) error {
 		fmt.Fprintf(os.Stdout, "  %-10s %-22s очередь=%d отпр.=%d подтв.=%d принято=%d%s\n",
 			n.Code, n.Name, counts[n.Code], peer.SentNo, peer.AckNo, peer.RecvNo, mark)
 	}
+	return nil
+}
+
+func runExchangeSync(cmd *cobra.Command, _ []string) error {
+	planName, _ := cmd.Flags().GetString("plan")
+	with, _ := cmd.Flags().GetString("with")
+	if planName == "" || with == "" {
+		return fmt.Errorf("укажите --plan <имя> и --with <код узла-партнёра>")
+	}
+	bc, sp, err := openExchangeBase(cmd)
+	if err != nil {
+		return err
+	}
+	defer bc.Cleanup()
+	defer sp.Close()
+
+	plan := findExchangePlan(sp.proj, planName)
+	if plan == nil {
+		return fmt.Errorf("план обмена %q не найден в конфигурации", planName)
+	}
+	peer := plan.Node(with)
+	if peer == nil {
+		return fmt.Errorf("узел %q не описан в плане %q (узлы: %s)", with, plan.Name, nodeCodes(plan))
+	}
+	if strings.TrimSpace(peer.URL) == "" {
+		return fmt.Errorf("у узла %q нет url — онлайн-обмен недоступен (задайте nodes[].url в плане)", with)
+	}
+	token, _ := sp.db.GetExchangeToken(sp.ctx, plan.Name)
+	if token == "" {
+		return fmt.Errorf("токен плана не задан — выполните `onebase exchange init --token <секрет>`")
+	}
+	thisNode, _ := sp.db.GetExchangeThisNode(sp.ctx, plan.Name)
+	if thisNode == "" {
+		return fmt.Errorf("узел этой базы не задан — выполните `onebase exchange init --node <код>`")
+	}
+
+	// Отправляем свои изменения партнёру.
+	out, err := exchange.BuildPackage(sp.ctx, sp.db, sp.resolver(), plan, with)
+	if err != nil {
+		return err
+	}
+	pushRes, err := exchange.PushPackage(sp.ctx, peer.URL, plan.Name, token, out)
+	if err != nil {
+		return err
+	}
+	// Забираем изменения партнёра, адресованные нам (пакет несёт и подтверждение).
+	pulled, err := exchange.PullPackage(sp.ctx, peer.URL, plan.Name, token, thisNode)
+	if err != nil {
+		return err
+	}
+	loadRes, err := exchange.ApplyPackage(sp.ctx, sp.db, sp.resolver(), plan, pulled, exchange.ApplyOptions{})
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stdout, "Синхронизация с %q (%s):\n", with, peer.URL)
+	fmt.Fprintf(os.Stdout, "  отправлено → у партнёра применено %d, пропущено %d, конфликтов %d\n",
+		pushRes.Applied+pushRes.Deleted, pushRes.Skipped, pushRes.Conflicts)
+	fmt.Fprintf(os.Stdout, "  получено → у нас применено %d, пропущено %d, конфликтов %d\n",
+		loadRes.Applied+loadRes.Deleted, loadRes.Skipped, loadRes.Conflicts)
 	return nil
 }
 

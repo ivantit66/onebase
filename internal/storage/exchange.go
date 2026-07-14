@@ -117,6 +117,47 @@ func (db *DB) SaveExchangeThisNode(ctx context.Context, plan, code string) error
 	return nil
 }
 
+// exchangeTokenKey — ключ _settings для общего секрета плана (Bearer онлайн-обмена).
+func exchangeTokenKey(plan string) string {
+	return "exchange.token." + strings.ToLower(plan)
+}
+
+// GetExchangeToken возвращает общий токен плана для онлайн-обмена ("" если не
+// задан → сетевые эндпоинты плана закрыты). Отсутствие ключа/таблицы — не ошибка.
+func (db *DB) GetExchangeToken(ctx context.Context, plan string) (string, error) {
+	d := db.dialect
+	var v string
+	err := db.QueryRow(ctx,
+		`SELECT value FROM _settings WHERE key = `+d.Placeholder(1),
+		exchangeTokenKey(plan)).Scan(&v)
+	if err != nil {
+		return "", nil
+	}
+	return strings.TrimSpace(v), nil
+}
+
+// SaveExchangeToken задаёт общий токен плана (одинаковый на всех участниках).
+// Пустой токен удаляет настройку (онлайн-обмен по плану выключен).
+func (db *DB) SaveExchangeToken(ctx context.Context, plan, token string) error {
+	if err := db.EnsureSettingsSchema(ctx); err != nil {
+		return err
+	}
+	d := db.dialect
+	token = strings.TrimSpace(token)
+	if token == "" {
+		_, err := db.Exec(ctx, `DELETE FROM _settings WHERE key = `+d.Placeholder(1), exchangeTokenKey(plan))
+		return err
+	}
+	q := fmt.Sprintf(
+		`INSERT INTO _settings (key, value) VALUES (%s, %s)
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		d.Placeholder(1), d.Placeholder(2))
+	if _, err := db.Exec(ctx, q, exchangeTokenKey(plan), token); err != nil {
+		return fmt.Errorf("exchange: save token: %w", err)
+	}
+	return nil
+}
+
 // RegisterExchangeChange добавляет/обновляет строку очереди для одного узла.
 // Новая правка (upsert по PK) обновляет версию/пометку/время и сбрасывает
 // sent_no в 0 — объект нужно выгрузить заново, даже если он уже был отправлен.

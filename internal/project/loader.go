@@ -396,6 +396,12 @@ func (p *Project) loadExchangePlans() error {
 	if err != nil {
 		return fmt.Errorf("project: load exchange plans: %w", err)
 	}
+	// Адреса узлов допускают ${env:VAR} — удобно для per-deploy хостов.
+	for _, pl := range plans {
+		for i := range pl.Nodes {
+			pl.Nodes[i].URL = expandEnvRefs(pl.Nodes[i].URL)
+		}
+	}
 	p.ExchangePlans = plans
 	return nil
 }

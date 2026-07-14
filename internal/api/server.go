@@ -96,6 +96,10 @@ func New(reg *runtime.Registry, store *storage.DB, interp *interpreter.Interpret
 	// работают без cookie, а защищённые проверяют свой механизм внутри.
 	uiSrv.MountServices(r)
 
+	// Онлайн-обмен между базами (план 86) — /exchange/<план>/push|pull. Тоже вне
+	// session-middleware: базы аутентифицируются общим Bearer-токеном плана.
+	uiSrv.MountExchange(r)
+
 	// REST API v2 accepts either an integration Bearer token or the existing
 	// browser session cookie. Keep it outside the UI/session-only group so
 	// headless clients do not need a cookie.

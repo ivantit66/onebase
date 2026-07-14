@@ -57,10 +57,10 @@ type PackageObject struct {
 
 // LoadResult — итог загрузки пакета.
 type LoadResult struct {
-	Applied   int // применено (создано/обновлено)
-	Skipped   int // пропущено (идемпотентно: версия не новее, либо сущность неизвестна)
-	Deleted   int // применено с пометкой на удаление
-	Conflicts int // разрешено правилом конфликта (заполняется на этапе 5)
+	Applied   int `json:"applied"`   // применено (создано/обновлено)
+	Skipped   int `json:"skipped"`   // пропущено (идемпотентно: версия не новее, либо сущность неизвестна)
+	Deleted   int `json:"deleted"`   // применено с пометкой на удаление
+	Conflicts int `json:"conflicts"` // обнаружено встречных правок (разрешено правилом)
 }
 
 // BuildPackage собирает пакет незапподтверждённых изменений для узла toNode,
