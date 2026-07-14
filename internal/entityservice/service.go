@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
+	"github.com/ivantit66/onebase/internal/exchange"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/runtime"
 	"github.com/ivantit66/onebase/internal/storage"
@@ -273,6 +274,12 @@ func (s *Service) Save(ctx context.Context, req SaveRequest) (SaveResult, error)
 		if err := s.writeMovements(ctx, req.Entity.Name, req.ID, mc); err != nil {
 			return err
 		}
+		// Регистрация изменения для планов обмена (план 86): объект из состава
+		// плана → строки очереди каждому узлу-получателю. В той же транзакции —
+		// регистрация атомарна с записью объекта.
+		if err := s.registerExchange(ctx, req.Entity, req.ID, false); err != nil {
+			return err
+		}
 		if req.Entity.Posting {
 			if isPosting {
 				return s.Store.SetPosted(ctx, req.Entity.Name, req.ID, true)
@@ -507,6 +514,20 @@ func errBadRequest(msg string) error { return &fillBadRequest{msg: msg} }
 func IsBadRequest(err error) bool {
 	_, ok := err.(*fillBadRequest)
 	return ok
+}
+
+// registerExchange регистрирует изменение объекта в планах обмена (план 86).
+// nil-Reg и отсутствие планов — быстрый выход без обращения к БД (обмен не
+// настроен). deletion=true передаётся из пути пометки на удаление.
+func (s *Service) registerExchange(ctx context.Context, entity *metadata.Entity, id uuid.UUID, deletion bool) error {
+	if s.Reg == nil {
+		return nil
+	}
+	plans := s.Reg.ExchangePlans()
+	if len(plans) == 0 {
+		return nil
+	}
+	return exchange.RegisterOnSave(ctx, s.Store, plans, entity, id, deletion)
 }
 
 // writeMovements распределяет накопленные в mc движения по нужным типам

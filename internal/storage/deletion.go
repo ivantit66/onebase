@@ -63,8 +63,11 @@ func (db *DB) MarkForDeletion(ctx context.Context, entityName string, id uuid.UU
 			return i18nerr.Errorf("нельзя пометить предопределённый элемент %s на удаление", entityName)
 		}
 	}
+	// _version инкрементируем: пометка/снятие пометки — это изменение объекта,
+	// и оптимистическая блокировка (и регистрация в планах обмена, план 86)
+	// должны видеть новую ревизию.
 	return db.exec(ctx,
-		fmt.Sprintf("UPDATE %s SET deletion_mark = %s WHERE id = %s",
+		fmt.Sprintf("UPDATE %s SET deletion_mark = %s, _version = _version + 1 WHERE id = %s",
 			table, d.Placeholder(1), d.Placeholder(2)),
 		mark, idArg(d, id))
 }

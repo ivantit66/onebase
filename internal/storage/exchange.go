@@ -11,6 +11,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/google/uuid"
+	"github.com/ivantit66/onebase/internal/metadata"
 )
 
 // ExchangeChange — одна строка очереди регистрации: объект из состава плана,
@@ -249,6 +252,21 @@ func (db *DB) setPeerCounter(ctx context.Context, plan, nodeCode, col string, va
 		return fmt.Errorf("exchange: set %s: %w", col, err)
 	}
 	return nil
+}
+
+// EntityVersion возвращает текущую ревизию (_version) объекта. Регистрация
+// обмена снимает по ней версию в момент записи (в той же транзакции, поэтому
+// значение уже инкрементировано Upsert'ом).
+func (db *DB) EntityVersion(ctx context.Context, entityName string, id uuid.UUID) (int64, error) {
+	d := db.dialect
+	var v int64
+	err := db.QueryRow(ctx,
+		fmt.Sprintf("SELECT _version FROM %s WHERE id = %s", metadata.TableName(entityName), d.Placeholder(1)),
+		idArg(d, id)).Scan(&v)
+	if err != nil {
+		return 0, fmt.Errorf("exchange: read version %s: %w", entityName, err)
+	}
+	return v, nil
 }
 
 func boolToInt(b bool) int64 {
