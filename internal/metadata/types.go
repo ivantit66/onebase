@@ -95,10 +95,13 @@ type Constant struct {
 	RefEntity string
 	EnumName  string
 	Default   string
-	Label     string
-	Labels    map[string]string // переводы подписи по языкам
-	Length    int               // разрядность для number(L,P), см. Field
-	Scale     int
+	// Required — значение обязательно к заполнению (проверяется сервером при
+	// сохранении формы «Константы»). Задаётся `required: true` в YAML.
+	Required bool
+	Label    string
+	Labels   map[string]string // переводы подписи по языкам
+	Length   int               // разрядность для number(L,P), см. Field
+	Scale    int
 }
 
 // DisplayLabel возвращает подпись константы с учётом языка.

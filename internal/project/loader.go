@@ -245,6 +245,9 @@ func Load(dir string) (*Project, error) {
 	if err := metadata.Validate(p.Entities, p.Enums); err != nil {
 		return nil, err
 	}
+	if err := metadata.ValidateConstants(p.Constants, p.Entities, p.Enums); err != nil {
+		return nil, err
+	}
 	if err := p.loadDSL(); err != nil {
 		return nil, err
 	}

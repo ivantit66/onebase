@@ -2,6 +2,31 @@ package metadata
 
 import "fmt"
 
+// ValidateConstants проверяет, что enum-/reference-константы ссылаются на
+// существующие перечисления и сущности — ловит опечатки в `type:` на
+// `onebase check`, до рантайма (как Validate это делает для реквизитов
+// сущностей). Раньше типы констант нигде не сверялись, а при опечатке
+// GetEnum/GetEntity молча возвращали nil.
+func ValidateConstants(constants []*Constant, entities []*Entity, enums []*Enum) error {
+	entityNames := make(map[string]bool, len(entities))
+	for _, e := range entities {
+		entityNames[e.Name] = true
+	}
+	enumNames := make(map[string]bool, len(enums))
+	for _, en := range enums {
+		enumNames[en.Name] = true
+	}
+	for _, c := range constants {
+		if c.RefEntity != "" && !entityNames[c.RefEntity] {
+			return fmt.Errorf("constant %s references unknown entity %s", c.Name, c.RefEntity)
+		}
+		if c.EnumName != "" && len(enums) > 0 && !enumNames[c.EnumName] {
+			return fmt.Errorf("constant %s references unknown enum %s", c.Name, c.EnumName)
+		}
+	}
+	return nil
+}
+
 func Validate(entities []*Entity, enums []*Enum) error {
 	entityNames := make(map[string]bool, len(entities))
 	for _, e := range entities {

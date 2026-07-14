@@ -319,11 +319,12 @@ func LoadEnumFile(path string) (*Enum, error) {
 }
 
 type rawConstant struct {
-	Name    string            `yaml:"name"`
-	Type    string            `yaml:"type"`
-	Default string            `yaml:"default"`
-	Label   string            `yaml:"label"`
-	Labels  map[string]string `yaml:"labels"`
+	Name     string            `yaml:"name"`
+	Type     string            `yaml:"type"`
+	Default  string            `yaml:"default"`
+	Required bool              `yaml:"required"`
+	Label    string            `yaml:"label"`
+	Labels   map[string]string `yaml:"labels"`
 }
 
 type rawConstantsFile struct {
@@ -342,11 +343,12 @@ func LoadConstantsFile(path string) ([]*Constant, error) {
 	var result []*Constant
 	for _, rc := range raw.Constants {
 		c := &Constant{
-			Name:    rc.Name,
-			Type:    FieldType(rc.Type),
-			Default: rc.Default,
-			Label:   rc.Label,
-			Labels:  rc.Labels,
+			Name:     rc.Name,
+			Type:     FieldType(rc.Type),
+			Default:  rc.Default,
+			Required: rc.Required,
+			Label:    rc.Label,
+			Labels:   rc.Labels,
 		}
 		if strings.HasPrefix(rc.Type, "reference:") {
 			c.RefEntity = strings.TrimPrefix(rc.Type, "reference:")
