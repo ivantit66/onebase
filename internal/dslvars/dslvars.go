@@ -172,5 +172,13 @@ func (c Common) Build() map[string]any {
 	})
 	vars["СсылкаНаОбъект"] = objectRef
 	vars["ObjectRef"] = objectRef
+
+	// Планы обмена (план 86): ПланыОбмена.<План>.ВыгрузитьИзменения("узел") /
+	// .ЗагрузитьПакет(Пакет). Нужны и store, и реестр; без них не инжектируем.
+	if c.Store != nil && c.Reg != nil {
+		exchangeRoot := interpreter.NewExchangePlansRoot(c.Ctx, c.Store, c.Reg)
+		vars["ПланыОбмена"] = exchangeRoot
+		vars["ExchangePlans"] = exchangeRoot
+	}
 	return vars
 }
