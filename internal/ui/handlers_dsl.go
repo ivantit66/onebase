@@ -15,9 +15,20 @@ import (
 	"github.com/ivantit66/onebase/internal/auth"
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
 	"github.com/ivantit66/onebase/internal/dslvars"
+	"github.com/ivantit66/onebase/internal/exchange"
+	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/runtime"
 	"github.com/ivantit66/onebase/internal/storage"
 )
+
+// exchangeRegistrar строит замыкание регистрации изменений в планах обмена
+// (план 86) для прямых записей из DSL (справочники/документы), минующих
+// entityservice.Save. Регистрация — no-op, если планов нет или this-node не задан.
+func (s *Server) exchangeRegistrar() interpreter.ExchangeRegistrar {
+	return func(ctx context.Context, entity *metadata.Entity, id uuid.UUID) error {
+		return exchange.RegisterOnSave(ctx, s.store, s.reg.ExchangePlans(), entity, id, false)
+	}
+}
 
 // langCtxKeyT — ключ контекста, несущий разрешённый язык интерфейса для
 // request-scoped builtin'ов (НСтр). Вне запроса (планировщик/headless/фоновые
@@ -67,7 +78,8 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 	rowAccess := s.dslRowAccessChecker()
 	catalogs := interpreter.NewCatalogsRoot(txState, s.store, s.reg).
 		WithManagerCaller(mgrCaller).
-		WithRowAccessChecker(rowAccess)
+		WithRowAccessChecker(rowAccess).
+		WithExchangeRegistrar(s.exchangeRegistrar())
 	// Документы.X.Создать()/.Записать()/.Провести() из обработки.
 	documents := newDocsRoot(s, txState)
 	// РегистрыНакопления.X.Остатки()/.Движения()/.ВыбратьПоРегистратору(Док).

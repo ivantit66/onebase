@@ -114,3 +114,43 @@ func TestExchangeDSLRoundTrip(t *testing.T) {
 		t.Error("несуществующий план должен давать nil")
 	}
 }
+
+// Прямая запись справочника из DSL (Создать().Записать()) идёт мимо
+// entityservice.Save — регистрация обмена должна отработать через ExchangeRegistrar.
+func TestCatalogWriteRegistersExchange(t *testing.T) {
+	ent := &metadata.Entity{
+		Name: "Товар", Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{{Name: "Наименование", Type: metadata.FieldTypeString}},
+	}
+	plan := &metadata.ExchangePlan{
+		Name: "Обмен", Content: []string{"Справочник.Товар"},
+		Nodes: []metadata.ExchangeNode{{Code: "center"}, {Code: "fil01"}},
+	}
+	plan.Normalize()
+
+	db, ctx := exchDB(t, ent)
+	if err := db.SaveExchangeThisNode(ctx, "Обмен", "center"); err != nil {
+		t.Fatal(err)
+	}
+	lookup := fakeExchangeReg{ents: map[string]*metadata.Entity{"Товар": ent}}
+	registrar := func(ctx context.Context, entity *metadata.Entity, id uuid.UUID) error {
+		return exchange.RegisterOnSave(ctx, db, []*metadata.ExchangePlan{plan}, entity, id, false)
+	}
+	root := NewCatalogsRoot(NewStaticCtx(ctx), db, lookup).WithExchangeRegistrar(registrar)
+
+	proxy := root.Get("Товар").(*CatalogProxy)
+	w := proxy.CallMethod("создать", nil).(*CatalogRecordWriter)
+	w.CallMethod("установитьзначение", []any{"Наименование", "Гвоздь"})
+	if ref := w.CallMethod("записать", nil); ref == nil {
+		t.Fatal("Записать вернул nil")
+	}
+
+	// Изменение зарегистрировано для fil01 (не для center — это наш узел).
+	pend, err := db.PendingExchangeChanges(ctx, "Обмен", "fil01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pend) != 1 || pend[0].ObjectType != "Товар" {
+		t.Fatalf("прямая запись справочника не зарегистрирована: %+v", pend)
+	}
+}

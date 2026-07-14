@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
 	"github.com/ivantit66/onebase/internal/entityservice"
+	"github.com/ivantit66/onebase/internal/exchange"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/runtime"
 	"github.com/ivantit66/onebase/internal/storage"
@@ -32,7 +33,9 @@ func (s *Server) refManagerFor(entity *metadata.Entity, ctx context.Context) int
 	ctxSrc := interpreter.NewStaticCtx(ctx)
 	switch entity.Kind {
 	case metadata.KindCatalog:
-		return interpreter.NewCatalogProxy(entity, s.store, ctxSrc).WithRowAccessChecker(s.dslRowAccessChecker())
+		return interpreter.NewCatalogProxy(entity, s.store, ctxSrc).
+			WithRowAccessChecker(s.dslRowAccessChecker()).
+			WithExchangeRegistrar(s.exchangeRegistrar())
 	case metadata.KindDocument:
 		return &docProxy{s: s, ctxSrc: ctxSrc, entity: entity}
 	}
@@ -544,6 +547,11 @@ func (w *docWriter) write() error {
 		return err
 	}
 	if err := w.s.saveTablePartsDirect(ctx, w.entity, w.obj.ID, w.obj.TablePartRows); err != nil {
+		return err
+	}
+	// Регистрация изменения для планов обмена (план 86): запись документа из DSL
+	// идёт мимо entityservice.Save. Провести() зовёт write() → регистрируется и оно.
+	if err := exchange.RegisterOnSave(ctx, w.s.store, w.s.reg.ExchangePlans(), w.entity, w.obj.ID, false); err != nil {
 		return err
 	}
 	w.saved = true
