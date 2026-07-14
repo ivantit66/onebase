@@ -6,11 +6,13 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ivantit66/onebase/internal/dsl/interpreter"
 	"github.com/ivantit66/onebase/internal/exchange"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/project"
 	"github.com/ivantit66/onebase/internal/runtime"
 	"github.com/ivantit66/onebase/internal/storage"
+	"github.com/ivantit66/onebase/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -108,9 +110,11 @@ func openExchangeBase(cmd *cobra.Command) (*baseConfig, *storageAndProject, erro
 }
 
 type storageAndProject struct {
-	db   *storage.DB
-	proj *project.Project
-	ctx  context.Context
+	db     *storage.DB
+	proj   *project.Project
+	ctx    context.Context
+	reg    *runtime.Registry
+	interp *interpreter.Interpreter
 }
 
 func (sp *storageAndProject) Close() {
@@ -118,12 +122,34 @@ func (sp *storageAndProject) Close() {
 	sp.db.Close()
 }
 
-// resolver строит реестр с сущностями конфигурации — достаточно для GetEntity,
-// который нужен сборке/загрузке пакета.
-func (sp *storageAndProject) resolver() *runtime.Registry {
+// ensureRuntime лениво строит реестр (сущности + модули + планы) и интерпретатор
+// — нужны сборке/загрузке пакета (GetEntity) и обработчику конфликта hook.
+func (sp *storageAndProject) ensureRuntime() {
+	if sp.reg != nil {
+		return
+	}
 	reg := runtime.NewRegistry()
 	reg.Load(runtime.LoadOptions{Entities: sp.proj.Entities})
-	return reg
+	reg.LoadModules(sp.proj.Modules)
+	reg.LoadExchangePlans(sp.proj.ExchangePlans)
+	interp := interpreter.New()
+	interp.LookupProc = reg.GetModuleProc
+	interp.LookupSiblingProc = reg.GetSiblingProc
+	interp.LookupModuleProc = reg.GetModuleNamespacedProc
+	sp.reg = reg
+	sp.interp = interp
+}
+
+// resolver возвращает реестр для сборки/загрузки пакета (GetEntity).
+func (sp *storageAndProject) resolver() *runtime.Registry {
+	sp.ensureRuntime()
+	return sp.reg
+}
+
+// hook возвращает обработчик правила конфликта hook (запуск ПриКонфликтеОбмена).
+func (sp *storageAndProject) hook() exchange.HookResolver {
+	sp.ensureRuntime()
+	return ui.NewExchangeHook(sp.db, sp.reg, sp.interp)
 }
 
 func runExchangeInit(cmd *cobra.Command, _ []string) error {
@@ -219,7 +245,7 @@ func runExchangeLoad(cmd *cobra.Command, _ []string) error {
 	}
 	// Headless-загрузка без интерпретатора: правило hook (если задано) откатится
 	// к by_time внутри движка.
-	res, err := exchange.ApplyPackage(sp.ctx, sp.db, sp.resolver(), plan, data, exchange.ApplyOptions{})
+	res, err := exchange.ApplyPackage(sp.ctx, sp.db, sp.resolver(), plan, data, exchange.ApplyOptions{Hook: sp.hook()})
 	if err != nil {
 		return err
 	}
@@ -316,7 +342,7 @@ func runExchangeSync(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	loadRes, err := exchange.ApplyPackage(sp.ctx, sp.db, sp.resolver(), plan, pulled, exchange.ApplyOptions{})
+	loadRes, err := exchange.ApplyPackage(sp.ctx, sp.db, sp.resolver(), plan, pulled, exchange.ApplyOptions{Hook: sp.hook()})
 	if err != nil {
 		return err
 	}

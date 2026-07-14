@@ -47,6 +47,9 @@ func CheckExchangePlans(proj *project.Project) []Issue {
 		default:
 			add(plan.Name, fmt.Sprintf("неизвестное правило конфликта %q (by_time|by_node_priority|hook)", plan.Conflict))
 		}
+		if plan.Conflict == metadata.ConflictByHook && !hasModuleProc(proj, "ПриКонфликтеОбмена") {
+			add(plan.Name, "правило hook требует процедуру ПриКонфликтеОбмена Экспорт в общем модуле (src/*.module.os)")
+		}
 
 		// Узлы: минимум два участника, непустые уникальные коды.
 		if len(plan.Nodes) < 2 {
@@ -81,6 +84,19 @@ func CheckExchangePlans(proj *project.Project) []Issue {
 		}
 	}
 	return issues
+}
+
+// hasModuleProc сообщает, объявлена ли процедура с таким именем в каком-либо
+// общем модуле (.module.os) — регистронезависимо.
+func hasModuleProc(proj *project.Project, name string) bool {
+	for _, prog := range proj.Modules {
+		for _, p := range prog.Procedures {
+			if strings.EqualFold(p.Name.Literal, name) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func kindWord(k metadata.Kind) string {

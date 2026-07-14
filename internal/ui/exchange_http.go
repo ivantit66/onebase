@@ -59,7 +59,8 @@ func (s *Server) exchangePush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "тело пакета: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	res, err := exchange.ApplyPackage(r.Context(), s.store, s.reg, plan, body, exchange.ApplyOptions{})
+	res, err := exchange.ApplyPackage(r.Context(), s.store, s.reg, plan, body,
+		exchange.ApplyOptions{Hook: NewExchangeHook(s.store, s.reg, s.interp)})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
