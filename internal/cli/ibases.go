@@ -80,6 +80,8 @@ var ibasesAddCmd = &cobra.Command{
 			b.DBPath = sqlitePath
 			b.DB = ""
 		}
+		warnMappedNetworkPath(os.Stderr, "файл SQLite", b.DBPath, detectMappedNetworkDrive)
+		warnMappedNetworkPath(os.Stderr, "каталог проекта", b.Path, detectMappedNetworkDrive)
 		if err := store.Add(b); err != nil {
 			return err
 		}
