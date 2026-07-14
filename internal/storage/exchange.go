@@ -169,6 +169,27 @@ func (db *DB) PendingExchangeChanges(ctx context.Context, plan, nodeCode string)
 	return out, rows.Err()
 }
 
+// GetExchangeChange возвращает строку очереди для конкретного объекта и узла
+// (для обнаружения встречной правки при загрузке). Любая ошибка/отсутствие →
+// (zero, false, nil): «локальной неотправленной правки нет».
+func (db *DB) GetExchangeChange(ctx context.Context, plan, objectType, objectID, nodeCode string) (ExchangeChange, bool, error) {
+	d := db.dialect
+	var ch ExchangeChange
+	var del int64
+	err := db.QueryRow(ctx,
+		fmt.Sprintf(`SELECT plan, object_type, object_id, node_code, version, deletion, changed_at, sent_no
+			FROM _exchange_changes
+			WHERE plan = %s AND object_type = %s AND object_id = %s AND node_code = %s`,
+			d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4)),
+		plan, objectType, objectID, nodeCode).
+		Scan(&ch.Plan, &ch.ObjectType, &ch.ObjectID, &ch.NodeCode, &ch.Version, &del, &ch.ChangedAt, &ch.SentNo)
+	if err != nil {
+		return ExchangeChange{}, false, nil
+	}
+	ch.Deletion = del != 0
+	return ch, true, nil
+}
+
 // MarkExchangeChangesSent проставляет sent_no выгруженным строкам (по точным
 // первичным ключам, чтобы не задеть строки, зарегистрированные после выборки).
 func (db *DB) MarkExchangeChangesSent(ctx context.Context, changes []ExchangeChange, messageNo int64) error {

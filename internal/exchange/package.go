@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -146,20 +147,32 @@ func ParsePackage(data []byte) (*Package, error) {
 	return &pkg, nil
 }
 
-// ApplyPackage идемпотентно загружает пакет: для каждого объекта сравнивает
-// входящую версию с локальной и применяет запись, если объекта нет или входящая
-// версия строго новее. Запись идёт напрямую через storage (минуя
-// entityservice.Save) — без хуков, движений и обратной регистрации в обмене.
+// ApplyPackage идемпотентно загружает пакет в план plan. Для каждого объекта:
+//   - если приёмник тоже менял его со времени последней синхронизации с
+//     источником (есть неотправленная строка очереди этому узлу) — это конфликт,
+//     разрешаемый правилом плана (resolveConflict);
+//   - иначе применяется, если объекта нет или входящая версия строго новее
+//     локальной (_version); иначе пропускается (идемпотентно).
 //
-// Разрешение конфликтов (встречная правка) добавляется на этапе 5; пока действует
-// простое правило «побеждает бо́льшая версия».
-func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolver, data []byte) (LoadResult, error) {
+// Запись идёт напрямую через storage (минуя entityservice.Save) — без хуков,
+// движений и обратной регистрации в обмене (нет эха).
+func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolver, plan *metadata.ExchangePlan, data []byte, opts ApplyOptions) (LoadResult, error) {
 	pkg, err := ParsePackage(data)
 	if err != nil {
 		return LoadResult{}, err
 	}
+	if plan == nil {
+		return LoadResult{}, fmt.Errorf("exchange: план %q не найден на приёмнике", pkg.Plan)
+	}
+	if !strings.EqualFold(pkg.Plan, plan.Name) {
+		return LoadResult{}, fmt.Errorf("exchange: пакет плана %q загружается в план %q", pkg.Plan, plan.Name)
+	}
 	var res LoadResult
 	err = store.WithTx(ctx, func(ctx context.Context) error {
+		thisNode, err := store.GetExchangeThisNode(ctx, plan.Name)
+		if err != nil {
+			return err
+		}
 		for _, obj := range pkg.Objects {
 			ent := resolver.GetEntity(obj.Type)
 			if ent == nil {
@@ -171,9 +184,36 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 				res.Skipped++
 				continue
 			}
+			// Встречная правка: приёмник менял тот же объект и ещё не отправил
+			// изменение источнику → конфликт, разрешаемый правилом плана.
+			local, hasLocal, err := store.GetExchangeChange(ctx, plan.Name, obj.Type, obj.ID, pkg.FromNode)
+			if err != nil {
+				return err
+			}
+			if hasLocal {
+				res.Conflicts++
+				win, err := resolveConflict(ctx, store, plan, thisNode, pkg.FromNode, ent, id, obj, local.ChangedAt, opts.Hook)
+				if err != nil {
+					return err
+				}
+				if !win {
+					res.Skipped++ // локальное изменение победило — не применяем
+					continue
+				}
+				if err := applyObject(ctx, store, ent, id, obj); err != nil {
+					return err
+				}
+				if obj.Deletion {
+					res.Deleted++
+				} else {
+					res.Applied++
+				}
+				continue
+			}
+			// Нет встречной правки — идемпотентность по версии.
 			localVer, exists := store.EntityVersionExists(ctx, ent.Name, id)
 			if exists && obj.Version <= localVer {
-				res.Skipped++ // идемпотентно: уже применено или локальная версия не старее
+				res.Skipped++
 				continue
 			}
 			if err := applyObject(ctx, store, ent, id, obj); err != nil {
@@ -187,7 +227,7 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 		}
 		// Запоминаем номер принятого сообщения от узла-источника.
 		if pkg.FromNode != "" {
-			if err := store.SetExchangeRecvNo(ctx, pkg.Plan, pkg.FromNode, pkg.MessageNo); err != nil {
+			if err := store.SetExchangeRecvNo(ctx, plan.Name, pkg.FromNode, pkg.MessageNo); err != nil {
 				return err
 			}
 		}

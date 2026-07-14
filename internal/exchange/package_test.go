@@ -100,7 +100,7 @@ func TestPackageRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildPackage: %v", err)
 	}
-	lr, err := exchange.ApplyPackage(ctxB, b, res, data)
+	lr, err := exchange.ApplyPackage(ctxB, b, res, planTovar(), data, exchange.ApplyOptions{})
 	if err != nil {
 		t.Fatalf("ApplyPackage: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestPackageRoundTrip(t *testing.T) {
 	}
 
 	// Идемпотентность: повторная загрузка того же пакета — без изменений.
-	lr2, err := exchange.ApplyPackage(ctxB, b, res, data)
+	lr2, err := exchange.ApplyPackage(ctxB, b, res, planTovar(), data, exchange.ApplyOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestPackageVersionRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, _ := exchange.BuildPackage(ctxA, a, res, planTovar(), "fil01")
-	lr, _ := exchange.ApplyPackage(ctxB, b, res, data)
+	lr, _ := exchange.ApplyPackage(ctxB, b, res, planTovar(), data, exchange.ApplyOptions{})
 	if lr.Skipped != 1 || lr.Applied != 0 {
 		t.Errorf("версия ≤ локальной должна пропускаться: %+v", lr)
 	}
@@ -209,7 +209,7 @@ func TestPackageTableParts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exchange.ApplyPackage(ctxB, b, res, data); err != nil {
+	if _, err := exchange.ApplyPackage(ctxB, b, res, plan, data, exchange.ApplyOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := b.GetTablePartRows(ctxB, doc.Name, "Строки", id, doc.TableParts[0])
