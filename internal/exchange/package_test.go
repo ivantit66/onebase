@@ -228,6 +228,55 @@ func TestPackageTableParts(t *testing.T) {
 	}
 }
 
+func TestPackageAckDrains(t *testing.T) {
+	ent := catalogTovar()
+	res := fakeResolver{"Товар": ent}
+	a, ctxA := newBase(t, ent)
+	b, ctxB := newBase(t, ent)
+	if err := a.SaveExchangeThisNode(ctxA, "Обмен", "center"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SaveExchangeThisNode(ctxB, "Обмен", "fil01"); err != nil {
+		t.Fatal(err)
+	}
+	plan := planTovar()
+
+	// A правит X → очередь к fil01.
+	id := uuid.New()
+	registerObj(t, a, ctxA, ent, id, map[string]any{"Наименование": "X"}, "fil01", 1000)
+	if p, _ := a.PendingExchangeChanges(ctxA, "Обмен", "fil01"); len(p) != 1 {
+		t.Fatalf("ожидали 1 в очереди A→fil01, got %d", len(p))
+	}
+
+	// A→fil01 (msg1, ack=0); B принимает.
+	pkgA, err := exchange.BuildPackage(ctxA, a, res, plan, "fil01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exchange.ApplyPackage(ctxB, b, res, plan, pkgA, exchange.ApplyOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Очередь A→fil01 ещё не пуста (нет подтверждения).
+	if p, _ := a.PendingExchangeChanges(ctxA, "Обмен", "fil01"); len(p) != 1 {
+		t.Fatalf("до ack очередь A→fil01 должна оставаться, got %d", len(p))
+	}
+
+	// Обратный пакет B→center несёт ack=1 (B принял сообщение №1 от center).
+	pkgB, err := exchange.BuildPackage(ctxB, b, res, plan, "center")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exchange.ApplyPackage(ctxA, a, res, plan, pkgB, exchange.ApplyOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Теперь очередь A→fil01 очищена подтверждением.
+	if p, _ := a.PendingExchangeChanges(ctxA, "Обмен", "fil01"); len(p) != 0 {
+		t.Errorf("после ack очередь A→fil01 должна быть пуста, got %+v", p)
+	}
+}
+
 func markVersion(db *storage.DB, ctx context.Context, ent *metadata.Entity, id uuid.UUID, v int64) error {
 	// Обновляем и объект (реальная версия для BuildPackage не важна — берётся из
 	// строки очереди), и строку очереди.

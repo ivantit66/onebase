@@ -35,7 +35,11 @@ type Package struct {
 	FromNode  string          `json:"from_node"`
 	ToNode    string          `json:"to_node"`
 	MessageNo int64           `json:"message_no"`
-	Objects   []PackageObject `json:"objects"`
+	// AckNo — «я получил от тебя сообщения вплоть до этого номера». Приёмник по
+	// нему очищает свою очередь к отправителю (подтверждение приёма пакетов,
+	// доставленных ранее в обратную сторону). 0 = нечего подтверждать.
+	AckNo   int64           `json:"ack_no,omitempty"`
+	Objects []PackageObject `json:"objects"`
 }
 
 // PackageObject — один объект в пакете. Fields/TableParts несут канонизированные
@@ -80,7 +84,13 @@ func BuildPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 		if err != nil {
 			return err
 		}
-		pkg := Package{Format: FormatV1, Plan: plan.Name, FromNode: thisNode, ToNode: toNode, MessageNo: msgNo}
+		// Пиггибэк подтверждения: сообщаем узлу, сколько его сообщений мы приняли,
+		// чтобы он очистил свою очередь к нам (recv_no по этому узлу).
+		peer, err := store.GetExchangePeer(ctx, plan.Name, toNode)
+		if err != nil {
+			return err
+		}
+		pkg := Package{Format: FormatV1, Plan: plan.Name, FromNode: thisNode, ToNode: toNode, MessageNo: msgNo, AckNo: peer.RecvNo}
 		var included []storage.ExchangeChange
 		for _, ch := range changes {
 			ent := resolver.GetEntity(ch.ObjectType)
@@ -225,8 +235,15 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 				res.Applied++
 			}
 		}
-		// Запоминаем номер принятого сообщения от узла-источника.
 		if pkg.FromNode != "" {
+			// Подтверждение из пакета очищает нашу очередь к отправителю: он
+			// сообщил, что принял наши сообщения вплоть до AckNo.
+			if pkg.AckNo > 0 {
+				if _, err := store.AckExchangeChanges(ctx, plan.Name, pkg.FromNode, pkg.AckNo); err != nil {
+					return err
+				}
+			}
+			// Запоминаем номер принятого сообщения от узла-источника.
 			if err := store.SetExchangeRecvNo(ctx, plan.Name, pkg.FromNode, pkg.MessageNo); err != nil {
 				return err
 			}
