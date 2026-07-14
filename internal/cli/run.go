@@ -150,6 +150,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	if err := db.EnsureAuditSchema(ctx); err != nil {
 		return fmt.Errorf("audit schema: %w", err)
 	}
+	if err := db.EnsureExchangeSchema(ctx); err != nil {
+		return fmt.Errorf("exchange schema: %w", err)
+	}
 
 	// Sync roles from YAML
 	if roles, err2 := auth.LoadRolesYAML(proj.Dir + "/roles"); err2 == nil && len(roles) > 0 {
