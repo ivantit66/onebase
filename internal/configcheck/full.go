@@ -46,6 +46,7 @@ func RunFullWithOptions(dir string, opts Options) Result {
 		warnings = append(warnings, CheckLayoutWarnings(proj)...)
 		warnings = append(warnings, CheckFormFieldFormat(proj)...)
 		issues = append(issues, CheckHTTPServices(proj)...)
+		issues = append(issues, CheckExchangePlans(proj)...)
 		issues = append(issues, CheckPages(proj)...)
 		issues = append(issues, CheckNameCollisions(proj)...)
 		if strictLexicalScope {

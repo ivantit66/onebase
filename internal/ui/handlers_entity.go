@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/auth"
 	"github.com/ivantit66/onebase/internal/entityservice"
+	"github.com/ivantit66/onebase/internal/exchange"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/richtext"
 	"github.com/ivantit66/onebase/internal/runtime"
@@ -1335,7 +1336,12 @@ func (s *Server) markForDeletion(ctx context.Context, entity *metadata.Entity, i
 			}
 		}
 	}
-	return s.store.MarkForDeletion(ctx, entity.Name, id, mark)
+	if err := s.store.MarkForDeletion(ctx, entity.Name, id, mark); err != nil {
+		return err
+	}
+	// Регистрация изменения для планов обмена (план 86): пометка/снятие пометки
+	// на удаление — изменение объекта, распространяем его узлам-получателям.
+	return exchange.RegisterOnSave(ctx, s.store, s.reg.ExchangePlans(), entity, id, mark)
 }
 
 // unpostDocument clears movements and sets posted=false.

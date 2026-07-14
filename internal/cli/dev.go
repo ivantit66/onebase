@@ -65,6 +65,9 @@ func runDev(cmd *cobra.Command, _ []string) error {
 	if err := db.EnsureAuditSchema(ctx); err != nil {
 		return fmt.Errorf("audit schema: %w", err)
 	}
+	if err := db.EnsureExchangeSchema(ctx); err != nil {
+		return fmt.Errorf("exchange schema: %w", err)
+	}
 
 	reg := runtime.NewRegistry()
 	interp := interpreter.New()
@@ -158,6 +161,7 @@ func runDev(cmd *cobra.Command, _ []string) error {
 		reg.LoadProcessors(proj.Processors)
 		reg.LoadHTTPServices(proj.HTTPServices)
 		reg.LoadPages(proj.Pages)
+		reg.LoadExchangePlans(proj.ExchangePlans)
 		reg.LoadSubsystems(proj.Subsystems)
 		reg.LoadJournals(proj.Journals)
 		reg.LoadAccountRegisters(proj.AccountRegisters, proj.ChartsOfAccounts)

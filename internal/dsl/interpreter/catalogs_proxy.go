@@ -117,13 +117,20 @@ func (s staticCtx) Ctx() context.Context { return s.ctx }
 // NewStaticCtx wraps a plain context as a CtxSource.
 func NewStaticCtx(ctx context.Context) CtxSource { return staticCtx{ctx: ctx} }
 
+// ExchangeRegistrar регистрирует изменение объекта в планах обмена (план 86)
+// после прямой записи из DSL (Справочники.X.Создать().Записать()), которая идёт
+// мимо entityservice.Save. nil — обмен не подключён (тесты/headless). Замыкание
+// строит host-слой (ui), где доступны store и реестр планов.
+type ExchangeRegistrar func(ctx context.Context, entity *metadata.Entity, id uuid.UUID) error
+
 // CatalogsRoot is the DSL global Справочники / Catalogs.
 type CatalogsRoot struct {
-	db     CatalogsDB
-	lookup EntityLookup
-	ctxSrc CtxSource
-	caller ManagerCaller // optional — fallback к модулю менеджера в CallMethod
-	access RowAccessChecker
+	db        CatalogsDB
+	lookup    EntityLookup
+	ctxSrc    CtxSource
+	caller    ManagerCaller // optional — fallback к модулю менеджера в CallMethod
+	access    RowAccessChecker
+	registrar ExchangeRegistrar
 }
 
 // NewCatalogsRoot creates the root object for injection as DSL extraVar.
@@ -146,12 +153,19 @@ func (r *CatalogsRoot) WithRowAccessChecker(c RowAccessChecker) *CatalogsRoot {
 	return r
 }
 
+// WithExchangeRegistrar подключает регистрацию изменений в планах обмена для
+// прямых записей справочников из DSL. Возвращает себя для цепочки.
+func (r *CatalogsRoot) WithExchangeRegistrar(reg ExchangeRegistrar) *CatalogsRoot {
+	r.registrar = reg
+	return r
+}
+
 func (r *CatalogsRoot) Get(entityName string) any {
 	entity := r.lookup.GetEntity(entityName)
 	if entity == nil {
 		return nil
 	}
-	return &CatalogProxy{entity: entity, db: r.db, ctxSrc: r.ctxSrc, caller: r.caller, access: r.access}
+	return &CatalogProxy{entity: entity, db: r.db, ctxSrc: r.ctxSrc, caller: r.caller, access: r.access, registrar: r.registrar}
 }
 
 func (r *CatalogsRoot) Set(_ string, _ any) {}
@@ -162,11 +176,12 @@ func (r *CatalogsRoot) Set(_ string, _ any) {}
 //	Справочники.ТипЦен.НайтиПоНаименованию("X")     → *Ref or nil
 //	Справочники.Контрагент.Создать()                → *CatalogRecordWriter
 type CatalogProxy struct {
-	entity *metadata.Entity
-	db     CatalogsDB
-	ctxSrc CtxSource
-	caller ManagerCaller // optional — для вызовов методов модуля менеджера
-	access RowAccessChecker
+	entity    *metadata.Entity
+	db        CatalogsDB
+	ctxSrc    CtxSource
+	caller    ManagerCaller // optional — для вызовов методов модуля менеджера
+	access    RowAccessChecker
+	registrar ExchangeRegistrar
 }
 
 // NewCatalogProxy создаёт менеджера справочника для привязки к ссылкам,
@@ -181,6 +196,13 @@ func NewCatalogProxy(entity *metadata.Entity, db CatalogsDB, ctxSrc CtxSource) *
 // catalog proxy, usually one used as a Ref manager for values loaded from DB.
 func (p *CatalogProxy) WithRowAccessChecker(c RowAccessChecker) *CatalogProxy {
 	p.access = c
+	return p
+}
+
+// WithExchangeRegistrar подключает регистрацию изменений в планах обмена к
+// standalone-прокси (обычно менеджеру ссылки на справочник). Для цепочки.
+func (p *CatalogProxy) WithExchangeRegistrar(reg ExchangeRegistrar) *CatalogProxy {
+	p.registrar = reg
 	return p
 }
 
@@ -257,11 +279,12 @@ func (p *CatalogProxy) CallMethod(method string, args []any) any {
 		return p.matchByField(field, args[1])
 	case "создать", "create":
 		return &CatalogRecordWriter{
-			entity: p.entity,
-			db:     p.db,
-			ctxSrc: p.ctxSrc,
-			access: p.access,
-			fields: map[string]any{},
+			entity:    p.entity,
+			db:        p.db,
+			ctxSrc:    p.ctxSrc,
+			access:    p.access,
+			registrar: p.registrar,
+			fields:    map[string]any{},
 		}
 	case "удалить", "delete":
 		if len(args) == 0 {
@@ -323,12 +346,13 @@ func (p *CatalogProxy) LoadObject(uuidStr string) (any, error) {
 		}
 	}
 	return &CatalogRecordWriter{
-		entity: p.entity,
-		db:     p.db,
-		ctxSrc: p.ctxSrc,
-		access: p.access,
-		idStr:  uuidStr,
-		fields: fields,
+		entity:    p.entity,
+		db:        p.db,
+		ctxSrc:    p.ctxSrc,
+		access:    p.access,
+		registrar: p.registrar,
+		idStr:     uuidStr,
+		fields:    fields,
 	}, nil
 }
 
@@ -407,12 +431,13 @@ func (p *CatalogProxy) rowAccessRestricted(op string) bool {
 //	Зап.ИНН = "7701234567";
 //	Ссыл = Зап.Записать();   // → *Ref на записанную запись
 type CatalogRecordWriter struct {
-	entity *metadata.Entity
-	db     CatalogsDB
-	ctxSrc CtxSource
-	access RowAccessChecker
-	idStr  string
-	fields map[string]any
+	entity    *metadata.Entity
+	db        CatalogsDB
+	ctxSrc    CtxSource
+	access    RowAccessChecker
+	registrar ExchangeRegistrar
+	idStr     string
+	fields    map[string]any
 }
 
 func (w *CatalogRecordWriter) ctx() context.Context {
@@ -460,13 +485,22 @@ func (w *CatalogRecordWriter) CallMethod(method string, args []any) any {
 			RaiseUserError("Записать(" + w.entity.Name + "): " + err.Error())
 		}
 		w.idStr = id
+		// Регистрация изменения для планов обмена (план 86): прямая запись из DSL
+		// идёт мимо entityservice.Save, поэтому регистрируем здесь.
+		if w.registrar != nil {
+			if parsed, perr := uuid.Parse(id); perr == nil {
+				if rerr := w.registrar(w.ctx(), w.entity, parsed); rerr != nil {
+					RaiseUserError("Записать(" + w.entity.Name + "): регистрация обмена: " + rerr.Error())
+				}
+			}
+		}
 		name := ""
 		if v := w.Get("Наименование"); v != nil {
 			name = fmt.Sprintf("%v", v)
 		}
 		return &Ref{
 			UUID: id, Name: name, Type: w.entity.Name,
-			Manager: &CatalogProxy{entity: w.entity, db: w.db, ctxSrc: w.ctxSrc, access: w.access},
+			Manager: &CatalogProxy{entity: w.entity, db: w.db, ctxSrc: w.ctxSrc, access: w.access, registrar: w.registrar},
 		}
 	case "установитьзначение", "setvalue":
 		if len(args) >= 2 {

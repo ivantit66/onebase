@@ -43,8 +43,9 @@ type Registry struct {
 	moduleProcs     map[string]*ast.ProcedureDecl            // flat: proc name → decl
 	moduleByName    map[string]map[string]*ast.ProcedureDecl // lowercase module → procs in it
 	processors      map[string]*processor.Processor
-	httpServices    map[string]*httpservice.Service // lowercase name → HTTP-сервис
-	pages           map[string]*page.Page           // lowercase name → страница (план 66)
+	httpServices    map[string]*httpservice.Service   // lowercase name → HTTP-сервис
+	pages           map[string]*page.Page             // lowercase name → страница (план 66)
+	exchangePlans   map[string]*metadata.ExchangePlan // lowercase name → план обмена (план 86)
 	extProcessors   map[string]*processor.Processor // внешние обработки (из БД), ключ — Name
 	subsystems      []*metadata.Subsystem           // sorted by Order
 	journals        map[string]*metadata.Journal
@@ -82,6 +83,7 @@ func NewRegistry() *Registry {
 		processors:      make(map[string]*processor.Processor),
 		httpServices:    make(map[string]*httpservice.Service),
 		pages:           make(map[string]*page.Page),
+		exchangePlans:   make(map[string]*metadata.ExchangePlan),
 		extProcessors:   make(map[string]*processor.Processor),
 		extProcs:        make(map[string]map[string]*ast.ProcedureDecl),
 		serviceProcs:    make(map[string]map[string]*ast.ProcedureDecl),
@@ -1015,6 +1017,38 @@ func (r *Registry) GetPageProcedure(pageName, procName string) *ast.ProcedureDec
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return lookupProc(r.pageProcs, pageName, procName)
+}
+
+// LoadExchangePlans регистрирует планы обмена по имени (регистронезависимо,
+// план 86). Зеркало LoadHTTPServices: движок обмена ищет план через
+// GetExchangePlan, а регистрация изменений в entityservice.Save перебирает
+// ExchangePlans().
+func (r *Registry) LoadExchangePlans(plans []*metadata.ExchangePlan) {
+	m := make(map[string]*metadata.ExchangePlan, len(plans))
+	for _, p := range plans {
+		m[strings.ToLower(p.Name)] = p
+	}
+	r.mu.Lock()
+	r.exchangePlans = m
+	r.mu.Unlock()
+}
+
+// ExchangePlans возвращает все зарегистрированные планы обмена.
+func (r *Registry) ExchangePlans() []*metadata.ExchangePlan {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*metadata.ExchangePlan, 0, len(r.exchangePlans))
+	for _, p := range r.exchangePlans {
+		out = append(out, p)
+	}
+	return out
+}
+
+// GetExchangePlan ищет план обмена по имени (регистронезависимо). nil, если нет.
+func (r *Registry) GetExchangePlan(name string) *metadata.ExchangePlan {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.exchangePlans[strings.ToLower(name)]
 }
 
 func (r *Registry) LoadSubsystems(subs []*metadata.Subsystem) {
