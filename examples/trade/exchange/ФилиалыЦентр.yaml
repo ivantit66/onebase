@@ -15,6 +15,10 @@ content:
 # Узлы-участники. Код текущего узла базы задаётся отдельно на каждой базе
 # командой `onebase exchange init --plan ФилиалыЦентр --node <код>` — в YAML он не
 # хранится, потому что конфигурация у всех участников одинаковая.
+#
+# url — адрес базы узла для онлайн-обмена (`exchange sync`). Необязателен: без
+# него доступен только файловый обмен (dump/load). Поддерживает ${env:VAR}, чтобы
+# адреса задавались на деплое, а не в git.
 nodes:
-  - { code: center, name: Центральная база, priority: 10 }
-  - { code: fil01,  name: Филиал №1,        priority: 1 }
+  - { code: center, name: Центральная база, priority: 10, url: "${env:OB_EXCHANGE_CENTER_URL}" }
+  - { code: fil01,  name: Филиал №1,        priority: 1,  url: "${env:OB_EXCHANGE_FIL01_URL}" }

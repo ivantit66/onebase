@@ -106,6 +106,35 @@ go build -o onebase.exe ./cmd/onebase
 Применено = ПланыОбмена.ФилиалыЦентр.ЗагрузитьПакет(Пакет);
 ```
 
+## 6. Онлайн-обмен по сети (sync)
+
+Вместо ручного файла — прямой обмен база↔база по HTTP.
+
+1. Задать узлам адреса и общий токен плана:
+   ```bash
+   export OB_EXCHANGE_CENTER_URL=http://127.0.0.1:8080
+   export OB_EXCHANGE_FIL01_URL=http://127.0.0.1:8081
+   ./onebase.exe exchange init --project examples/trade --sqlite ./center.db --plan ФилиалыЦентр --node center --token S3CRET
+   ./onebase.exe exchange init --project examples/trade --sqlite ./fil01.db  --plan ФилиалыЦентр --node fil01  --token S3CRET
+   ```
+2. Поднять обе базы серверами (в отдельных терминалах):
+   ```bash
+   ./onebase.exe run --project examples/trade --sqlite ./center.db --port 8080
+   ./onebase.exe run --project examples/trade --sqlite ./fil01.db  --port 8081
+   ```
+3. Синхронизироваться (с любой из баз): отправит свои изменения партнёру и
+   заберёт его изменения для себя одной командой:
+   ```bash
+   ./onebase.exe exchange sync --project examples/trade --sqlite ./center.db --plan ФилиалыЦентр --with fil01
+   ```
+   ```
+   Синхронизация с "fil01" (http://127.0.0.1:8081):
+     отправлено → у партнёра применено 1, пропущено 0, конфликтов 0
+     получено → у нас применено 0, пропущено 0, конфликтов 0
+   ```
+   Приёмные эндпоинты (`POST /exchange/<план>/push`, `GET …/pull?to=…`)
+   аутентифицируются Bearer-токеном плана; без токена — 403, с неверным — 401.
+
 ## Что показать словами
 
 - Регистрация изменений **автоматическая** (при записи из UI/REST), опирается на
@@ -116,7 +145,8 @@ go build -o onebase.exe ./cmd/onebase
 
 ## Ограничения фазы 1 (честно)
 
-- Транспорт — **файловый** (`.obx`); онлайн-обмен поверх HTTP-сервисов — фаза 2.
+- Транспорт: **файловый** (`.obx`, dump/load) и **онлайн** (`sync` по HTTP с
+  Bearer-токеном плана).
 - Изменения регистрируются на всех путях записи: UI/REST (`entityservice.Save`),
   прямые записи из DSL (`Справочники.X.Создать().Записать()`, `Документы.X.Записать()/.Провести()`)
   и пометка на удаление.
