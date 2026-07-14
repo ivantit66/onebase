@@ -2398,14 +2398,15 @@ const tplConstants = `
 <main>
 <h2>{{t $.Lang "Константы"}}</h2>
 {{if .Saved}}<div style="background:#f0fdf4;border:1px solid #86efac;color:#15803d;padding:12px 16px;border-radius:7px;margin-bottom:16px;font-size:14px">✓ {{t $.Lang "Константы сохранены"}}</div>{{end}}
+{{if .Error}}<div style="background:#fef2f2;border:1px solid #fca5a5;color:#b91c1c;padding:12px 16px;border-radius:7px;margin-bottom:16px;font-size:14px">⚠ {{.Error}}</div>{{end}}
 <div class="card" style="max-width:700px">
 <form method="POST" action="/ui/constants">
 {{range .Constants}}{{$c := .}}
 <div class="form-group">
-  <label>{{.DisplayLabel $.Lang}}</label>
+  <label>{{.DisplayLabel $.Lang}}{{if .Required}} <span style="color:#dc2626" title="{{t $.Lang "Обязательное поле"}}">*</span>{{end}}</label>
   {{if .RefEntity}}
     <div style="display:flex;gap:6px;align-items:center">
-      <select id="const-{{.Name}}" name="{{.Name}}" data-ref-entity="{{.RefEntity}}" style="flex:1;min-width:0">
+      <select id="const-{{.Name}}" name="{{.Name}}" data-ref-entity="{{.RefEntity}}" style="flex:1;min-width:0"{{if .Required}} required{{end}}>
         <option value="">{{t $.Lang "— не выбрано —"}}</option>
         {{range index $.RefOpts .Name}}
         <option value="{{index . "id"}}" {{if eq (index . "id") (index $.Values $c.Name)}}selected{{end}}>{{index . "_label"}}</option>
@@ -2414,15 +2415,22 @@ const tplConstants = `
       <button type="button" data-ob-ref-picker="const-{{$c.Name}}" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px;flex-shrink:0" title="{{t $.Lang "Выбрать из списка"}}">...</button>
       <button type="button" data-ob-ref-current="const-{{$c.Name}}" style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:13px;flex-shrink:0" title="{{t $.Lang "Открыть карточку"}}">🔍</button>
     </div>
+  {{else if .EnumName}}
+    <select name="{{.Name}}"{{if .Required}} required{{end}}>
+      <option value="">{{t $.Lang "— не выбрано —"}}</option>
+      {{range index $.EnumOpts $c.Name}}
+      <option value="{{.Value}}" {{if eq .Value (index $.Values $c.Name)}}selected{{end}}>{{.Label}}</option>
+      {{end}}
+    </select>
   {{else if eq (str .Type) "date"}}
-    <input type="date" name="{{.Name}}" value="{{index $.Values .Name}}">
+    <input type="date" name="{{.Name}}" value="{{index $.Values .Name}}"{{if .Required}} required{{end}}>
   {{else if eq (str .Type) "bool"}}
     <select name="{{.Name}}">
       <option value="false" {{if eq (index $.Values .Name) "false"}}selected{{end}}>{{t $.Lang "Нет"}}</option>
       <option value="true"  {{if eq (index $.Values .Name) "true"}}selected{{end}}>{{t $.Lang "Да"}}</option>
     </select>
   {{else}}
-    <input type="text" name="{{.Name}}" value="{{index $.Values .Name}}" placeholder="{{.Name}}">
+    <input type="text" name="{{.Name}}" value="{{index $.Values .Name}}" placeholder="{{.Name}}"{{if .Required}} required{{end}}>
   {{end}}
 </div>
 {{end}}
