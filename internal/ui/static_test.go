@@ -124,7 +124,7 @@ func TestToggleNextSingleHandler(t *testing.T) {
 	}
 }
 
-// TestTabShellSingleSSE фиксирует инвариант issue #322/#323: во вкладочной
+// TestTabShellSingleSSEAndEventForwarding фиксирует инвариант issue #322/#323: во вкладочной
 // оболочке /ui/app каждая вкладка — это <iframe>, который грузит полный ui.js.
 // Если каждый фрейм открывает свой EventSource('/ui/events') и поллит
 // /ui/messages, то N вкладок дают N+1 постоянных соединений: браузер упирается
@@ -132,11 +132,37 @@ func TestToggleNextSingleHandler(t *testing.T) {
 // дублируются — Hub.Publish доставляет каждому подписчику). Поэтому оба
 // постоянных канала во фрейме (window.__obEmbedded) должны быть отключены —
 // единственное соединение держит верхнее окно оболочки, которое тоже грузит ui.js.
-func TestTabShellSingleSSE(t *testing.T) {
+// При этом документированный контракт onebase:<имя> сохраняется: оболочка
+// ретранслирует событие во фреймы, а те проверяют source и origin отправителя.
+func TestTabShellSingleSSEAndEventForwarding(t *testing.T) {
 	src := string(uiJS)
 	// SSE /ui/events подключается только в верхнем окне, не во фрейме оболочки.
 	if !strings.Contains(src, "if (!window.__obEmbedded) {") {
 		t.Error("ui.js должен подключать SSE /ui/events только вне вкладочного фрейма (гейт window.__obEmbedded)")
+	}
+	if got := strings.Count(src, "new EventSource('/ui/events')"); got != 1 {
+		t.Errorf("ui.js должен содержать ровно один конструктор SSE /ui/events, найдено %d", got)
+	}
+	// Один поток в оболочке не должен ломать публичный JS-мост произвольных
+	// событий: top пересылает сообщение всем вкладкам, а iframe принимает его
+	// только от своей same-origin оболочки и поднимает локальный CustomEvent.
+	for _, want := range []string{
+		"document.querySelectorAll('.ob-tabbody iframe')",
+		"frames[i].contentWindow.postMessage",
+		"source: 'obRealtime'",
+		"ev.source !== window.parent",
+		"ev.origin !== window.location.origin",
+		"msg.source !== 'obRealtime'",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("ui.js: отсутствует часть безопасной ретрансляции realtime-событий %q", want)
+		}
+	}
+	if got := strings.Count(src, "emitOnebaseEvent('onebase:' + msg.name, msg.data)"); got != 2 {
+		t.Errorf("ui.js должен поднимать onebase-событие в оболочке и во фрейме, найдено вызовов: %d", got)
+	}
+	if !strings.Contains(src, "if (!window.__obEmbedded) {\n    window.addEventListener('onebase:звонок.входящий'") {
+		t.Error("ui.js: встроенный тост входящего звонка должен оставаться только в оболочке")
 	}
 	// Верхнее окно выставляет хук, которым фрейм после submit просит обновить
 	// панель сообщений — иначе сообщение появлялось бы только к следующему поллу.
