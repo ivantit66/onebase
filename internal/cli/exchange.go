@@ -42,6 +42,12 @@ var exchangeLoadCmd = &cobra.Command{
 	RunE:  runExchangeLoad,
 }
 
+var exchangeStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Показать состояние обмена по плану: очередь и счётчики по узлам",
+	RunE:  runExchangeStatus,
+}
+
 func init() {
 	addBaseFlags(exchangeInitCmd)
 	exchangeInitCmd.Flags().String("plan", "", "имя плана обмена (обязательно)")
@@ -55,7 +61,10 @@ func init() {
 	addBaseFlags(exchangeLoadCmd)
 	exchangeLoadCmd.Flags().String("in", "", "путь к файлу пакета .obx (обязательно)")
 
-	exchangeCmd.AddCommand(exchangeInitCmd, exchangeDumpCmd, exchangeLoadCmd)
+	addBaseFlags(exchangeStatusCmd)
+	exchangeStatusCmd.Flags().String("plan", "", "имя плана обмена (обязательно)")
+
+	exchangeCmd.AddCommand(exchangeInitCmd, exchangeDumpCmd, exchangeLoadCmd, exchangeStatusCmd)
 	rootCmd.AddCommand(exchangeCmd)
 }
 
@@ -199,6 +208,47 @@ func runExchangeLoad(cmd *cobra.Command, _ []string) error {
 	}
 	fmt.Fprintf(os.Stdout, "Пакет плана %q от узла %q (сообщение №%d): применено %d, пропущено %d, удалено %d, конфликтов %d\n",
 		plan.Name, pkg.FromNode, pkg.MessageNo, res.Applied, res.Skipped, res.Deleted, res.Conflicts)
+	return nil
+}
+
+func runExchangeStatus(cmd *cobra.Command, _ []string) error {
+	planName, _ := cmd.Flags().GetString("plan")
+	if planName == "" {
+		return fmt.Errorf("укажите --plan <имя плана>")
+	}
+	bc, sp, err := openExchangeBase(cmd)
+	if err != nil {
+		return err
+	}
+	defer bc.Cleanup()
+	defer sp.Close()
+
+	plan := findExchangePlan(sp.proj, planName)
+	if plan == nil {
+		return fmt.Errorf("план обмена %q не найден в конфигурации", planName)
+	}
+	thisNode, _ := sp.db.GetExchangeThisNode(sp.ctx, plan.Name)
+	counts, err := sp.db.ExchangePendingCounts(sp.ctx, plan.Name)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stdout, "План обмена: %s\n", plan.Name)
+	if thisNode == "" {
+		fmt.Fprintln(os.Stdout, "Текущий узел: не задан — выполните `onebase exchange init`")
+	} else {
+		fmt.Fprintf(os.Stdout, "Текущий узел: %s\n", thisNode)
+	}
+	fmt.Fprintln(os.Stdout, "\nУзлы (очередь = ждут выгрузки; отпр./подтв. — номера сообщений):")
+	for _, n := range plan.Nodes {
+		peer, _ := sp.db.GetExchangePeer(sp.ctx, plan.Name, n.Code)
+		mark := ""
+		if thisNode != "" && strings.EqualFold(n.Code, thisNode) {
+			mark = " ← этот узел"
+		}
+		fmt.Fprintf(os.Stdout, "  %-10s %-22s очередь=%d отпр.=%d подтв.=%d принято=%d%s\n",
+			n.Code, n.Name, counts[n.Code], peer.SentNo, peer.AckNo, peer.RecvNo, mark)
+	}
 	return nil
 }
 

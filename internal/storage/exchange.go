@@ -259,6 +259,50 @@ func (db *DB) GetExchangePeer(ctx context.Context, plan, nodeCode string) (Excha
 	return p, nil
 }
 
+// ExchangePeers возвращает счётчики по всем узлам плана (для exchange status).
+func (db *DB) ExchangePeers(ctx context.Context, plan string) ([]ExchangePeer, error) {
+	d := db.dialect
+	rows, err := db.Query(ctx,
+		fmt.Sprintf(`SELECT node_code, sent_no, ack_no, recv_no FROM _exchange_peers WHERE plan = %s ORDER BY node_code`,
+			d.Placeholder(1)), plan)
+	if err != nil {
+		return nil, fmt.Errorf("exchange: peers: %w", err)
+	}
+	defer rows.Close()
+	var out []ExchangePeer
+	for rows.Next() {
+		p := ExchangePeer{Plan: plan}
+		if err := rows.Scan(&p.NodeCode, &p.SentNo, &p.AckNo, &p.RecvNo); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// ExchangePendingCounts возвращает число неотправленных/неподтверждённых строк
+// очереди по каждому узлу-получателю плана (для exchange status).
+func (db *DB) ExchangePendingCounts(ctx context.Context, plan string) (map[string]int64, error) {
+	d := db.dialect
+	rows, err := db.Query(ctx,
+		fmt.Sprintf(`SELECT node_code, COUNT(*) FROM _exchange_changes WHERE plan = %s GROUP BY node_code`,
+			d.Placeholder(1)), plan)
+	if err != nil {
+		return nil, fmt.Errorf("exchange: pending counts: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var node string
+		var cnt int64
+		if err := rows.Scan(&node, &cnt); err != nil {
+			return nil, err
+		}
+		out[node] = cnt
+	}
+	return out, rows.Err()
+}
+
 // setPeerCounter монотонно поднимает один счётчик узла (ack_no/recv_no) до value.
 // col — доверенное имя колонки из констант этого пакета, не пользовательский ввод.
 func (db *DB) setPeerCounter(ctx context.Context, plan, nodeCode, col string, value int64) error {

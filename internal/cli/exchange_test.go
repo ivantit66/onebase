@@ -154,4 +154,12 @@ func TestExchangeCLIRoundTrip(t *testing.T) {
 		t.Fatalf("повторный load: %v", err)
 	}
 	assertTovar("Гвоздь", 1)
+
+	// status выполняется без ошибок на обеих базах (smoke).
+	if err := runExchangeStatus(exCmd(dbA, dir, map[string]string{"plan": "Обмен"}), nil); err != nil {
+		t.Fatalf("status A: %v", err)
+	}
+	if err := runExchangeStatus(exCmd(dbB, dir, map[string]string{"plan": "Обмен"}), nil); err != nil {
+		t.Fatalf("status B: %v", err)
+	}
 }

@@ -119,6 +119,44 @@ func TestExchangeMessageNoAndAck(t *testing.T) {
 	}
 }
 
+func TestExchangeStatusHelpers(t *testing.T) {
+	db, ctx := newExchangeDB(t)
+	regs := []ExchangeChange{
+		{Plan: "Обмен", ObjectType: "Товар", ObjectID: "a", NodeCode: "fil01", Version: 1, ChangedAt: 1},
+		{Plan: "Обмен", ObjectType: "Товар", ObjectID: "b", NodeCode: "fil01", Version: 1, ChangedAt: 2},
+		{Plan: "Обмен", ObjectType: "Товар", ObjectID: "a", NodeCode: "center", Version: 1, ChangedAt: 1},
+	}
+	for _, ch := range regs {
+		if err := db.RegisterExchangeChange(ctx, ch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	counts, err := db.ExchangePendingCounts(ctx, "Обмен")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["fil01"] != 2 || counts["center"] != 1 {
+		t.Errorf("counts = %+v, want fil01=2 center=1", counts)
+	}
+
+	if err := db.SetExchangeRecvNo(ctx, "Обмен", "center", 5); err != nil {
+		t.Fatal(err)
+	}
+	peers, err := db.ExchangePeers(ctx, "Обмен")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var centerRecv int64 = -1
+	for _, p := range peers {
+		if p.NodeCode == "center" {
+			centerRecv = p.RecvNo
+		}
+	}
+	if centerRecv != 5 {
+		t.Errorf("center recv_no = %d, want 5 (peers=%+v)", centerRecv, peers)
+	}
+}
+
 func TestExchangeRecvNoMonotonic(t *testing.T) {
 	db, ctx := newExchangeDB(t)
 	if err := db.SetExchangeRecvNo(ctx, "Обмен", "center", 5); err != nil {
