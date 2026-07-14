@@ -269,6 +269,45 @@ func (db *DB) EntityVersion(ctx context.Context, entityName string, id uuid.UUID
 	return v, nil
 }
 
+// EntityVersionExists возвращает (_version, true), если объект есть локально,
+// иначе (0, false). Используется идемпотентной загрузкой пакета для сравнения
+// входящей версии с локальной. Любая ошибка чтения трактуется как «нет объекта»
+// (как в GetListPageSize и др. — путь чтения настроек толерантен к отсутствию).
+func (db *DB) EntityVersionExists(ctx context.Context, entityName string, id uuid.UUID) (int64, bool) {
+	d := db.dialect
+	var v int64
+	err := db.QueryRow(ctx,
+		fmt.Sprintf("SELECT _version FROM %s WHERE id = %s", metadata.TableName(entityName), d.Placeholder(1)),
+		idArg(d, id)).Scan(&v)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// SetExchangeObjectState принудительно выставляет системные колонки объекта при
+// загрузке пакета: точную ревизию источника (_version — чтобы повторная загрузка
+// была идемпотентной), пометку удаления и, для документов, posted=false (данные
+// приходят непроведёнными — движения на приёмнике не переносятся, план 86).
+func (db *DB) SetExchangeObjectState(ctx context.Context, entity *metadata.Entity, id uuid.UUID, version int64, deletion bool) error {
+	d := db.dialect
+	sets := []string{
+		fmt.Sprintf("_version = %s", d.Placeholder(1)),
+		fmt.Sprintf("deletion_mark = %s", d.Placeholder(2)),
+	}
+	args := []any{version, deletion}
+	if entity.Kind == metadata.KindDocument {
+		sets = append(sets, "posted = "+boolFalseLit(d))
+	}
+	q := fmt.Sprintf("UPDATE %s SET %s WHERE id = %s",
+		metadata.TableName(entity.Name), strings.Join(sets, ", "), d.Placeholder(3))
+	args = append(args, idArg(d, id))
+	if _, err := db.Exec(ctx, q, args...); err != nil {
+		return fmt.Errorf("exchange: set object state %s: %w", entity.Name, err)
+	}
+	return nil
+}
+
 func boolToInt(b bool) int64 {
 	if b {
 		return 1
