@@ -48,15 +48,15 @@ func TestMigratedExamples_RenderSmoke(t *testing.T) {
 			}
 			ctx := &RenderContext{
 				Document: map[string]any{
-					"Номер":       numForPath(tc.path),
-					"Поставщик":   "ref-p",
-					"Склад":       "ref-w",
-					"Организация":  "ref-o",
-					"Покупатель":   "ref-b",
-					"Сумма":        700.0,
-					"СуммаНДС":     0.0,
+					"Номер":          numForPath(tc.path),
+					"Поставщик":      "ref-p",
+					"Склад":          "ref-w",
+					"Организация":    "ref-o",
+					"Покупатель":     "ref-b",
+					"Сумма":          700.0,
+					"СуммаНДС":       0.0,
 					"СуммаДокумента": 700.0,
-					"НДС":          0.0,
+					"НДС":            0.0,
 				},
 				Refs: map[string]map[string]any{
 					"ref-p":  {"Наименование": "ООО Поставщик", "наименование": "ООО Поставщик"},
@@ -84,6 +84,46 @@ func TestMigratedExamples_RenderSmoke(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestArchiveCoverExampleRenderSmoke(t *testing.T) {
+	lt, err := LoadLayout(filepath.Join("..", "..", "examples", "archive", "printforms", "ОбложкаДела.layout.yaml"))
+	if err != nil {
+		t.Fatalf("LoadLayout: %v", err)
+	}
+	if lt.Page == nil || lt.Page.Format != "229x162mm" {
+		t.Fatalf("page format = %#v, want 229x162mm", lt.Page)
+	}
+
+	ctx := &RenderContext{
+		Document: map[string]any{
+			"Номер":         "Д-000042",
+			"Дата":          "14.07.2026",
+			"ИндексДела":    "01-04",
+			"ЗаголовокДела": "Договоры поставки и акты сверки",
+			"СрокХранения":  "5 лет",
+			"Ответственный": "Секретарь архива",
+		},
+		TableParts: map[string][]map[string]any{
+			"Документы": {
+				{"Индекс": "01-04/1", "ДатаДокумента": "10.01.2026", "Заголовок": "Договор поставки", "Листы": "1-8"},
+				{"Индекс": "01-04/2", "ДатаДокумента": "15.01.2026", "Заголовок": "Акт сверки", "Листы": "9-12"},
+			},
+		},
+	}
+	doc, err := BuildSheet(lt, ctx)
+	if err != nil {
+		t.Fatalf("BuildSheet: %v", err)
+	}
+	html := doc.HTML(sheet.HTMLOptions{})
+	for _, want := range []string{"ONEBASE", "ДЕЛО № 01-04", "229 x 162 мм", "Договоры поставки"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("в HTML нет %q", want)
+		}
+	}
+	if _, err := doc.PDF(sheet.PDFOptions{Title: "Обложка дела"}); err != nil {
+		t.Fatalf("PDF: %v", err)
 	}
 }
 

@@ -1,0 +1,244 @@
+name: ОбложкаДела
+document: АрхивноеДело
+# Витринный пример для релиза: нестандартный бланк 229 x 162 мм,
+# цветные области, штамп и короткий фрагмент описи на одном листе.
+page:
+  format: 229x162mm
+  margins:
+    top: 8
+    bottom: 8
+    left: 8
+    right: 8
+columns:
+    - width: 92px
+    - width: 150px
+    - width: 150px
+    - width: 150px
+    - width: 150px
+    - width: 92px
+areas:
+    - name: Обложка
+      rows:
+        - height: 26px
+          cells:
+            - text: ONEBASE
+              bold: true
+              align: center
+              valign: middle
+              fontSize: 11
+              backColor: "#0f172a"
+              textColor: "#ffffff"
+              border: none
+            - text: "ДЕЛО № {{ИндексДела}}"
+              bold: true
+              align: center
+              valign: middle
+              fontSize: 15
+              backColor: "#0f172a"
+              textColor: "#ffffff"
+              border: none
+              colspan: 4
+            - text: 229 x 162 мм
+              align: center
+              valign: middle
+              fontSize: 9
+              backColor: "#0f172a"
+              textColor: "#cbd5e1"
+              border: none
+        - height: 12px
+          cells:
+            - text: ""
+              border: none
+              colspan: 6
+        - height: 36px
+          cells:
+            - text: ""
+              border: none
+            - text: "{{ЗаголовокДела}}"
+              bold: true
+              align: center
+              valign: middle
+              fontSize: 18
+              textColor: "#111827"
+              border: none
+              colspan: 4
+            - text: ""
+              border: none
+        - height: 12px
+          cells:
+            - text: ""
+              border: none
+              colspan: 6
+        - height: 24px
+          cells:
+            - text: Индекс
+              bold: true
+              align: center
+              valign: middle
+              backColor: "#e0f2fe"
+              border: all
+            - text: "{{ИндексДела}}"
+              align: center
+              valign: middle
+              fontSize: 12
+              border: all
+            - text: Срок хранения
+              bold: true
+              align: center
+              valign: middle
+              backColor: "#e0f2fe"
+              border: all
+            - text: "{{СрокХранения}}"
+              align: center
+              valign: middle
+              fontSize: 12
+              border: all
+            - text: Дата
+              bold: true
+              align: center
+              valign: middle
+              backColor: "#e0f2fe"
+              border: all
+            - text: "{{Дата | date}}"
+              align: center
+              valign: middle
+              border: all
+        - height: 18px
+          cells:
+            - text: ""
+              border: none
+              colspan: 6
+        - height: 20px
+          cells:
+            - text: "Ответственный:"
+              bold: true
+              border: none
+              colspan: 2
+            - text: "{{Ответственный}}"
+              border: none
+              borders:
+                bottom: thin
+              colspan: 4
+        - height: 18px
+          cells:
+            - text: "Основание:"
+              bold: true
+              border: none
+              colspan: 2
+            - text: "Номенклатура дел, раздел {{ИндексДела}}"
+              border: none
+              borders:
+                bottom: thin
+              colspan: 4
+        - height: 14px
+          cells:
+            - text: ""
+              border: none
+              colspan: 6
+    - name: ШапкаСостава
+      rows:
+        - height: 18px
+          cells:
+            - text: №
+              bold: true
+              align: center
+              valign: middle
+              backColor: "#f8fafc"
+              border: all
+            - text: Индекс документа
+              bold: true
+              align: center
+              valign: middle
+              backColor: "#f8fafc"
+              border: all
+            - text: Дата
+              bold: true
+              align: center
+              valign: middle
+              backColor: "#f8fafc"
+              border: all
+            - text: Заголовок документа
+              bold: true
+              align: center
+              valign: middle
+              backColor: "#f8fafc"
+              border: all
+              colspan: 2
+            - text: Листы
+              bold: true
+              align: center
+              valign: middle
+              backColor: "#f8fafc"
+              border: all
+    - name: СтрокаСостава
+      rows:
+        - height: 18px
+          cells:
+            - parameter: Ном
+              align: center
+              valign: middle
+              border: all
+            - parameter: Индекс
+              align: center
+              valign: middle
+              border: all
+            - parameter: Дата
+              align: center
+              valign: middle
+              border: all
+            - parameter: Заголовок
+              valign: middle
+              border: all
+              colspan: 2
+            - parameter: Листы
+              align: center
+              valign: middle
+              border: all
+    - name: Подписи
+      rows:
+        - height: 16px
+          cells:
+            - text: ""
+              border: none
+              colspan: 6
+        - height: 24px
+          cells:
+            - text: "Принял:"
+              bold: true
+              border: none
+            - text: ""
+              border: none
+              borders:
+                bottom: thin
+              colspan: 2
+            - text: "Передал:"
+              bold: true
+              border: none
+            - text: ""
+              border: none
+              borders:
+                bottom: thin
+              colspan: 2
+        - height: 18px
+          cells:
+            - text: "Лист сформирован в OneBase"
+              align: right
+              fontSize: 9
+              textColor: "#64748b"
+              border: none
+              colspan: 6
+binding:
+    sequence:
+        - Обложка
+        - ШапкаСостава
+        - СтрокаСостава
+        - Подписи
+    repeat:
+        - area: СтрокаСостава
+          source: Документы
+          parameters:
+            Ном: '@row'
+            Индекс: Индекс
+            Дата: ДатаДокумента
+            Заголовок: Заголовок
+            Листы: Листы
