@@ -216,7 +216,18 @@ func runDev(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	uiCfg := ui.Config{DSN: dsn, PlatVersion: version.String(), PlatCommit: version.Commit(), PlatDate: version.CommitDate(), PlatAuthor: version.Author, PlatLicense: version.License}
+	uiCfg := ui.Config{
+		DSN:              dsn,
+		DatabaseType:     "postgres",
+		DatabaseLocation: runtimeDatabaseLocation("postgres", dsn, ""),
+		ConfigSource:     configSource,
+		ConfigLocation:   runtimeConfigLocation(configSource, dir, "postgres", dsn, ""),
+		PlatVersion:      version.String(),
+		PlatCommit:       version.Commit(),
+		PlatDate:         version.CommitDate(),
+		PlatAuthor:       version.Author,
+		PlatLicense:      version.License,
+	}
 	if appCfg != nil {
 		uiCfg.AppName = appCfg.Name
 		uiCfg.AppVersion = appCfg.Version

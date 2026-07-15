@@ -1,4 +1,12 @@
 {
+  "Профиль и интерфейс": "Profile and interface",
+  "Администрирование": "Administration",
+  "Интеграции и задания": "Integrations and jobs",
+  "Обслуживание базы": "Database maintenance",
+  "Расширения и оборудование": "Extensions and equipment",
+  "Хранение конфигурации": "Configuration storage",
+  "Расположение конфигурации": "Configuration location",
+  "Платформенные возможности": "Platform features",
   "Вкладки": "Tabs",
   "Режим открытия форм": "Form opening mode",
   "Отдельные страницы": "Separate pages",

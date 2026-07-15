@@ -240,12 +240,16 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		runLog.Warn("apply app ai setting failed", "err", err)
 	}
 	uiCfg := ui.Config{
-		DSN:         dsn,
-		PlatVersion: version.String(),
-		PlatCommit:  version.Commit(),
-		PlatDate:    version.CommitDate(),
-		PlatAuthor:  version.Author,
-		PlatLicense: version.License,
+		DSN:              dsn,
+		DatabaseType:     runtimeDatabaseType(dbType),
+		DatabaseLocation: runtimeDatabaseLocation(dbType, dsn, sqlitePath),
+		ConfigSource:     configSource,
+		ConfigLocation:   runtimeConfigLocation(configSource, dir, dbType, dsn, sqlitePath),
+		PlatVersion:      version.String(),
+		PlatCommit:       version.Commit(),
+		PlatDate:         version.CommitDate(),
+		PlatAuthor:       version.Author,
+		PlatLicense:      version.License,
 	}
 	if appCfg != nil {
 		uiCfg.AppName = appCfg.Name
