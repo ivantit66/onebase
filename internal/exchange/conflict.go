@@ -30,6 +30,20 @@ type ApplyOptions struct {
 	Hook HookResolver
 }
 
+// resolveScalarConflict решает конфликт для состава без полей-структуры (константа,
+// запись регистра сведений): by_node_priority по приоритету узлов, иначе by_time.
+// Правило hook к скалярам не применяется — откат к by_time (структурный
+// ПриКонфликтеОбмена рассчитан на объекты с реквизитами).
+func resolveScalarConflict(plan *metadata.ExchangePlan, thisNode, fromNode string, incomingChangedAt, localChangedAt int64) bool {
+	if plan.Conflict == metadata.ConflictByNodePriority {
+		from, to := plan.Node(fromNode), plan.Node(thisNode)
+		if from != nil && to != nil {
+			return from.Priority > to.Priority
+		}
+	}
+	return incomingChangedAt > localChangedAt
+}
+
 // resolveConflict решает, победит ли входящее изменение над локальным.
 func resolveConflict(ctx context.Context, store *storage.DB, plan *metadata.ExchangePlan, thisNode, fromNode string, ent *metadata.Entity, id uuid.UUID, incoming PackageObject, localChangedAt int64, hook HookResolver) (bool, error) {
 	switch plan.Conflict {

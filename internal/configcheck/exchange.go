@@ -28,6 +28,14 @@ func CheckExchangePlans(proj *project.Project) []Issue {
 		}
 		kindsByName[low][e.Kind] = true
 	}
+	constByName := map[string]bool{}
+	for _, c := range proj.Constants {
+		constByName[strings.ToLower(c.Name)] = true
+	}
+	infoRegByName := map[string]bool{}
+	for _, ir := range proj.InfoRegisters {
+		infoRegByName[strings.ToLower(ir.Name)] = true
+	}
 
 	seenName := map[string]bool{}
 	for _, plan := range proj.ExchangePlans {
@@ -73,13 +81,24 @@ func CheckExchangePlans(proj *project.Project) []Issue {
 			add(plan.Name, "пустой состав обмена (content)")
 		}
 		for _, c := range plan.ParsedContent() {
-			kinds, ok := kindsByName[strings.ToLower(c.Name)]
-			if !ok {
-				add(plan.Name, fmt.Sprintf("в составе указана несуществующая сущность %q", c.Name))
-				continue
-			}
-			if c.Kind != "" && !kinds[c.Kind] {
-				add(plan.Name, fmt.Sprintf("в составе %q — нет %s с таким именем", c.Name, kindWord(c.Kind)))
+			switch c.Category {
+			case metadata.ContentConstant:
+				if !constByName[strings.ToLower(c.Name)] {
+					add(plan.Name, fmt.Sprintf("в составе указана несуществующая константа %q", c.Name))
+				}
+			case metadata.ContentInfoRegister:
+				if !infoRegByName[strings.ToLower(c.Name)] {
+					add(plan.Name, fmt.Sprintf("в составе указан несуществующий регистр сведений %q", c.Name))
+				}
+			default: // metadata.ContentEntity
+				kinds, ok := kindsByName[strings.ToLower(c.Name)]
+				if !ok {
+					add(plan.Name, fmt.Sprintf("в составе указана несуществующая сущность %q", c.Name))
+					continue
+				}
+				if c.Kind != "" && !kinds[c.Kind] {
+					add(plan.Name, fmt.Sprintf("в составе %q — нет %s с таким именем", c.Name, kindWord(c.Kind)))
+				}
 			}
 		}
 	}

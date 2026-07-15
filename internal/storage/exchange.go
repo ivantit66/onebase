@@ -25,11 +25,22 @@ type ExchangeChange struct {
 	ObjectType string
 	ObjectID   string
 	NodeCode   string
+	// Kind — категория объекта очереди: "" (сущность, справочник/документ),
+	// ExchangeKindConstant или ExchangeKindInfoReg. Определяет, как строка
+	// сериализуется в пакет и применяется на приёмнике (у констант и регистров
+	// сведений нет _version — идемпотентность идёт через _exchange_applied).
+	Kind       string
 	Version    int64
 	Deletion   bool
 	ChangedAt  int64 // Unix-миллисекунды
 	SentNo     int64
 }
+
+// Категории строк очереди/объектов пакета для не-сущностного состава (план 86).
+const (
+	ExchangeKindConstant = "constant" // глобальная константа (Константа.X)
+	ExchangeKindInfoReg  = "inforeg"  // запись регистра сведений (РегистрСведений.X)
+)
 
 // ExchangePeer — счётчики обмена с одним узлом плана.
 type ExchangePeer struct {
@@ -48,6 +59,7 @@ func (db *DB) EnsureExchangeSchema(ctx context.Context) error {
 			object_type TEXT NOT NULL,
 			object_id   TEXT NOT NULL,
 			node_code   TEXT NOT NULL,
+			kind        TEXT NOT NULL DEFAULT '',
 			version     BIGINT NOT NULL,
 			deletion    INTEGER NOT NULL DEFAULT 0,
 			changed_at  BIGINT NOT NULL,
@@ -56,9 +68,27 @@ func (db *DB) EnsureExchangeSchema(ctx context.Context) error {
 		)`); err != nil {
 		return fmt.Errorf("exchange: create _exchange_changes: %w", err)
 	}
+	// kind добавлена позже сущностной версии таблицы — доводим существующие базы.
+	if err := db.AddColumnIfMissing(ctx, "_exchange_changes", "kind", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("exchange: add _exchange_changes.kind: %w", err)
+	}
 	if _, err := db.Exec(ctx,
 		`CREATE INDEX IF NOT EXISTS idx_exchange_changes_node ON _exchange_changes (plan, node_code)`); err != nil {
 		return fmt.Errorf("exchange: index _exchange_changes: %w", err)
+	}
+	// _exchange_applied — «водяной знак» применённых версий для состава без
+	// собственного _version (константы, регистры сведений): аналог сравнения
+	// _version у сущностей. changed_at последнего применённого источникового
+	// изменения по (план, тип, ключ); идемпотентность и by_time опираются на него.
+	if _, err := db.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS _exchange_applied (
+			plan        TEXT NOT NULL,
+			object_type TEXT NOT NULL,
+			object_id   TEXT NOT NULL,
+			changed_at  BIGINT NOT NULL,
+			PRIMARY KEY (plan, object_type, object_id)
+		)`); err != nil {
+		return fmt.Errorf("exchange: create _exchange_applied: %w", err)
 	}
 	if _, err := db.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS _exchange_peers (
@@ -164,17 +194,18 @@ func (db *DB) SaveExchangeToken(ctx context.Context, plan, token string) error {
 func (db *DB) RegisterExchangeChange(ctx context.Context, ch ExchangeChange) error {
 	d := db.dialect
 	q := fmt.Sprintf(`
-		INSERT INTO _exchange_changes (plan, object_type, object_id, node_code, version, deletion, changed_at, sent_no)
-		VALUES (%s, %s, %s, %s, %s, %s, %s, 0)
+		INSERT INTO _exchange_changes (plan, object_type, object_id, node_code, kind, version, deletion, changed_at, sent_no)
+		VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0)
 		ON CONFLICT (plan, object_type, object_id, node_code) DO UPDATE SET
+			kind = EXCLUDED.kind,
 			version = EXCLUDED.version,
 			deletion = EXCLUDED.deletion,
 			changed_at = EXCLUDED.changed_at,
 			sent_no = 0`,
 		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4),
-		d.Placeholder(5), d.Placeholder(6), d.Placeholder(7))
+		d.Placeholder(5), d.Placeholder(6), d.Placeholder(7), d.Placeholder(8))
 	if _, err := db.Exec(ctx, q, ch.Plan, ch.ObjectType, ch.ObjectID, ch.NodeCode,
-		ch.Version, boolToInt(ch.Deletion), ch.ChangedAt); err != nil {
+		ch.Kind, ch.Version, boolToInt(ch.Deletion), ch.ChangedAt); err != nil {
 		return fmt.Errorf("exchange: register change: %w", err)
 	}
 	return nil
@@ -186,7 +217,7 @@ func (db *DB) RegisterExchangeChange(ctx context.Context, ch ExchangeChange) err
 func (db *DB) PendingExchangeChanges(ctx context.Context, plan, nodeCode string) ([]ExchangeChange, error) {
 	d := db.dialect
 	q := fmt.Sprintf(`
-		SELECT plan, object_type, object_id, node_code, version, deletion, changed_at, sent_no
+		SELECT plan, object_type, object_id, node_code, kind, version, deletion, changed_at, sent_no
 		FROM _exchange_changes
 		WHERE plan = %s AND node_code = %s
 		ORDER BY changed_at ASC, object_type ASC, object_id ASC`,
@@ -201,7 +232,7 @@ func (db *DB) PendingExchangeChanges(ctx context.Context, plan, nodeCode string)
 		var ch ExchangeChange
 		var del int64
 		if err := rows.Scan(&ch.Plan, &ch.ObjectType, &ch.ObjectID, &ch.NodeCode,
-			&ch.Version, &del, &ch.ChangedAt, &ch.SentNo); err != nil {
+			&ch.Kind, &ch.Version, &del, &ch.ChangedAt, &ch.SentNo); err != nil {
 			return nil, fmt.Errorf("exchange: scan change: %w", err)
 		}
 		ch.Deletion = del != 0
@@ -218,12 +249,12 @@ func (db *DB) GetExchangeChange(ctx context.Context, plan, objectType, objectID,
 	var ch ExchangeChange
 	var del int64
 	err := db.QueryRow(ctx,
-		fmt.Sprintf(`SELECT plan, object_type, object_id, node_code, version, deletion, changed_at, sent_no
+		fmt.Sprintf(`SELECT plan, object_type, object_id, node_code, kind, version, deletion, changed_at, sent_no
 			FROM _exchange_changes
 			WHERE plan = %s AND object_type = %s AND object_id = %s AND node_code = %s`,
 			d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4)),
 		plan, objectType, objectID, nodeCode).
-		Scan(&ch.Plan, &ch.ObjectType, &ch.ObjectID, &ch.NodeCode, &ch.Version, &del, &ch.ChangedAt, &ch.SentNo)
+		Scan(&ch.Plan, &ch.ObjectType, &ch.ObjectID, &ch.NodeCode, &ch.Kind, &ch.Version, &del, &ch.ChangedAt, &ch.SentNo)
 	if err != nil {
 		return ExchangeChange{}, false, nil
 	}
@@ -410,6 +441,38 @@ func (db *DB) SetExchangeObjectState(ctx context.Context, entity *metadata.Entit
 	args = append(args, idArg(d, id))
 	if _, err := db.Exec(ctx, q, args...); err != nil {
 		return fmt.Errorf("exchange: set object state %s: %w", entity.Name, err)
+	}
+	return nil
+}
+
+// ExchangeAppliedAt возвращает changed_at последнего применённого изменения по
+// (план, тип, ключ) из _exchange_applied — «локальную версию» для состава без
+// собственного _version. (0, false), если ничего не применялось.
+func (db *DB) ExchangeAppliedAt(ctx context.Context, plan, objectType, objectID string) (int64, bool) {
+	d := db.dialect
+	var at int64
+	err := db.QueryRow(ctx,
+		fmt.Sprintf(`SELECT changed_at FROM _exchange_applied WHERE plan = %s AND object_type = %s AND object_id = %s`,
+			d.Placeholder(1), d.Placeholder(2), d.Placeholder(3)),
+		plan, objectType, objectID).Scan(&at)
+	if err != nil {
+		return 0, false
+	}
+	return at, true
+}
+
+// SetExchangeApplied монотонно поднимает «водяной знак» применённого изменения до
+// changedAt (меньшие значения не откатывают — защита от переупорядоченной доставки).
+func (db *DB) SetExchangeApplied(ctx context.Context, plan, objectType, objectID string, changedAt int64) error {
+	d := db.dialect
+	q := fmt.Sprintf(`
+		INSERT INTO _exchange_applied (plan, object_type, object_id, changed_at) VALUES (%s, %s, %s, %s)
+		ON CONFLICT (plan, object_type, object_id) DO UPDATE SET changed_at = CASE
+			WHEN _exchange_applied.changed_at > EXCLUDED.changed_at
+			THEN _exchange_applied.changed_at ELSE EXCLUDED.changed_at END`,
+		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4))
+	if _, err := db.Exec(ctx, q, plan, objectType, objectID, changedAt); err != nil {
+		return fmt.Errorf("exchange: set applied: %w", err)
 	}
 	return nil
 }

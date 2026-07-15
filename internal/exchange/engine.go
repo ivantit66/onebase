@@ -73,3 +73,46 @@ func RegisterOnSave(ctx context.Context, store *storage.DB, plans []*metadata.Ex
 	}
 	return nil
 }
+
+// RegisterConstantOnSave регистрирует изменение константы во всех планах обмена,
+// чей состав включает её (Константа.X). Строка очереди ставится всем узлам плана,
+// кроме текущего. Вызывается в транзакции записи константы.
+//
+// У констант нет _version: идемпотентность и by_time на приёмнике опираются на
+// changed_at (момент записи) и «водяной знак» _exchange_applied. Version в строке
+// очереди тоже несёт changed_at — только для единообразия с сущностным путём.
+func RegisterConstantOnSave(ctx context.Context, store *storage.DB, plans []*metadata.ExchangePlan, name string) error {
+	if store == nil || name == "" || len(plans) == 0 {
+		return nil
+	}
+	changedAt := time.Now().UnixMilli()
+	for _, plan := range plans {
+		if !plan.IncludesConstant(name) {
+			continue
+		}
+		thisNode, err := store.GetExchangeThisNode(ctx, plan.Name)
+		if err != nil {
+			return err
+		}
+		if thisNode == "" {
+			continue
+		}
+		for _, node := range plan.Nodes {
+			if strings.EqualFold(node.Code, thisNode) {
+				continue
+			}
+			if err := store.RegisterExchangeChange(ctx, storage.ExchangeChange{
+				Plan:       plan.Name,
+				ObjectType: name,
+				ObjectID:   "", // единственное глобальное значение
+				NodeCode:   node.Code,
+				Kind:       storage.ExchangeKindConstant,
+				Version:    changedAt,
+				ChangedAt:  changedAt,
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

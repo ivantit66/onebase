@@ -46,13 +46,16 @@ type Package struct {
 // значения (числа — точной строкой, даты — RFC3339, ссылки — UUID-строкой),
 // пригодные для обратной записи через тот же путь, что и обычное сохранение.
 type PackageObject struct {
-	Type       string                       `json:"type"`
-	ID         string                       `json:"id"`
-	Version    int64                        `json:"version"`
-	Deletion   bool                         `json:"deletion,omitempty"`
-	ChangedAt  int64                        `json:"changed_at"`
-	Fields     map[string]any               `json:"fields,omitempty"`
-	TableParts map[string][]map[string]any  `json:"table_parts,omitempty"`
+	// Kind — категория объекта: "" (сущность), storage.ExchangeKindConstant,
+	// storage.ExchangeKindInfoReg. Определяет форму полей и путь применения.
+	Kind       string                      `json:"kind,omitempty"`
+	Type       string                      `json:"type"`
+	ID         string                      `json:"id,omitempty"`
+	Version    int64                       `json:"version"`
+	Deletion   bool                        `json:"deletion,omitempty"`
+	ChangedAt  int64                       `json:"changed_at"`
+	Fields     map[string]any              `json:"fields,omitempty"`
+	TableParts map[string][]map[string]any `json:"table_parts,omitempty"`
 }
 
 // LoadResult — итог загрузки пакета.
@@ -93,45 +96,61 @@ func BuildPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 		pkg := Package{Format: FormatV1, Plan: plan.Name, FromNode: thisNode, ToNode: toNode, MessageNo: msgNo, AckNo: peer.RecvNo}
 		var included []storage.ExchangeChange
 		for _, ch := range changes {
-			ent := resolver.GetEntity(ch.ObjectType)
-			if ent == nil {
-				continue // сущность убрана из конфигурации — пропускаем
-			}
-			id, err := uuid.Parse(ch.ObjectID)
-			if err != nil {
-				continue
-			}
-			row, err := store.GetByID(ctx, ent.Name, id, ent)
-			if err != nil {
-				continue // объект недоступен (например, физически удалён) — пропускаем
-			}
-			obj := PackageObject{
-				Type:      ch.ObjectType,
-				ID:        ch.ObjectID,
-				Version:   ch.Version,
-				Deletion:  ch.Deletion,
-				ChangedAt: ch.ChangedAt,
-				Fields:    canonicalHeader(ent, row),
-			}
-			for _, tp := range ent.TableParts {
-				rows, err := store.GetTablePartRows(ctx, ent.Name, tp.Name, id, tp)
-				if err != nil {
-					return err
+			switch ch.Kind {
+			case storage.ExchangeKindConstant:
+				val, gerr := store.GetConstant(ctx, ch.ObjectType)
+				if gerr != nil {
+					continue // константа убрана из конфигурации/не задана — пропускаем
 				}
-				if len(rows) == 0 {
+				pkg.Objects = append(pkg.Objects, PackageObject{
+					Kind:      storage.ExchangeKindConstant,
+					Type:      ch.ObjectType,
+					Version:   ch.Version,
+					ChangedAt: ch.ChangedAt,
+					Fields:    map[string]any{"value": val},
+				})
+				included = append(included, ch)
+			default: // сущность (справочник/документ)
+				ent := resolver.GetEntity(ch.ObjectType)
+				if ent == nil {
+					continue // сущность убрана из конфигурации — пропускаем
+				}
+				id, err := uuid.Parse(ch.ObjectID)
+				if err != nil {
 					continue
 				}
-				canon := make([]map[string]any, 0, len(rows))
-				for _, r := range rows {
-					canon = append(canon, canonicalRow(tp.Fields, r))
+				row, err := store.GetByID(ctx, ent.Name, id, ent)
+				if err != nil {
+					continue // объект недоступен (например, физически удалён) — пропускаем
 				}
-				if obj.TableParts == nil {
-					obj.TableParts = map[string][]map[string]any{}
+				obj := PackageObject{
+					Type:      ch.ObjectType,
+					ID:        ch.ObjectID,
+					Version:   ch.Version,
+					Deletion:  ch.Deletion,
+					ChangedAt: ch.ChangedAt,
+					Fields:    canonicalHeader(ent, row),
 				}
-				obj.TableParts[tp.Name] = canon
+				for _, tp := range ent.TableParts {
+					rows, err := store.GetTablePartRows(ctx, ent.Name, tp.Name, id, tp)
+					if err != nil {
+						return err
+					}
+					if len(rows) == 0 {
+						continue
+					}
+					canon := make([]map[string]any, 0, len(rows))
+					for _, r := range rows {
+						canon = append(canon, canonicalRow(tp.Fields, r))
+					}
+					if obj.TableParts == nil {
+						obj.TableParts = map[string][]map[string]any{}
+					}
+					obj.TableParts[tp.Name] = canon
+				}
+				pkg.Objects = append(pkg.Objects, obj)
+				included = append(included, ch)
 			}
-			pkg.Objects = append(pkg.Objects, obj)
-			included = append(included, ch)
 		}
 		if err := store.MarkExchangeChangesSent(ctx, included, msgNo); err != nil {
 			return err
@@ -184,6 +203,12 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 			return err
 		}
 		for _, obj := range pkg.Objects {
+			if obj.Kind == storage.ExchangeKindConstant {
+				if err := applyConstant(ctx, store, plan, thisNode, pkg.FromNode, obj, &res); err != nil {
+					return err
+				}
+				continue
+			}
 			ent := resolver.GetEntity(obj.Type)
 			if ent == nil {
 				res.Skipped++ // сущность неизвестна приёмнику

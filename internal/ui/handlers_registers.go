@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/ivantit66/onebase/internal/exchange"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/storage"
 )
@@ -518,18 +519,28 @@ func (s *Server) constantsSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	for _, c := range consts {
-		val := submitted[c.Name]
-		var v any
-		if val == "" {
-			v = nil
-		} else {
-			v = val
+	// Запись констант и регистрация изменений в планах обмена (план 86) — в одной
+	// транзакции, чтобы сбой регистрации откатывал запись (как для сущностей).
+	plans := s.reg.ExchangePlans()
+	err := s.store.WithTx(r.Context(), func(ctx context.Context) error {
+		for _, c := range consts {
+			val := submitted[c.Name]
+			var v any
+			if val != "" {
+				v = val
+			}
+			if err := s.store.SetConstant(ctx, c.Name, v); err != nil {
+				return err
+			}
+			if err := exchange.RegisterConstantOnSave(ctx, s.store, plans, c.Name); err != nil {
+				return err
+			}
 		}
-		if err := s.store.SetConstant(r.Context(), c.Name, v); err != nil {
-			http.Error(w, s.errText(r, err), 500)
-			return
-		}
+		return nil
+	})
+	if err != nil {
+		http.Error(w, s.errText(r, err), 500)
+		return
 	}
 	http.Redirect(w, r, "/ui/constants?saved=1", http.StatusSeeOther)
 }
