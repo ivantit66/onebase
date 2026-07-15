@@ -24,6 +24,19 @@ func init() {
 
 var staticHTTP http.Handler
 
+// noStore гасит кэширование embed-статики (configurator.js, Monaco, ECharts,
+// SlickGrid). Эти байты живут в бинаре и обновляются только при пересборке, а
+// embed.FS отдаёт стабильный Last-Modified — поэтому WebView2/браузер отвечают
+// 304 Not Modified и бесконечно переиспользуют копию из предыдущей сборки
+// (обычный F5 против этого бессилен). no-store заставляет клиента всегда
+// тянуть свежие байты после обновления onebase-gui.exe.
+func noStore(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		h.ServeHTTP(w, r)
+	})
+}
+
 // Server is the launcher HTTP server (list of registered bases).
 type Server struct {
 	h       *handler
@@ -75,18 +88,19 @@ func (s *Server) ListenAndServe() error {
 	r.Use(websec.SecurityHeaders)
 	r.Use(websec.CSRFProtect)
 
-	// Static assets (embedded)
-	r.Handle("/static/*", http.StripPrefix("/static/", staticHTTP))
+	// Static assets (embedded). noStore — чтобы после пересборки бинаря клиент
+	// не обслуживал прошивку embed-статики из кэша (см. комментарий у noStore).
+	r.Handle("/static/*", noStore(http.StripPrefix("/static/", staticHTTP)))
 	// Monaco editor (shared vendored tree) — отдельный путь, чтобы не
 	// конфликтовать с catch-all /static/*. Конфигуратор и редактор форм
 	// грузят его офлайн вместо CDN.
-	r.Handle("/vendor/monaco/*", http.StripPrefix("/vendor/monaco/", webassets.MonacoHandler()))
+	r.Handle("/vendor/monaco/*", noStore(http.StripPrefix("/vendor/monaco/", webassets.MonacoHandler())))
 	// ECharts (тот же вендоренный пакет, что и у базы) — предпросмотр виджета
 	// в конфигураторе рисуется тем же графическим движком, что и рабочий стол.
-	r.Handle("/vendor/echarts/*", http.StripPrefix("/vendor/echarts/", webassets.EChartsHandler()))
+	r.Handle("/vendor/echarts/*", noStore(http.StripPrefix("/vendor/echarts/", webassets.EChartsHandler())))
 	// SlickGrid (6pac fork, MIT) — грид для редактируемых табличных частей в
 	// managed-формах. Самохостинг вместо CDN: UI работает офлайн.
-	r.Handle("/vendor/slickgrid/*", http.StripPrefix("/vendor/slickgrid/", webassets.SlickGridHandler()))
+	r.Handle("/vendor/slickgrid/*", noStore(http.StripPrefix("/vendor/slickgrid/", webassets.SlickGridHandler())))
 
 	// Launcher pages (no auth)
 	r.Get("/", s.h.index)
