@@ -33,8 +33,10 @@ func CheckExchangePlans(proj *project.Project) []Issue {
 		constByName[strings.ToLower(c.Name)] = true
 	}
 	infoRegByName := map[string]bool{}
+	infoRegPeriodic := map[string]bool{}
 	for _, ir := range proj.InfoRegisters {
 		infoRegByName[strings.ToLower(ir.Name)] = true
+		infoRegPeriodic[strings.ToLower(ir.Name)] = ir.Periodic
 	}
 
 	seenName := map[string]bool{}
@@ -87,8 +89,11 @@ func CheckExchangePlans(proj *project.Project) []Issue {
 					add(plan.Name, fmt.Sprintf("в составе указана несуществующая константа %q", c.Name))
 				}
 			case metadata.ContentInfoRegister:
-				if !infoRegByName[strings.ToLower(c.Name)] {
+				low := strings.ToLower(c.Name)
+				if !infoRegByName[low] {
 					add(plan.Name, fmt.Sprintf("в составе указан несуществующий регистр сведений %q", c.Name))
+				} else if infoRegPeriodic[low] {
+					add(plan.Name, fmt.Sprintf("регистр сведений %q периодический — синхронизация периодических регистров пока не поддержана (обмен его пропустит)", c.Name))
 				}
 			default: // metadata.ContentEntity
 				kinds, ok := kindsByName[strings.ToLower(c.Name)]

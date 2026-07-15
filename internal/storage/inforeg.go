@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -10,6 +12,47 @@ import (
 	"github.com/ivantit66/onebase/internal/i18n/i18nerr"
 	"github.com/ivantit66/onebase/internal/metadata"
 )
+
+// InfoRegGetExact reads the exact record by full primary key (dimensions, plus
+// period for periodic registers). Returns (nil, nil) if there is no such record.
+// Used by exchange (план 86) to re-read a changed record's current resources when
+// building an outgoing package.
+func (db *DB) InfoRegGetExact(ctx context.Context, ir *metadata.InfoRegister, dimKey map[string]any, period *time.Time) (map[string]any, error) {
+	d := db.dialect
+	table := metadata.InfoRegTableName(ir.Name)
+	where, args := dimWhere(d, ir, dimKey, 1)
+	if ir.Periodic && period != nil {
+		where = fmt.Sprintf("%s AND period = %s", where, d.Placeholder(len(args)+1))
+		args = append(args, *period)
+	}
+	sql2 := fmt.Sprintf("SELECT %s FROM %s WHERE %s LIMIT 1",
+		strings.Join(resourceAndDimCols(ir), ", "), table, where)
+	rec, err := db.infoRegScan(ctx, ir, sql2, args)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return rec, err
+}
+
+// InfoRegApplyExchange применяет запись регистра сведений из пакета обмена
+// (план 86). Значения измерений/ресурсов приходят канонизированными (ссылки —
+// строкой-UUID, даты — RFC3339), поэтому приводим их к аргументам БД тем же
+// normalizeRegArg, что и запись движений. deletion=true удаляет запись по ключу.
+func (db *DB) InfoRegApplyExchange(ctx context.Context, ir *metadata.InfoRegister, dims, resources map[string]any, period *time.Time, deletion bool) error {
+	d := db.dialect
+	cdims := make(map[string]any, len(ir.Dimensions))
+	for _, f := range ir.Dimensions {
+		cdims[f.Name] = normalizeRegArg(d, dims[f.Name], f.RefEntity != "")
+	}
+	if deletion {
+		return db.InfoRegDelete(ctx, ir, cdims, period)
+	}
+	cres := make(map[string]any, len(ir.Resources))
+	for _, f := range ir.Resources {
+		cres[f.Name] = normalizeRegArg(d, resources[f.Name], f.RefEntity != "")
+	}
+	return db.InfoRegSet(ctx, ir, cdims, cres, period)
+}
 
 // InfoRegSet upserts a record in an info register.
 // For periodic registers, period must be non-nil.

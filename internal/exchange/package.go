@@ -21,11 +21,12 @@ import (
 // FormatV1 — значение поля Format в пакете первой версии.
 const FormatV1 = "onebase-exchange/1"
 
-// EntityResolver отдаёт метаданные сущности по имени. Реализуется
-// runtime.Registry (метод GetEntity), но объявлен здесь, чтобы пакет обмена не
-// зависел от runtime и был тестируем с фейковым резолвером.
+// EntityResolver отдаёт метаданные состава обмена по имени (сущность или регистр
+// сведений). Реализуется runtime.Registry, но объявлен здесь, чтобы пакет обмена
+// не зависел от runtime и был тестируем с фейковым резолвером.
 type EntityResolver interface {
 	GetEntity(name string) *metadata.Entity
+	GetInfoRegister(name string) *metadata.InfoRegister
 }
 
 // Package — конверт обмена.
@@ -109,6 +110,41 @@ func BuildPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 					ChangedAt: ch.ChangedAt,
 					Fields:    map[string]any{"value": val},
 				})
+				included = append(included, ch)
+			case storage.ExchangeKindInfoReg:
+				ir := resolver.GetInfoRegister(ch.ObjectType)
+				if ir == nil || ir.Periodic {
+					continue // регистр убран/периодический (не поддержан) — пропускаем
+				}
+				dims, derr := decodeInfoRegKey(ch.ObjectID)
+				if derr != nil {
+					continue
+				}
+				obj := PackageObject{
+					Kind:      storage.ExchangeKindInfoReg,
+					Type:      ch.ObjectType,
+					ID:        ch.ObjectID,
+					Version:   ch.Version,
+					Deletion:  ch.Deletion,
+					ChangedAt: ch.ChangedAt,
+					Fields:    map[string]any{},
+				}
+				for k, v := range dims { // измерения из ключа уже каноничны
+					obj.Fields[k] = v
+				}
+				if !ch.Deletion {
+					rec, rerr := store.InfoRegGetExact(ctx, ir, dims, nil)
+					if rerr != nil {
+						return rerr
+					}
+					if rec == nil {
+						continue // запись исчезла со времени регистрации — пропускаем
+					}
+					for _, rf := range ir.Resources {
+						obj.Fields[rf.Name] = canonicalScalar(rf, rec[rf.Name])
+					}
+				}
+				pkg.Objects = append(pkg.Objects, obj)
 				included = append(included, ch)
 			default: // сущность (справочник/документ)
 				ent := resolver.GetEntity(ch.ObjectType)
@@ -205,6 +241,12 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 		for _, obj := range pkg.Objects {
 			if obj.Kind == storage.ExchangeKindConstant {
 				if err := applyConstant(ctx, store, plan, thisNode, pkg.FromNode, obj, &res); err != nil {
+					return err
+				}
+				continue
+			}
+			if obj.Kind == storage.ExchangeKindInfoReg {
+				if err := applyInfoReg(ctx, store, resolver, plan, thisNode, pkg.FromNode, obj, &res); err != nil {
 					return err
 				}
 				continue

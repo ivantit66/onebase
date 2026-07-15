@@ -21,10 +21,12 @@ import (
 )
 
 // ExchangeRegistry — то, что объекту ПланыОбмена нужно от реестра конфигурации.
-// Реализуется *runtime.Registry (GetExchangePlan + GetEntity).
+// Реализуется *runtime.Registry. GetEntity+GetInfoRegister требуются, потому что
+// объект передаётся в exchange.BuildPackage/ApplyPackage как EntityResolver.
 type ExchangeRegistry interface {
 	GetExchangePlan(name string) *metadata.ExchangePlan
 	GetEntity(name string) *metadata.Entity
+	GetInfoRegister(name string) *metadata.InfoRegister
 }
 
 // ExchangePlansRoot — корневой DSL-объект ПланыОбмена. Член по имени плана
