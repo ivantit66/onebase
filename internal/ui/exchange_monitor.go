@@ -94,7 +94,7 @@ func (s *Server) exchangeMonitorSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	push, load, err := exchange.SyncWithNode(ctx, s.store, s.reg, plan, thisNode, nodeCode, peer.URL, token,
-		exchange.ApplyOptions{Hook: NewExchangeHook(s.store, s.reg, s.interp)})
+		s.exchangeApplyOptions())
 	if err != nil {
 		s.exchangeMonitorRedirect(w, r, "", s.errText(r, err))
 		return

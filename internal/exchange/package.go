@@ -54,6 +54,9 @@ type PackageObject struct {
 	ID         string                      `json:"id,omitempty"`
 	Version    int64                       `json:"version"`
 	Deletion   bool                        `json:"deletion,omitempty"`
+	// Posted — документ был проведён на источнике. Приёмник по нему перепроводит
+	// документ, если у плана включён repost (иначе документ приходит непроведённым).
+	Posted     bool                        `json:"posted,omitempty"`
 	ChangedAt  int64                       `json:"changed_at"`
 	Fields     map[string]any              `json:"fields,omitempty"`
 	TableParts map[string][]map[string]any `json:"table_parts,omitempty"`
@@ -61,10 +64,11 @@ type PackageObject struct {
 
 // LoadResult — итог загрузки пакета.
 type LoadResult struct {
-	Applied   int `json:"applied"`   // применено (создано/обновлено)
-	Skipped   int `json:"skipped"`   // пропущено (идемпотентно: версия не новее, либо сущность неизвестна)
-	Deleted   int `json:"deleted"`   // применено с пометкой на удаление
-	Conflicts int `json:"conflicts"` // обнаружено встречных правок (разрешено правилом)
+	Applied   int `json:"applied"`            // применено (создано/обновлено)
+	Skipped   int `json:"skipped"`            // пропущено (идемпотентно: версия не новее, либо сущность неизвестна)
+	Deleted   int `json:"deleted"`            // применено с пометкой на удаление
+	Conflicts int `json:"conflicts"`          // обнаружено встречных правок (разрешено правилом)
+	Reposted  int `json:"reposted,omitempty"` // перепроведено документов на приёмнике (repost)
 }
 
 // BuildPackage собирает пакет незапподтверждённых изменений для узла toNode,
@@ -164,6 +168,7 @@ func BuildPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 					ID:        ch.ObjectID,
 					Version:   ch.Version,
 					Deletion:  ch.Deletion,
+					Posted:    ent.Kind == metadata.KindDocument && toBool(row["posted"]),
 					ChangedAt: ch.ChangedAt,
 					Fields:    canonicalHeader(ent, row),
 				}
@@ -233,6 +238,7 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 		return LoadResult{}, fmt.Errorf("exchange: пакет плана %q загружается в план %q", pkg.Plan, plan.Name)
 	}
 	var res LoadResult
+	var toRepost []PackageObject // проведённые документы к перепроведению (после коммита)
 	err = store.WithTx(ctx, func(ctx context.Context) error {
 		thisNode, err := store.GetExchangeThisNode(ctx, plan.Name)
 		if err != nil {
@@ -243,6 +249,7 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 		// узел не хаб или топология плоская — тогда обмен работает как раньше.
 		transit := plan.TransitTargets(thisNode, pkg.FromNode)
 		var applied []PackageObject
+		toRepost = toRepost[:0]
 		for _, obj := range pkg.Objects {
 			var objApplied bool
 			switch obj.Kind {
@@ -256,8 +263,17 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 			if err != nil {
 				return err
 			}
-			if objApplied && len(transit) > 0 {
+			if !objApplied {
+				continue
+			}
+			if len(transit) > 0 {
 				applied = append(applied, obj)
+			}
+			// Перепроведение (план 86, фаза 2): применённый документ, проведённый на
+			// источнике, при включённом repost и доступном обработчике — в очередь
+			// на перепроведение ПОСЛЕ коммита (entityservice открывает свою транзакцию).
+			if plan.Repost && opts.Repost != nil && obj.Kind == "" && obj.Posted && !obj.Deletion {
+				toRepost = append(toRepost, obj)
 			}
 		}
 		// Ретрансляция применённых изменений спицам (в той же транзакции).
@@ -294,6 +310,21 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 	})
 	if err != nil {
 		return LoadResult{}, err
+	}
+	// Перепроведение документов — ВНЕ транзакции загрузки: entityservice.Repost
+	// открывает собственную транзакцию (storage.WithTx не вложенная), запускает
+	// ОбработкаПроведения и пишет движения в регистры приёмника. Данные уже
+	// закоммичены, поэтому ошибка перепроведения не откатывает загрузку — сообщаем
+	// её вызывающему, документ останется непроведённым до следующей синхронизации.
+	for _, obj := range toRepost {
+		id, perr := uuid.Parse(obj.ID)
+		if perr != nil {
+			continue
+		}
+		if rerr := opts.Repost(ctx, obj.Type, id); rerr != nil {
+			return res, fmt.Errorf("exchange: перепроведение %s %s: %w", obj.Type, obj.ID, rerr)
+		}
+		res.Reposted++
 	}
 	return res, nil
 }

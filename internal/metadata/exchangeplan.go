@@ -32,6 +32,11 @@ type ExchangePlan struct {
 	Content  []string          `yaml:"content"` // "Справочник.X" / "Документ.X" / "X"
 	Nodes    []ExchangeNode    `yaml:"nodes"`
 	Conflict string            `yaml:"conflict"` // by_time | by_node_priority | hook
+	// Repost — перепроводить проведённые на источнике документы на приёмнике
+	// (запустить ОбработкаПроведения, движения лягут в регистры приёмника). По
+	// умолчанию false — документы приходят непроведёнными. Действует только на
+	// онлайн-приёмнике (сервере); файловая CLI-загрузка оставляет непроведёнными.
+	Repost bool `yaml:"repost"`
 
 	// parsed — разобранный Content, заполняется в Normalize (при загрузке).
 	// Кэшируется, потому что Includes зовётся на каждой записи объекта.

@@ -12,6 +12,7 @@ package entityservice
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -528,6 +529,91 @@ func (s *Service) registerExchange(ctx context.Context, entity *metadata.Entity,
 		return nil
 	}
 	return exchange.RegisterOnSave(ctx, s.Store, plans, entity, id, deletion)
+}
+
+// Repost перепроводит уже записанный документ: перечитывает его из БД, запускает
+// ОбработкаПроведения (OnPost), пишет движения в регистры и ставит признак
+// проведения — БЕЗ повторного Upsert, без регистрации в обмене (нет эха) и без
+// изменения _version. Используется загрузкой пакета обмена (план 86, repost) для
+// переноса проведённости документа на приёмник. Открывает собственную транзакцию,
+// поэтому вызывается ВНЕ транзакции загрузки.
+func (s *Service) Repost(ctx context.Context, entityName string, id uuid.UUID) error {
+	ent := s.Reg.GetEntity(entityName)
+	if ent == nil {
+		return fmt.Errorf("перепроведение: сущность %q не найдена", entityName)
+	}
+	if !ent.Posting {
+		return nil // сущность не проводится — нечего делать
+	}
+	fields, err := s.Store.GetByID(ctx, ent.Name, id, ent)
+	if err != nil {
+		return fmt.Errorf("перепроведение %s: чтение документа: %w", ent.Name, err)
+	}
+	tps := make(map[string][]map[string]any, len(ent.TableParts))
+	for _, tp := range ent.TableParts {
+		rows, err := s.Store.GetTablePartRows(ctx, ent.Name, tp.Name, id, tp)
+		if err != nil {
+			return fmt.Errorf("перепроведение %s: чтение ТЧ %s: %w", ent.Name, tp.Name, err)
+		}
+		tps[tp.Name] = rows
+	}
+
+	mc := runtime.NewMovementsCollector(ent.Name, id)
+	SetPeriodFromFields(mc, ent, fields)
+	// Дата запрета проведения (свёртка базы, план 74): в замороженный период не
+	// перепроводим, иначе движения вернутся и дадут двойной счёт с опорными остатками.
+	if mc.Period != nil {
+		if lock, ok := s.Store.GetPostingLockDate(ctx); ok && storage.PostingFrozen(lock, *mc.Period) {
+			return storage.PostingFrozenError(lock)
+		}
+	}
+	lockCollector := runtime.NewLockCollector()
+	hookCtx := runtime.ContextWithLockCollector(ctx, lockCollector)
+	defer lockCollector.ReleaseAll()
+
+	obj := &runtime.Object{Type: ent.Name, Kind: ent.Kind, ID: id, Fields: fields, TablePartRows: tps}
+	if obj.Fields == nil {
+		obj.Fields = map[string]any{}
+	}
+	selfRef := &interpreter.Ref{UUID: id.String(), Type: ent.Name}
+	obj.Fields["ссылка"] = selfRef
+	obj.Fields["reference"] = selfRef
+	if s.PrepareHook != nil {
+		s.PrepareHook(ctx, ent, obj)
+	}
+	if s.EnrichTPRows != nil {
+		for _, tp := range ent.TableParts {
+			if rows, ok := obj.TablePartRows[tp.Name]; ok {
+				s.EnrichTPRows(ctx, tp, rows)
+			}
+		}
+	}
+
+	proc := s.Reg.GetProcedure(ent.Name, "OnPost")
+	if proc != nil {
+		var msgs []string
+		var vars map[string]any
+		if s.BuildVars != nil {
+			vars = s.BuildVars(hookCtx, mc, &msgs)
+		}
+		var thisVal interpreter.This = obj
+		if s.MakeThis != nil {
+			thisVal = s.MakeThis(hookCtx, obj, ent)
+		}
+		if err := s.Interp.Run(proc, thisVal, vars); err != nil {
+			return fmt.Errorf("перепроведение %s: ОбработкаПроведения: %w", ent.Name, err)
+		}
+	}
+
+	return s.Store.WithTx(ctx, func(ctx context.Context) error {
+		if err := s.Store.AdvisoryXactLock(ctx, lockCollector.Keys()); err != nil {
+			return err
+		}
+		if err := s.writeMovements(ctx, ent.Name, id, mc); err != nil {
+			return err
+		}
+		return s.Store.SetPosted(ctx, ent.Name, id, true)
+	})
 }
 
 // writeMovements распределяет накопленные в mc движения по нужным типам
