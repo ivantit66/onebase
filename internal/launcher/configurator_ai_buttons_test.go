@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/ivantit66/onebase/internal/webassets"
 )
 
 // TestConfiguratorJS_AiBootWaitsForDOMReady — регрессия: плавающие кнопки ИИ
@@ -32,11 +34,16 @@ func TestConfiguratorJS_AiBootWaitsForDOMReady(t *testing.T) {
 // обычный F5 против этого бессилен (это и маскировало регрессию выше). noStore
 // должен ставить Cache-Control: no-store на каждый ответ embed-handler'а.
 func TestNoStore_DisablesCacheForEmbedAssets(t *testing.T) {
+	// EChartsHandler intentionally sets an immutable year-long cache policy.
+	// Test the real composition used by the launcher, not a dummy handler that
+	// never tries to overwrite Cache-Control.
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/static/configurator.js", nil)
-	noStore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})).ServeHTTP(rec, req)
+	req := httptest.NewRequest(http.MethodGet, "/vendor/echarts/echarts.min.js", nil)
+	h := noStore(http.StripPrefix("/vendor/echarts/", webassets.EChartsHandler()))
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET ECharts: status=%d", rec.Code)
+	}
 	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control: want %q, got %q", "no-store", got)
 	}

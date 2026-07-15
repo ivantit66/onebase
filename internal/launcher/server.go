@@ -32,9 +32,26 @@ var staticHTTP http.Handler
 // тянуть свежие байты после обновления onebase-gui.exe.
 func noStore(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		h.ServeHTTP(w, r)
+		h.ServeHTTP(&noStoreResponseWriter{ResponseWriter: w}, r)
 	})
+}
+
+// noStoreResponseWriter applies the policy at the moment headers are written.
+// This matters for vendor handlers: they set their own immutable cache policy
+// inside ServeHTTP and would otherwise overwrite a header set by middleware
+// before the call.
+type noStoreResponseWriter struct {
+	http.ResponseWriter
+}
+
+func (w *noStoreResponseWriter) WriteHeader(statusCode int) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *noStoreResponseWriter) Write(p []byte) (int, error) {
+	w.Header().Set("Cache-Control", "no-store")
+	return w.ResponseWriter.Write(p)
 }
 
 // Server is the launcher HTTP server (list of registered bases).
