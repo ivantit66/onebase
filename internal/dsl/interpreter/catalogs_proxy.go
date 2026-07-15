@@ -63,6 +63,7 @@ func MatchValueString(raw any) string {
 type CatalogsDB interface {
 	PredefinedDB
 	FindCatalogByField(ctx context.Context, entity *metadata.Entity, fieldName, value string) (idStr, display string, ok bool, err error)
+	ListCatalogMatchesByField(ctx context.Context, entity *metadata.Entity, fieldName, value string) (ids, displays []string, err error)
 	// MatchCatalogByField — safe-match: количество совпадений и (при ровно
 	// одном) id/представление найденной записи.
 	MatchCatalogByField(ctx context.Context, entity *metadata.Entity, fieldName, value string) (idStr, display string, count int, err error)
@@ -121,7 +122,18 @@ func NewStaticCtx(ctx context.Context) CtxSource { return staticCtx{ctx: ctx} }
 // после прямой записи из DSL (Справочники.X.Создать().Записать()), которая идёт
 // мимо entityservice.Save. nil — обмен не подключён (тесты/headless). Замыкание
 // строит host-слой (ui), где доступны store и реестр планов.
-type ExchangeRegistrar func(ctx context.Context, entity *metadata.Entity, id uuid.UUID) error
+type ExchangeRegistrar func(ctx context.Context, entity *metadata.Entity, id uuid.UUID, deletion bool) error
+
+type optionalTxRunner interface {
+	WithTxIfNeeded(ctx context.Context, fn func(context.Context) error) error
+}
+
+func withOptionalCatalogTx(db CatalogsDB, ctx context.Context, fn func(context.Context) error) error {
+	if tx, ok := db.(optionalTxRunner); ok {
+		return tx.WithTxIfNeeded(ctx, fn)
+	}
+	return fn(ctx)
+}
 
 // CatalogsRoot is the DSL global Справочники / Catalogs.
 type CatalogsRoot struct {
@@ -321,7 +333,14 @@ func (p *CatalogProxy) DeleteRef(uuidStr string) error {
 	if err := p.checkRowAccess("delete", id, nil); err != nil {
 		return err
 	}
-	return p.db.Delete(p.ctx(), p.entity.Name, id)
+	return withOptionalCatalogTx(p.db, p.ctx(), func(ctx context.Context) error {
+		if p.registrar != nil {
+			if err := p.registrar(ctx, p.entity, id, true); err != nil {
+				return fmt.Errorf("регистрация удаления в обмене: %w", err)
+			}
+		}
+		return p.db.Delete(ctx, p.entity.Name, id)
+	})
 }
 
 // LoadObject реализует RefManager — загружает существующую запись справочника
@@ -368,6 +387,16 @@ func (p *CatalogProxy) findByField(field string, args []any) any {
 			return nil
 		}
 	}
+	if p.rowAccessRestricted("read") {
+		ids, displays, err := p.visibleMatches(field, value)
+		if err != nil {
+			RaiseUserError("Найти(" + p.entity.Name + "." + field + "): " + err.Error())
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		return &Ref{UUID: ids[0], Name: displays[0], Type: p.entity.Name, Manager: p}
+	}
 	idStr, display, found, err := p.db.FindCatalogByField(p.ctx(), p.entity, field, value)
 	if err != nil || !found {
 		return nil
@@ -389,6 +418,17 @@ func (p *CatalogProxy) findByField(field string, args []any) any {
 // Ссылкой (только при ровно одном совпадении) и Количеством.
 func (p *CatalogProxy) matchByField(field string, raw any) any {
 	value := MatchValueString(raw)
+	if p.rowAccessRestricted("read") {
+		ids, displays, err := p.visibleMatches(field, value)
+		if err != nil {
+			RaiseUserError("ПроверитьСовпадениеПоРеквизиту(" + p.entity.Name + "." + field + "): " + err.Error())
+		}
+		var ref *Ref
+		if len(ids) == 1 {
+			ref = &Ref{UUID: ids[0], Name: displays[0], Type: p.entity.Name, Manager: p}
+		}
+		return NewMatchResultStruct(ref, len(ids))
+	}
 	idStr, display, count, err := p.db.MatchCatalogByField(p.ctx(), p.entity, field, value)
 	if err != nil {
 		RaiseUserError("ПроверитьСовпадениеПоРеквизиту(" + p.entity.Name + "." + field + "): " + err.Error())
@@ -406,10 +446,32 @@ func (p *CatalogProxy) matchByField(field string, raw any) any {
 			RaiseUserError("ПроверитьСовпадениеПоРеквизиту(" + p.entity.Name + "." + field + "): " + err.Error())
 		}
 		ref = &Ref{UUID: idStr, Name: display, Type: p.entity.Name, Manager: p}
-	} else if count > 1 && p.rowAccessRestricted("read") {
-		RaiseUserError("ПроверитьСовпадениеПоРеквизиту(" + p.entity.Name + "." + field + "): row_access требует точной проверки найденных строк")
 	}
 	return NewMatchResultStruct(ref, count)
+}
+
+func (p *CatalogProxy) visibleMatches(field, value string) ([]string, []string, error) {
+	ids, displays, err := p.db.ListCatalogMatchesByField(p.ctx(), p.entity, field, value)
+	if err != nil {
+		return nil, nil, err
+	}
+	visibleIDs := make([]string, 0, len(ids))
+	visibleDisplays := make([]string, 0, len(displays))
+	for i, idStr := range ids {
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, nil, fmt.Errorf("неверный идентификатор найденной записи")
+		}
+		if err := p.checkRowAccess("read", id, nil); err != nil {
+			if errors.Is(err, ErrRowAccessDenied) {
+				continue
+			}
+			return nil, nil, err
+		}
+		visibleIDs = append(visibleIDs, idStr)
+		visibleDisplays = append(visibleDisplays, displays[i])
+	}
+	return visibleIDs, visibleDisplays, nil
 }
 
 func (p *CatalogProxy) checkRowAccess(op string, id uuid.UUID, fields map[string]any) error {
@@ -480,27 +542,35 @@ func (w *CatalogRecordWriter) CallMethod(method string, args []any) any {
 		if err := w.checkWriteAccess(); err != nil {
 			RaiseUserError("Записать(" + w.entity.Name + "): " + err.Error())
 		}
-		id, err := w.db.WriteCatalogRecord(w.ctx(), w.entity, w.idStr, w.fields)
+		var id string
+		err := withOptionalCatalogTx(w.db, w.ctx(), func(ctx context.Context) error {
+			var err error
+			id, err = w.db.WriteCatalogRecord(ctx, w.entity, w.idStr, w.fields)
+			if err != nil {
+				return err
+			}
+			if w.registrar != nil {
+				parsed, err := uuid.Parse(id)
+				if err != nil {
+					return err
+				}
+				if err := w.registrar(ctx, w.entity, parsed, false); err != nil {
+					return fmt.Errorf("регистрация обмена: %w", err)
+				}
+			}
+			return nil
+		})
 		if err != nil {
 			RaiseUserError("Записать(" + w.entity.Name + "): " + err.Error())
 		}
 		w.idStr = id
-		// Регистрация изменения для планов обмена (план 86): прямая запись из DSL
-		// идёт мимо entityservice.Save, поэтому регистрируем здесь.
-		if w.registrar != nil {
-			if parsed, perr := uuid.Parse(id); perr == nil {
-				if rerr := w.registrar(w.ctx(), w.entity, parsed); rerr != nil {
-					RaiseUserError("Записать(" + w.entity.Name + "): регистрация обмена: " + rerr.Error())
-				}
-			}
-		}
 		name := ""
 		if v := w.Get("Наименование"); v != nil {
 			name = fmt.Sprintf("%v", v)
 		}
 		return &Ref{
 			UUID: id, Name: name, Type: w.entity.Name,
-			Manager: &CatalogProxy{entity: w.entity, db: w.db, ctxSrc: w.ctxSrc, access: w.access},
+			Manager: &CatalogProxy{entity: w.entity, db: w.db, ctxSrc: w.ctxSrc, access: w.access, registrar: w.registrar},
 		}
 	case "установитьзначение", "setvalue":
 		if len(args) >= 2 {

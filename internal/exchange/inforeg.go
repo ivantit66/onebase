@@ -14,6 +14,7 @@ package exchange
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/ivantit66/onebase/internal/metadata"
@@ -33,6 +34,9 @@ func RegisterInfoRegOnSave(ctx context.Context, store *storage.DB, plans []*meta
 		if !plan.IncludesInfoRegister(ir.Name) {
 			continue
 		}
+		if err := validateExchangePlan(plan); err != nil {
+			return err
+		}
 		thisNode, err := store.GetExchangeThisNode(ctx, plan.Name)
 		if err != nil {
 			return err
@@ -40,6 +44,11 @@ func RegisterInfoRegOnSave(ctx context.Context, store *storage.DB, plans []*meta
 		if thisNode == "" {
 			continue
 		}
+		thisNodeDef := plan.Node(thisNode)
+		if thisNodeDef == nil {
+			return fmt.Errorf("exchange: текущий узел %q не описан в плане %q", thisNode, plan.Name)
+		}
+		thisNode = thisNodeDef.Code
 		for _, target := range plan.RegistrationTargets(thisNode) {
 			if err := store.RegisterExchangeChange(ctx, storage.ExchangeChange{
 				Plan:       plan.Name,
@@ -118,9 +127,19 @@ func applyInfoReg(ctx context.Context, store *storage.DB, resolver EntityResolve
 			res.Skipped++ // локальное изменение победило
 			return false, nil
 		}
-		return true, apply()
+		if err := apply(); err != nil {
+			return false, err
+		}
+		if err := store.DeleteExchangeChange(ctx, plan.Name, obj.Type, obj.ID, fromNode); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
-	if at, ok := store.ExchangeAppliedAt(ctx, plan.Name, obj.Type, obj.ID); ok && obj.ChangedAt <= at {
+	at, ok, err := store.ExchangeAppliedAt(ctx, plan.Name, obj.Type, obj.ID)
+	if err != nil {
+		return false, err
+	}
+	if ok && obj.ChangedAt <= at {
 		res.Skipped++
 		return false, nil
 	}

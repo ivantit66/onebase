@@ -79,17 +79,29 @@ func TestHub_Broadcast_DeliversToAll(t *testing.T) {
 
 func TestHub_SubscribeSince_ReplaysRecentMatchingEvents(t *testing.T) {
 	h := NewHub()
-	h.Publish("*", Event{Name: "уведомление", Data: "пока страница перезагружалась"})
+	h.Publish("*", Event{Name: "старое", Data: 1})
+	lastID := h.recent[0].ev.ID
+	h.Publish("*", Event{Name: "уведомление", Data: "пока соединение восстанавливалось"})
 
-	_, ch, cancel := h.SubscribeSince("u1", "ivan", nil, 0)
+	_, ch, cancel := h.SubscribeSince("u1", "ivan", nil, lastID)
 	defer cancel()
 
 	ev, ok := recv(t, ch)
 	if !ok {
 		t.Fatal("недавнее широковещательное событие не переиграно новому подписчику")
 	}
-	if ev.ID == 0 || ev.Name != "уведомление" || ev.Data != "пока страница перезагружалась" {
+	if ev.ID == 0 || ev.Name != "уведомление" || ev.Data != "пока соединение восстанавливалось" {
 		t.Fatalf("неожиданное replay-событие: %+v", ev)
+	}
+}
+
+func TestHub_NewPageDoesNotReplayRecentEvents(t *testing.T) {
+	h := NewHub()
+	h.Publish("*", Event{Name: "до загрузки страницы"})
+	_, ch, cancel := h.SubscribeSince("u1", "ivan", nil, 0)
+	defer cancel()
+	if !empty(t, ch) {
+		t.Fatal("новая страница не должна получать события из прошлого")
 	}
 }
 

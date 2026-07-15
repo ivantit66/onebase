@@ -58,6 +58,25 @@ func (f *fakeCatalogsDB) FindCatalogByField(_ context.Context, entity *metadata.
 	return "", "", false, nil
 }
 
+func (f *fakeCatalogsDB) ListCatalogMatchesByField(_ context.Context, entity *metadata.Entity, fieldName, value string) ([]string, []string, error) {
+	hits := f.matchRows[entity.Name+"/"+fieldName][value]
+	ids := make([]string, 0, len(hits))
+	displays := make([]string, 0, len(hits))
+	for _, hit := range hits {
+		ids = append(ids, hit.ID)
+		displays = append(displays, hit.Display)
+	}
+	if len(hits) == 0 {
+		if rows, ok := f.byField[entity.Name+"/"+fieldName]; ok {
+			if hit, ok := rows[value]; ok {
+				ids = append(ids, hit.ID)
+				displays = append(displays, hit.Display)
+			}
+		}
+	}
+	return ids, displays, nil
+}
+
 func (f *fakeCatalogsDB) MatchCatalogByField(_ context.Context, entity *metadata.Entity, fieldName, value string) (string, string, int, error) {
 	hits := f.matchRows[entity.Name+"/"+fieldName][value]
 	switch len(hits) {

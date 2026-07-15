@@ -45,6 +45,9 @@ func TestRepostRetriesAfterCallbackError(t *testing.T) {
 	}
 
 	b, ctxB := newBase(t, doc)
+	if err := b.SaveExchangeThisNode(ctxB, "Обмен", "fil01"); err != nil {
+		t.Fatal(err)
+	}
 	attempts := 0
 	opts := exchange.ApplyOptions{Repost: func(ctx context.Context, entityType string, rid uuid.UUID) error {
 		attempts++
@@ -131,6 +134,9 @@ func TestRepostFlagAndCallback(t *testing.T) {
 
 	// С repost=true и обработчиком — документ ставится в перепроведение.
 	b, ctxB := newBase(t, doc)
+	if err := b.SaveExchangeThisNode(ctxB, "Обмен", "fil01"); err != nil {
+		t.Fatal(err)
+	}
 	optsB, gotB := reposter()
 	lrB, err := exchange.ApplyPackage(ctxB, b, res, repostPlan(true), data, optsB)
 	if err != nil {
@@ -147,6 +153,9 @@ func TestRepostFlagAndCallback(t *testing.T) {
 
 	// С repost=false тот же пакет не вызывает перепроведение.
 	c, ctxC := newBase(t, doc)
+	if err := c.SaveExchangeThisNode(ctxC, "Обмен", "fil01"); err != nil {
+		t.Fatal(err)
+	}
 	optsC, gotC := reposter()
 	lrC, err := exchange.ApplyPackage(ctxC, c, res, repostPlan(false), data, optsC)
 	if err != nil {

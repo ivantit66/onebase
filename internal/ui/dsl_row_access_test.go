@@ -83,6 +83,34 @@ func TestDSLCatalogFind_RowAccessHidesRows(t *testing.T) {
 	}
 }
 
+func TestDSLCatalogMatch_FiltersEveryDuplicateBeforeCounting(t *testing.T) {
+	s, ctx, cat := dslRLSTestServer(t)
+	hiddenID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	allowedID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	if err := s.store.Upsert(ctx, cat.Name, hiddenID, map[string]any{"Наименование": "Same", "Owner": "other"}, cat); err != nil {
+		t.Fatalf("upsert hidden duplicate: %v", err)
+	}
+	if err := s.store.Upsert(ctx, cat.Name, allowedID, map[string]any{"Наименование": "Same", "Owner": "u"}, cat); err != nil {
+		t.Fatalf("upsert allowed duplicate: %v", err)
+	}
+	userCtx := auth.ContextWithUser(context.Background(), dslRLSTestUser("u", cat.Name, "read"))
+	vars := s.buildDSLVars(userCtx, runtime.NewMovementsCollector("test", uuid.Nil))
+	proxy := vars["Справочники"].(*interpreter.CatalogsRoot).Get(cat.Name).(*interpreter.CatalogProxy)
+
+	found, ok := proxy.CallMethod("найтипонаименованию", []any{"Same"}).(*interpreter.Ref)
+	if !ok || found.UUID != allowedID.String() {
+		t.Fatalf("find returned %#v, want visible duplicate %s", found, allowedID)
+	}
+	match := proxy.CallMethod("проверитьсовпадениепореквизиту", []any{"Наименование", "Same"}).(*interpreter.Struct)
+	if got := match.Get("Количество"); got != float64(1) {
+		t.Fatalf("visible match count = %v, want 1", got)
+	}
+	ref, ok := match.Get("Ссылка").(*interpreter.Ref)
+	if !ok || ref.UUID != allowedID.String() {
+		t.Fatalf("match reference = %#v, want %s", ref, allowedID)
+	}
+}
+
 func TestTrustedOnWriteDSL_BypassesRowAccess(t *testing.T) {
 	s, ctx, cat := dslRLSTestServer(t)
 	doc := &metadata.Entity{

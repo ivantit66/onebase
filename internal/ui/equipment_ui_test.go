@@ -50,12 +50,45 @@ func TestUI_IndexChartsUseJSONBootstrap(t *testing.T) {
 	}
 }
 
-// Пункты меню РМК и настроек агента попадают в общий nav.
-func TestUI_NavLinks(t *testing.T) {
+// РМК — платформенная функция: администратор открывает её через «Все
+// функции», но прежний доступ обычного кассира не пропадает. Настройки агента
+// остаются в системной группе администратора.
+func TestUI_PlatformLinks(t *testing.T) {
 	html := renderPage(t, "page-index")
-	for _, want := range []string{`href="/ui/pos"`, `href="/ui/settings/agent"`} {
+	if !strings.Contains(html, `href="/ui/settings/agent"`) {
+		t.Error("в меню нет настроек агента оборудования")
+	}
+	if strings.Contains(html, `href="/ui/pos"`) {
+		t.Error("у администратора РМК не должен оставаться отдельным пунктом меню «Система»")
+	}
+	userNav := renderNav(t, false)
+	if !strings.Contains(userNav, `href="/ui/pos"`) || !strings.Contains(userNav, "Платформенные возможности") {
+		t.Error("обычный пользователь потерял доступ к РМК после переноса в «Все функции» администратора")
+	}
+
+	allFunctions := renderPage(t, "page-all-functions")
+	for _, want := range []string{"Платформенные возможности", `href="/ui/pos"`, "Рабочее место кассира (РМК)"} {
+		if !strings.Contains(allFunctions, want) {
+			t.Errorf("в «Все функции» нет %q", want)
+		}
+	}
+}
+
+func TestUI_SystemMenuIsGroupedAndScrollable(t *testing.T) {
+	html := renderPage(t, "page-index")
+	for _, want := range []string{
+		`class="sys-group"`,
+		"Профиль и интерфейс",
+		"Администрирование",
+		"Интеграции и задания",
+		"Обслуживание базы",
+		"Расширения и оборудование",
+		"Инструменты разработчика",
+		"max-height:calc(100vh - 50px)",
+		"overflow-y:auto",
+	} {
 		if !strings.Contains(html, want) {
-			t.Errorf("в меню нет ссылки %s", want)
+			t.Errorf("сгруппированное меню «Система» не содержит %q", want)
 		}
 	}
 }

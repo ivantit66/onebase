@@ -116,8 +116,9 @@ go build -o onebase.exe ./cmd/onebase
    ```bash
    export OB_EXCHANGE_CENTER_URL=http://127.0.0.1:8080
    export OB_EXCHANGE_FIL01_URL=http://127.0.0.1:8081
-   ./onebase.exe exchange init --project examples/trade --sqlite ./center.db --plan ФилиалыЦентр --node center --token S3CRET
-   ./onebase.exe exchange init --project examples/trade --sqlite ./fil01.db  --plan ФилиалыЦентр --node fil01  --token S3CRET
+   export ONEBASE_EXCHANGE_TOKEN=S3CRET
+   ./onebase.exe exchange init --project examples/trade --sqlite ./center.db --plan ФилиалыЦентр --node center
+   ./onebase.exe exchange init --project examples/trade --sqlite ./fil01.db  --plan ФилиалыЦентр --node fil01
    ```
 2. Поднять обе базы серверами (в отдельных терминалах):
    ```bash

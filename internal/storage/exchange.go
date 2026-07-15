@@ -16,6 +16,10 @@ import (
 	"github.com/ivantit66/onebase/internal/metadata"
 )
 
+func exchangeNoRows(err error) bool {
+	return IsNotFound(err)
+}
+
 // ExchangeChange — одна строка очереди регистрации: объект из состава плана,
 // ждущий отправки узлу NodeCode. SentNo — номер сообщения, в котором строка была
 // в последний раз выгружена (0 = ещё не выгружалась); сбрасывается в 0 при новой
@@ -29,11 +33,11 @@ type ExchangeChange struct {
 	// ExchangeKindConstant или ExchangeKindInfoReg. Определяет, как строка
 	// сериализуется в пакет и применяется на приёмнике (у констант и регистров
 	// сведений нет _version — идемпотентность идёт через _exchange_applied).
-	Kind       string
-	Version    int64
-	Deletion   bool
-	ChangedAt  int64 // Unix-миллисекунды
-	SentNo     int64
+	Kind      string
+	Version   int64
+	Deletion  bool
+	ChangedAt int64 // Unix-миллисекунды
+	SentNo    int64
 }
 
 // Категории строк очереди/объектов пакета для не-сущностного состава (план 86).
@@ -119,8 +123,11 @@ func (db *DB) GetExchangeThisNode(ctx context.Context, plan string) (string, err
 	err := db.QueryRow(ctx,
 		`SELECT value FROM _settings WHERE key = `+d.Placeholder(1),
 		exchangeThisNodeKey(plan)).Scan(&v)
-	if err != nil {
+	if exchangeNoRows(err) {
 		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("exchange: read this_node: %w", err)
 	}
 	return strings.TrimSpace(v), nil
 }
@@ -160,8 +167,11 @@ func (db *DB) GetExchangeToken(ctx context.Context, plan string) (string, error)
 	err := db.QueryRow(ctx,
 		`SELECT value FROM _settings WHERE key = `+d.Placeholder(1),
 		exchangeTokenKey(plan)).Scan(&v)
-	if err != nil {
+	if exchangeNoRows(err) {
 		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("exchange: read token: %w", err)
 	}
 	return strings.TrimSpace(v), nil
 }
@@ -242,8 +252,8 @@ func (db *DB) PendingExchangeChanges(ctx context.Context, plan, nodeCode string)
 }
 
 // GetExchangeChange возвращает строку очереди для конкретного объекта и узла
-// (для обнаружения встречной правки при загрузке). Любая ошибка/отсутствие →
-// (zero, false, nil): «локальной неотправленной правки нет».
+// (для обнаружения встречной правки при загрузке). Отсутствие строки означает
+// «локальной неотправленной правки нет»; прочие ошибки возвращаются вызывающему.
 func (db *DB) GetExchangeChange(ctx context.Context, plan, objectType, objectID, nodeCode string) (ExchangeChange, bool, error) {
 	d := db.dialect
 	var ch ExchangeChange
@@ -255,24 +265,45 @@ func (db *DB) GetExchangeChange(ctx context.Context, plan, objectType, objectID,
 			d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4)),
 		plan, objectType, objectID, nodeCode).
 		Scan(&ch.Plan, &ch.ObjectType, &ch.ObjectID, &ch.NodeCode, &ch.Kind, &ch.Version, &del, &ch.ChangedAt, &ch.SentNo)
-	if err != nil {
+	if exchangeNoRows(err) {
 		return ExchangeChange{}, false, nil
+	}
+	if err != nil {
+		return ExchangeChange{}, false, fmt.Errorf("exchange: read change: %w", err)
 	}
 	ch.Deletion = del != 0
 	return ch, true, nil
 }
 
-// MarkExchangeChangesSent проставляет sent_no выгруженным строкам (по точным
-// первичным ключам, чтобы не задеть строки, зарегистрированные после выборки).
+// MarkExchangeChangesSent проставляет sent_no только той версии строки, которая
+// была выбрана в пакет. Если параллельная запись уже подняла version/changed_at
+// и сбросила sent_no, оптимистическое условие оставит новую правку в очереди.
 func (db *DB) MarkExchangeChangesSent(ctx context.Context, changes []ExchangeChange, messageNo int64) error {
 	d := db.dialect
 	q := fmt.Sprintf(`UPDATE _exchange_changes SET sent_no = %s
-		WHERE plan = %s AND object_type = %s AND object_id = %s AND node_code = %s`,
-		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4), d.Placeholder(5))
+		WHERE plan = %s AND object_type = %s AND object_id = %s AND node_code = %s
+		  AND version = %s AND changed_at = %s`,
+		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4), d.Placeholder(5),
+		d.Placeholder(6), d.Placeholder(7))
 	for _, ch := range changes {
-		if _, err := db.Exec(ctx, q, messageNo, ch.Plan, ch.ObjectType, ch.ObjectID, ch.NodeCode); err != nil {
+		if _, err := db.Exec(ctx, q, messageNo, ch.Plan, ch.ObjectType, ch.ObjectID, ch.NodeCode,
+			ch.Version, ch.ChangedAt); err != nil {
 			return fmt.Errorf("exchange: mark sent: %w", err)
 		}
+	}
+	return nil
+}
+
+// DeleteExchangeChange снимает конкретную встречную правку из очереди. Это
+// нужно, когда конфликт разрешён в пользу входящего объекта: проигравшее
+// локальное изменение больше не должно уехать источнику следующим пакетом.
+func (db *DB) DeleteExchangeChange(ctx context.Context, plan, objectType, objectID, nodeCode string) error {
+	d := db.dialect
+	q := fmt.Sprintf(`DELETE FROM _exchange_changes
+		WHERE plan = %s AND object_type = %s AND object_id = %s AND node_code = %s`,
+		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4))
+	if _, err := db.Exec(ctx, q, plan, objectType, objectID, nodeCode); err != nil {
+		return fmt.Errorf("exchange: delete change: %w", err)
 	}
 	return nil
 }
@@ -325,8 +356,11 @@ func (db *DB) GetExchangePeer(ctx context.Context, plan, nodeCode string) (Excha
 		fmt.Sprintf(`SELECT sent_no, ack_no, recv_no FROM _exchange_peers WHERE plan = %s AND node_code = %s`,
 			d.Placeholder(1), d.Placeholder(2)),
 		plan, nodeCode).Scan(&p.SentNo, &p.AckNo, &p.RecvNo)
-	if err != nil {
+	if exchangeNoRows(err) {
 		return ExchangePeer{Plan: plan, NodeCode: nodeCode}, nil
+	}
+	if err != nil {
+		return ExchangePeer{}, fmt.Errorf("exchange: read peer: %w", err)
 	}
 	return p, nil
 }
@@ -407,19 +441,20 @@ func (db *DB) EntityVersion(ctx context.Context, entityName string, id uuid.UUID
 }
 
 // EntityVersionExists возвращает (_version, true), если объект есть локально,
-// иначе (0, false). Используется идемпотентной загрузкой пакета для сравнения
-// входящей версии с локальной. Любая ошибка чтения трактуется как «нет объекта»
-// (как в GetListPageSize и др. — путь чтения настроек толерантен к отсутствию).
-func (db *DB) EntityVersionExists(ctx context.Context, entityName string, id uuid.UUID) (int64, bool) {
+// иначе (0, false). Ошибки чтения не маскируются под отсутствие объекта.
+func (db *DB) EntityVersionExists(ctx context.Context, entityName string, id uuid.UUID) (int64, bool, error) {
 	d := db.dialect
 	var v int64
 	err := db.QueryRow(ctx,
 		fmt.Sprintf("SELECT _version FROM %s WHERE id = %s", metadata.TableName(entityName), d.Placeholder(1)),
 		idArg(d, id)).Scan(&v)
-	if err != nil {
-		return 0, false
+	if exchangeNoRows(err) {
+		return 0, false, nil
 	}
-	return v, true
+	if err != nil {
+		return 0, false, fmt.Errorf("exchange: read object version %s: %w", entityName, err)
+	}
+	return v, true, nil
 }
 
 // SetExchangeObjectState принудительно выставляет системные колонки объекта при
@@ -447,18 +482,21 @@ func (db *DB) SetExchangeObjectState(ctx context.Context, entity *metadata.Entit
 
 // ExchangeAppliedAt возвращает changed_at последнего применённого изменения по
 // (план, тип, ключ) из _exchange_applied — «локальную версию» для состава без
-// собственного _version. (0, false), если ничего не применялось.
-func (db *DB) ExchangeAppliedAt(ctx context.Context, plan, objectType, objectID string) (int64, bool) {
+// собственного _version. (0, false, nil), если ничего не применялось.
+func (db *DB) ExchangeAppliedAt(ctx context.Context, plan, objectType, objectID string) (int64, bool, error) {
 	d := db.dialect
 	var at int64
 	err := db.QueryRow(ctx,
 		fmt.Sprintf(`SELECT changed_at FROM _exchange_applied WHERE plan = %s AND object_type = %s AND object_id = %s`,
 			d.Placeholder(1), d.Placeholder(2), d.Placeholder(3)),
 		plan, objectType, objectID).Scan(&at)
-	if err != nil {
-		return 0, false
+	if exchangeNoRows(err) {
+		return 0, false, nil
 	}
-	return at, true
+	if err != nil {
+		return 0, false, fmt.Errorf("exchange: read applied watermark: %w", err)
+	}
+	return at, true, nil
 }
 
 // SetExchangeApplied монотонно поднимает «водяной знак» применённого изменения до

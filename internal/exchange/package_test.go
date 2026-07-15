@@ -2,6 +2,7 @@ package exchange_test
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,6 +30,13 @@ func (f fakeResolver) GetEntity(name string) *metadata.Entity {
 
 func (f fakeResolver) GetInfoRegister(string) *metadata.InfoRegister { return nil }
 
+func (f fakeResolver) GetConstantMeta(name string) *metadata.Constant {
+	if strings.EqualFold(name, "СтавкаНДС") {
+		return &metadata.Constant{Name: "СтавкаНДС", Type: metadata.FieldTypeString}
+	}
+	return nil
+}
+
 // fakeResolverIR — резолвер с регистрами сведений (для тестов инфо-регистров).
 type fakeResolverIR struct {
 	ents     map[string]*metadata.Entity
@@ -52,6 +60,8 @@ func (f fakeResolverIR) GetInfoRegister(name string) *metadata.InfoRegister {
 	}
 	return nil
 }
+
+func (f fakeResolverIR) GetConstantMeta(string) *metadata.Constant { return nil }
 
 func newBase(t *testing.T, entities ...*metadata.Entity) (*storage.DB, context.Context) {
 	t.Helper()
@@ -116,6 +126,8 @@ func TestPackageRoundTrip(t *testing.T) {
 	res := fakeResolver{"Товар": ent}
 	a, ctxA := newBase(t, ent)
 	b, ctxB := newBase(t, ent)
+	_ = a.SaveExchangeThisNode(ctxA, "Обмен", "center")
+	_ = b.SaveExchangeThisNode(ctxB, "Обмен", "fil01")
 
 	id := uuid.New()
 	registerObj(t, a, ctxA, ent, id, map[string]any{
@@ -169,6 +181,8 @@ func TestPackageVersionRule(t *testing.T) {
 	res := fakeResolver{"Товар": ent}
 	a, ctxA := newBase(t, ent)
 	b, ctxB := newBase(t, ent)
+	_ = a.SaveExchangeThisNode(ctxA, "Обмен", "center")
+	_ = b.SaveExchangeThisNode(ctxB, "Обмен", "fil01")
 
 	id := uuid.New()
 	// В B заранее лежит объект версии 3.
@@ -209,6 +223,8 @@ func TestPackageTableParts(t *testing.T) {
 	res := fakeResolver{"Продажа": doc}
 	a, ctxA := newBase(t, doc)
 	b, ctxB := newBase(t, doc)
+	_ = a.SaveExchangeThisNode(ctxA, "Обмен", "center")
+	_ = b.SaveExchangeThisNode(ctxB, "Обмен", "fil01")
 
 	id := uuid.New()
 	if err := a.Upsert(ctxA, doc.Name, id, map[string]any{"Номер": "0001"}, doc); err != nil {
@@ -251,6 +267,54 @@ func TestPackageTableParts(t *testing.T) {
 	// Документ приходит непроведённым.
 	if row, _ := b.GetByID(ctxB, doc.Name, id, doc); toBoolT(row["posted"]) {
 		t.Error("документ должен прийти непроведённым (posted=false)")
+	}
+
+	// Очистка ТЧ тоже должна реплицироваться. Пустой слайс в пакете отличает
+	// «очистить» от старого/частичного пакета, где ключ ТЧ отсутствует.
+	if err := a.Upsert(ctxA, doc.Name, id, map[string]any{"Номер": "0001"}, doc); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.UpsertTablePartRows(ctxA, doc.Name, "Строки", id, []map[string]any{}, doc.TableParts[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := exchange.RegisterOnSave(ctxA, a, []*metadata.ExchangePlan{plan}, doc, id, false); err != nil {
+		t.Fatal(err)
+	}
+	data, err = exchange.BuildPackage(ctxA, a, res, plan, "fil01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exchange.ApplyPackage(ctxB, b, res, plan, data, exchange.ApplyOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = b.GetTablePartRows(ctxB, doc.Name, "Строки", id, doc.TableParts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("очистка ТЧ не реплицировалась: %+v", rows)
+	}
+}
+
+func TestPackageRejectsEntityOutsidePlanContent(t *testing.T) {
+	allowed := catalogTovar()
+	other := &metadata.Entity{
+		Name: "Секрет", Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{{Name: "Наименование", Type: metadata.FieldTypeString}},
+	}
+	db, ctx := newBase(t, allowed, other)
+	_ = db.SaveExchangeThisNode(ctx, "Обмен", "fil01")
+	pkg := exchange.Package{
+		Format: exchange.FormatV1, Plan: "Обмен", FromNode: "center", ToNode: "fil01", MessageNo: 1,
+		Objects: []exchange.PackageObject{{
+			Type: other.Name, ID: uuid.NewString(), Version: 1, ChangedAt: 1,
+			Fields: map[string]any{"Наименование": "нельзя"},
+		}},
+	}
+	data, _ := json.Marshal(pkg)
+	_, err := exchange.ApplyPackage(ctx, db, fakeResolver{"Товар": allowed, "Секрет": other}, planTovar(), data, exchange.ApplyOptions{})
+	if err == nil || !strings.Contains(err.Error(), "не входит в состав") {
+		t.Fatalf("ожидался отказ для сущности вне состава плана, got %v", err)
 	}
 }
 
@@ -303,9 +367,120 @@ func TestPackageAckDrains(t *testing.T) {
 	}
 }
 
+func TestPhysicalDeleteBuildsTombstoneAndPreservesRemoteFields(t *testing.T) {
+	ent := catalogTovar()
+	res := fakeResolver{"Товар": ent}
+	plan := planTovar()
+	source, sourceCtx := newBase(t, ent)
+	target, targetCtx := newBase(t, ent)
+	if err := source.SaveExchangeThisNode(sourceCtx, plan.Name, "center"); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.SaveExchangeThisNode(targetCtx, plan.Name, "fil01"); err != nil {
+		t.Fatal(err)
+	}
+
+	id := uuid.New()
+	if err := source.Upsert(sourceCtx, ent.Name, id, map[string]any{"Наименование": "на источнике"}, ent); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Upsert(targetCtx, ent.Name, id, map[string]any{"Наименование": "сохранить на приёмнике"}, ent); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.WithTx(sourceCtx, func(txCtx context.Context) error {
+		if err := exchange.RegisterOnDelete(txCtx, source, []*metadata.ExchangePlan{plan}, ent, id); err != nil {
+			return err
+		}
+		return source.Delete(txCtx, ent.Name, id)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := exchange.BuildPackage(sourceCtx, source, res, plan, "fil01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := exchange.ParsePackage(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pkg.Objects) != 1 || !pkg.Objects[0].Tombstone {
+		t.Fatalf("физическое удаление должно выгружаться tombstone: %+v", pkg.Objects)
+	}
+	result, err := exchange.ApplyPackage(targetCtx, target, res, plan, data, exchange.ApplyOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Deleted != 1 {
+		t.Fatalf("ожидалась одна пометка удаления: %+v", result)
+	}
+	row, err := target.GetByID(targetCtx, ent.Name, id, ent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row["Наименование"] != "сохранить на приёмнике" || !toBoolT(row["deletion_mark"]) {
+		t.Fatalf("tombstone должен сохранить данные и поставить пометку: %+v", row)
+	}
+}
+
+func TestInvalidObjectDoesNotApplyAcknowledgement(t *testing.T) {
+	ent := catalogTovar()
+	db, ctx := newBase(t, ent)
+	if err := db.SaveExchangeThisNode(ctx, "Обмен", "fil01"); err != nil {
+		t.Fatal(err)
+	}
+	change := storage.ExchangeChange{
+		Plan: "Обмен", ObjectType: ent.Name, ObjectID: uuid.NewString(), NodeCode: "center",
+		Version: 1, ChangedAt: 1000,
+	}
+	if err := db.RegisterExchangeChange(ctx, change); err != nil {
+		t.Fatal(err)
+	}
+	messageNo, err := db.NextExchangeMessageNo(ctx, "Обмен", "center")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkExchangeChangesSent(ctx, []storage.ExchangeChange{change}, messageNo); err != nil {
+		t.Fatal(err)
+	}
+
+	pkg := exchange.Package{
+		Format: exchange.FormatV1, Plan: "Обмен", FromNode: "center", ToNode: "fil01",
+		MessageNo: 1, AckNo: messageNo,
+		Objects: []exchange.PackageObject{{
+			Type: ent.Name, ID: uuid.NewString(), Version: 1, ChangedAt: 1000,
+			Fields: map[string]any{"Наименование": "x", "НеизвестноеПоле": "y"},
+		}},
+	}
+	data, _ := json.Marshal(pkg)
+	if _, err := exchange.ApplyPackage(ctx, db, fakeResolver{"Товар": ent}, planTovar(), data, exchange.ApplyOptions{}); err == nil {
+		t.Fatal("несовместимый объект должен отклоняться")
+	}
+	pending, err := db.PendingExchangeChanges(ctx, "Обмен", "center")
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("ACK из отклонённого пакета не должен очищать очередь: %+v, %v", pending, err)
+	}
+}
+
+func TestParsePackageRejectsNonDeletingTombstone(t *testing.T) {
+	pkg := exchange.Package{
+		Format: exchange.FormatV1, Plan: "Обмен", FromNode: "center", ToNode: "fil01", MessageNo: 1,
+		Objects: []exchange.PackageObject{{
+			Type: "Товар", ID: uuid.NewString(), Version: 1, ChangedAt: 1,
+			Tombstone: true,
+		}},
+	}
+	data, _ := json.Marshal(pkg)
+	if _, err := exchange.ParsePackage(data); err == nil {
+		t.Fatal("tombstone без deletion=true должен отклоняться")
+	}
+}
+
 func markVersion(db *storage.DB, ctx context.Context, ent *metadata.Entity, id uuid.UUID, v int64) error {
-	// Обновляем и объект (реальная версия для BuildPackage не важна — берётся из
-	// строки очереди), и строку очереди.
+	// Обновляем и объект, и строку очереди до одной версии.
+	if err := db.SetExchangeObjectState(ctx, ent, id, v, false); err != nil {
+		return err
+	}
 	return db.RegisterExchangeChange(ctx, storage.ExchangeChange{
 		Plan: "Обмен", ObjectType: ent.Name, ObjectID: id.String(), NodeCode: "fil01", Version: v, ChangedAt: 1000,
 	})

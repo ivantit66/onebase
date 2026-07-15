@@ -1,9 +1,12 @@
 package backup
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -28,7 +31,7 @@ func DumpSQLite(ctx context.Context, dbPath, outDir string) (string, error) {
 			break
 		}
 	}
-	ts := time.Now().Format("2006-01-02_15-04-05")
+	ts := time.Now().Format("2006-01-02_15-04-05.000000000")
 	filename := fmt.Sprintf("backup_%s_%s.db", base, ts)
 	outPath := filepath.Join(outDir, filename)
 	tmp, err := os.CreateTemp(outDir, "."+filename+".*.tmp")
@@ -70,18 +73,102 @@ func DumpSQLite(ctx context.Context, dbPath, outDir string) (string, error) {
 	if _, err := db.Exec(ctx, "VACUUM INTO '"+escaped+"'"); err != nil {
 		return "", fmt.Errorf("sqlite VACUUM INTO: %w", err)
 	}
-	_ = os.Remove(outPath)
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
+		return "", fmt.Errorf("sqlite backup: chmod: %w", err)
+	}
 	if err := os.Rename(tmpPath, outPath); err != nil {
 		return "", err
 	}
 	committed = true
+	if d, err := os.Open(outDir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 	return outPath, nil
 }
 
-// RestoreSQLite replaces the target database file with the backup file.
-// The caller must ensure no process is currently using the target file
-// (the launcher stops the running base before calling restore).
+const sqliteHeader = "SQLite format 3\x00"
+
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	select {
+	case <-r.ctx.Done():
+		return 0, r.ctx.Err()
+	default:
+		return r.r.Read(p)
+	}
+}
+
+func validateSQLiteBackup(ctx context.Context, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	header := make([]byte, len(sqliteHeader))
+	_, readErr := io.ReadFull(f, header)
+	_ = f.Close()
+	if readErr != nil || !bytes.Equal(header, []byte(sqliteHeader)) {
+		return fmt.Errorf("sqlite restore: файл не является SQLite database")
+	}
+	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(path), RawQuery: "mode=ro&immutable=1"}).String()
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return fmt.Errorf("sqlite restore: открыть подготовленную копию: %w", err)
+	}
+	defer db.Close()
+	var result string
+	if err := db.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&result); err != nil {
+		return fmt.Errorf("sqlite restore: integrity_check: %w", err)
+	}
+	if result != "ok" {
+		return fmt.Errorf("sqlite restore: integrity_check: %s", result)
+	}
+	return nil
+}
+
+func copyFileSynced(ctx context.Context, srcPath, dstPath string, perm os.FileMode) (err error) {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = dst.Close()
+		if err != nil {
+			_ = os.Remove(dstPath)
+		}
+	}()
+	if _, err = io.Copy(dst, contextReader{ctx: ctx, r: src}); err != nil {
+		return err
+	}
+	if err = dst.Sync(); err != nil {
+		return err
+	}
+	return dst.Close()
+}
+
+// RestoreSQLite validates a staged copy and atomically replaces the target.
+// The caller must still ensure no process is using the target file.
 func RestoreSQLite(ctx context.Context, dbPath, backupPath string) error {
+	dbAbs, err := filepath.Abs(dbPath)
+	if err != nil {
+		return err
+	}
+	backupAbs, err := filepath.Abs(backupPath)
+	if err != nil {
+		return err
+	}
+	if filepath.Clean(dbAbs) == filepath.Clean(backupAbs) {
+		return fmt.Errorf("sqlite restore: backup and target are the same file")
+	}
 	srcInfo, err := os.Stat(backupPath)
 	if err != nil {
 		return fmt.Errorf("sqlite restore: backup not found: %w", err)
@@ -89,26 +176,70 @@ func RestoreSQLite(ctx context.Context, dbPath, backupPath string) error {
 	if srcInfo.IsDir() {
 		return fmt.Errorf("sqlite restore: backup path is a directory")
 	}
+	if dstInfo, statErr := os.Stat(dbPath); statErr == nil && os.SameFile(srcInfo, dstInfo) {
+		return fmt.Errorf("sqlite restore: backup and target are the same file")
+	}
 
-	src, err := os.Open(backupPath)
+	dir := filepath.Dir(dbAbs)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(dbAbs)+".restore-*")
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	_ = os.Remove(tmpPath)
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := copyFileSynced(ctx, backupAbs, tmpPath, 0o600); err != nil {
+		return fmt.Errorf("sqlite restore: stage copy: %w", err)
+	}
+	if err := validateSQLiteBackup(ctx, tmpPath); err != nil {
+		return err
+	}
 
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return err
+	// Keep one known-good previous image for operator rollback. This copy is
+	// completed before touching the live path.
+	oldPath := dbAbs + ".old"
+	if _, err := os.Stat(dbAbs); err == nil {
+		oldTmp := oldPath + ".tmp"
+		_ = os.Remove(oldTmp)
+		if err := copyFileSynced(ctx, dbAbs, oldTmp, 0o600); err != nil {
+			return fmt.Errorf("sqlite restore: preserve old database: %w", err)
+		}
+		_ = os.Remove(oldPath)
+		if err := os.Rename(oldTmp, oldPath); err != nil {
+			_ = os.Remove(oldTmp)
+			return fmt.Errorf("sqlite restore: publish old database: %w", err)
+		}
 	}
-	dst, err := os.Create(dbPath)
-	if err != nil {
-		return err
+
+	_ = os.Remove(dbAbs + "-wal")
+	_ = os.Remove(dbAbs + "-shm")
+	if err := os.Rename(tmpPath, dbAbs); err != nil {
+		// Some platforms do not replace an existing file with Rename. The old
+		// image is already durable, so use it as rollback for the fallback swap.
+		if rmErr := os.Remove(dbAbs); rmErr != nil && !os.IsNotExist(rmErr) {
+			return fmt.Errorf("sqlite restore: replace target: %w", err)
+		}
+		if err := os.Rename(tmpPath, dbAbs); err != nil {
+			_ = copyFileSynced(context.Background(), oldPath, dbAbs, 0o600)
+			return fmt.Errorf("sqlite restore: publish staged database: %w", err)
+		}
 	}
-	defer dst.Close()
-	if _, err := io.Copy(dst, src); err != nil {
-		return fmt.Errorf("sqlite restore: copy: %w", err)
+	committed = true
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
 	}
-	// Also remove any -wal / -shm sidecar files (stale data from the previous DB).
-	_ = os.Remove(dbPath + "-wal")
-	_ = os.Remove(dbPath + "-shm")
 	return nil
 }

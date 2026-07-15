@@ -503,6 +503,7 @@ func parseSessionTime(v any) time.Time {
 		// Try standard formats first, then Go's own String() format.
 		for _, layout := range []string{
 			time.RFC3339Nano, time.RFC3339,
+			"2006-01-02 15:04:05-07:00",
 			"2006-01-02 15:04:05.999999999 -0700 MST",
 			"2006-01-02 15:04:05 -0700 MST",
 			"2006-01-02 15:04:05",

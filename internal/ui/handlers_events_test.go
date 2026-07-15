@@ -73,6 +73,7 @@ func TestEventsStream_StreamsBroadcastFrame(t *testing.T) {
 
 func TestEventsStream_ReplaysRecentFrame(t *testing.T) {
 	hub := realtime.NewHub()
+	hub.Publish("*", realtime.Event{Name: "уже получено"})
 	hub.Publish("*", realtime.Event{Name: "уведомление", Data: "после reload"})
 	s := &Server{hub: hub}
 	srv := httptest.NewServer(http.HandlerFunc(s.eventsStream))
@@ -81,6 +82,7 @@ func TestEventsStream_ReplaysRecentFrame(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	req.Header.Set("Last-Event-ID", "1")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET /ui/events: %v", err)

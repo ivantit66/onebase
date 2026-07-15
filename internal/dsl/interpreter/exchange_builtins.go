@@ -21,11 +21,12 @@ import (
 )
 
 // ExchangeRegistry — то, что объекту ПланыОбмена нужно от реестра конфигурации.
-// Реализуется *runtime.Registry. GetEntity+GetInfoRegister требуются, потому что
+// Реализуется *runtime.Registry. Методы метаданных требуются, потому что
 // объект передаётся в exchange.BuildPackage/ApplyPackage как EntityResolver.
 type ExchangeRegistry interface {
 	GetExchangePlan(name string) *metadata.ExchangePlan
 	GetEntity(name string) *metadata.Entity
+	GetConstantMeta(name string) *metadata.Constant
 	GetInfoRegister(name string) *metadata.InfoRegister
 }
 

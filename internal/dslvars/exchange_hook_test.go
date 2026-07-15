@@ -87,7 +87,7 @@ func TestExchangeHookFiresOnDSLLoad(t *testing.T) {
 
 	// Входящий: имя "победитель", но changed_at=500 < локального 1000 (by_time проиграл бы).
 	pkg := exchange.Package{
-		Format: exchange.FormatV1, Plan: "Обмен", FromNode: "center", MessageNo: 1,
+		Format: exchange.FormatV1, Plan: "Обмен", FromNode: "center", ToNode: "fil01", MessageNo: 1,
 		Objects: []exchange.PackageObject{{Type: "Товар", ID: id.String(), Version: 2, ChangedAt: 500,
 			Fields: map[string]any{"Наименование": "победитель"}}},
 	}
@@ -126,7 +126,7 @@ func TestExchangeHookFiresOnDSLLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	pkg2 := exchange.Package{
-		Format: exchange.FormatV1, Plan: "Обмен", FromNode: "center", MessageNo: 2,
+		Format: exchange.FormatV1, Plan: "Обмен", FromNode: "center", ToNode: "fil01", MessageNo: 2,
 		Objects: []exchange.PackageObject{{Type: "Товар", ID: id2.String(), Version: 2, ChangedAt: 500,
 			Fields: map[string]any{"Наименование": "победитель"}}},
 	}

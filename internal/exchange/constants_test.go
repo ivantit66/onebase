@@ -104,9 +104,9 @@ func TestConstantConflictByTime(t *testing.T) {
 
 	incoming := func(changedAt int64, value string, msgNo int64) []byte {
 		pkg := exchange.Package{
-			Format: exchange.FormatV1, Plan: "Обмен", FromNode: "center", MessageNo: msgNo,
+			Format: exchange.FormatV1, Plan: "Обмен", FromNode: "center", ToNode: "fil01", MessageNo: msgNo,
 			Objects: []exchange.PackageObject{{
-				Kind: storage.ExchangeKindConstant, Type: "СтавкаНДС", ChangedAt: changedAt,
+				Kind: storage.ExchangeKindConstant, Type: "СтавкаНДС", Version: changedAt, ChangedAt: changedAt,
 				Fields: map[string]any{"value": value},
 			}},
 		}
@@ -136,5 +136,43 @@ func TestConstantConflictByTime(t *testing.T) {
 	}
 	if v, _ := b.GetConstant(ctxB, "СтавкаНДС"); v != "21" {
 		t.Errorf("by_time: новее должно победить, got %v", v)
+	}
+	if pending, _ := b.PendingExchangeChanges(ctxB, "Обмен", "center"); len(pending) != 0 {
+		t.Errorf("проигравшая локальная правка осталась в очереди: %+v", pending)
+	}
+}
+
+func TestConstantConflictEqualTimestampUsesNodeTieBreaker(t *testing.T) {
+	b, ctx := newConstBase(t)
+	plan := constPlan()
+	if err := b.SaveExchangeThisNode(ctx, plan.Name, "fil01"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SetConstant(ctx, "СтавкаНДС", "18"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.RegisterExchangeChange(ctx, storage.ExchangeChange{
+		Plan: plan.Name, ObjectType: "СтавкаНДС", NodeCode: "center",
+		Kind: storage.ExchangeKindConstant, Version: 2000, ChangedAt: 2000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pkg := exchange.Package{
+		Format: exchange.FormatV1, Plan: plan.Name, FromNode: "center", ToNode: "fil01", MessageNo: 1,
+		Objects: []exchange.PackageObject{{
+			Kind: storage.ExchangeKindConstant, Type: "СтавкаНДС", Version: 2000, ChangedAt: 2000,
+			Fields: map[string]any{"value": "20"},
+		}},
+	}
+	data, _ := json.Marshal(pkg)
+	lr, err := exchange.ApplyPackage(ctx, b, fakeResolver{}, plan, data, exchange.ApplyOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lr.Conflicts != 1 || lr.Skipped != 1 {
+		t.Fatalf("ожидался стабильный выбор локального узла fil01: %+v", lr)
+	}
+	if value, _ := b.GetConstant(ctx, "СтавкаНДС"); value != "18" {
+		t.Fatalf("при равном времени должен победить fil01, got %v", value)
 	}
 }

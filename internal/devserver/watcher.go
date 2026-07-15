@@ -1,6 +1,7 @@
 package devserver
 
 import (
+	"context"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -19,9 +20,17 @@ func watcherLog() *slog.Logger {
 // debounce period. fsnotify is not recursive, so every subdirectory is added
 // explicitly; directories created later are picked up on the fly.
 func Watch(dir string, onChange func()) error {
+	_, err := WatchContext(context.Background(), dir, onChange)
+	return err
+}
+
+// WatchContext is Watch with explicit lifecycle control. done is closed after
+// the watcher goroutine has stopped, so callers can safely release resources
+// referenced by onChange.
+func WatchContext(ctx context.Context, dir string, onChange func()) (<-chan struct{}, error) {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// addTree рекурсивно добавляет root и все его подкаталоги в наблюдение.
@@ -38,10 +47,15 @@ func Watch(dir string, onChange func()) error {
 	debounce := time.NewTimer(0)
 	<-debounce.C // drain initial tick
 
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		defer w.Close()
+		defer debounce.Stop()
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case event, ok := <-w.Events:
 				if !ok {
 					return
@@ -66,5 +80,5 @@ func Watch(dir string, onChange func()) error {
 			}
 		}
 	}()
-	return nil
+	return done, nil
 }

@@ -109,3 +109,22 @@ func TestRegisterOnSaveDeletion(t *testing.T) {
 		t.Fatalf("ожидали одну строку с Deletion=true: %+v", pend)
 	}
 }
+
+func TestExchangePlanRejectsMoreThanTwoNodes(t *testing.T) {
+	db, ctx, ent := setupReg(t)
+	id := uuid.New()
+	if err := db.Upsert(ctx, ent.Name, id, map[string]any{"Наименование": "A"}, ent); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveExchangeThisNode(ctx, "Обмен", "center"); err != nil {
+		t.Fatal(err)
+	}
+	plan := &metadata.ExchangePlan{
+		Name: "Обмен", Content: []string{"Справочник.Номенклатура"},
+		Nodes: []metadata.ExchangeNode{{Code: "center"}, {Code: "fil01"}, {Code: "fil02"}},
+	}
+	plan.Normalize()
+	if err := exchange.RegisterOnSave(ctx, db, []*metadata.ExchangePlan{plan}, ent, id, false); err == nil {
+		t.Fatal("текущий протокол обязан отклонять небезопасную multi-node топологию")
+	}
+}

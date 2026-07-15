@@ -197,6 +197,16 @@ func (p *docProxy) findByField(field, value string, raw any) any {
 	if r, ok := raw.(*interpreter.Ref); ok {
 		value = r.Name
 	}
+	if p.s.rowAccessRestricted(p.ctx(), p.entity, "read") {
+		ids, displays, err := p.visibleMatches(field, value)
+		if err != nil {
+			interpreter.RaiseUserError("Найти(" + p.entity.Name + "." + field + "): " + err.Error())
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		return &interpreter.Ref{UUID: ids[0], Name: displays[0], Type: p.entity.Name, Manager: p}
+	}
 	idStr, display, found, err := p.s.store.FindCatalogByField(p.ctx(), p.entity, field, value)
 	if err != nil {
 		interpreter.RaiseUserError("Найти(" + p.entity.Name + "." + field + "): " + err.Error())
@@ -221,6 +231,17 @@ func (p *docProxy) findByField(field, value string, raw any) any {
 // Ссылкой (только при ровно одном совпадении) и Количеством.
 func (p *docProxy) matchByField(field string, raw any) any {
 	value := interpreter.MatchValueString(raw)
+	if p.s.rowAccessRestricted(p.ctx(), p.entity, "read") {
+		ids, displays, err := p.visibleMatches(field, value)
+		if err != nil {
+			interpreter.RaiseUserError("ПроверитьСовпадениеПоРеквизиту(" + p.entity.Name + "." + field + "): " + err.Error())
+		}
+		var ref *interpreter.Ref
+		if len(ids) == 1 {
+			ref = &interpreter.Ref{UUID: ids[0], Name: displays[0], Type: p.entity.Name, Manager: p}
+		}
+		return interpreter.NewMatchResultStruct(ref, len(ids))
+	}
 	idStr, display, count, err := p.s.store.MatchCatalogByField(p.ctx(), p.entity, field, value)
 	if err != nil {
 		interpreter.RaiseUserError("ПроверитьСовпадениеПоРеквизиту(" + p.entity.Name + "." + field + "): " + err.Error())
@@ -238,10 +259,32 @@ func (p *docProxy) matchByField(field string, raw any) any {
 			interpreter.RaiseUserError("ПроверитьСовпадениеПоРеквизиту(" + p.entity.Name + "." + field + "): " + err.Error())
 		}
 		ref = &interpreter.Ref{UUID: idStr, Name: display, Type: p.entity.Name, Manager: p}
-	} else if count > 1 && p.s.rowAccessRestricted(p.ctx(), p.entity, "read") {
-		interpreter.RaiseUserError("ПроверитьСовпадениеПоРеквизиту(" + p.entity.Name + "." + field + "): row_access требует точной проверки найденных строк")
 	}
 	return interpreter.NewMatchResultStruct(ref, count)
+}
+
+func (p *docProxy) visibleMatches(field, value string) ([]string, []string, error) {
+	ids, displays, err := p.s.store.ListCatalogMatchesByField(p.ctx(), p.entity, field, value)
+	if err != nil {
+		return nil, nil, err
+	}
+	visibleIDs := make([]string, 0, len(ids))
+	visibleDisplays := make([]string, 0, len(displays))
+	for i, idStr := range ids {
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, nil, fmt.Errorf("неверный идентификатор найденной записи")
+		}
+		if err := p.s.checkDSLRowAccess(p.ctx(), p.entity, "read", id, nil); err != nil {
+			if errors.Is(err, interpreter.ErrRowAccessDenied) {
+				continue
+			}
+			return nil, nil, err
+		}
+		visibleIDs = append(visibleIDs, idStr)
+		visibleDisplays = append(visibleDisplays, displays[i])
+	}
+	return visibleIDs, visibleDisplays, nil
 }
 
 // DeleteRef реализует interpreter.RefManager — удаление документа по UUID.
@@ -259,12 +302,17 @@ func (p *docProxy) DeleteRef(uuidStr string) error {
 	if err := p.s.checkDSLRowAccess(ctx, p.entity, "delete", id, nil); err != nil {
 		return err
 	}
-	if p.entity.Posting {
-		if err := p.s.clearMovements(ctx, p.entity.Name, id); err != nil {
-			return fmt.Errorf("очистка движений: %w", err)
+	return p.s.store.WithTxIfNeeded(ctx, func(ctx context.Context) error {
+		if p.entity.Posting {
+			if err := p.s.clearMovements(ctx, p.entity.Name, id); err != nil {
+				return fmt.Errorf("очистка движений: %w", err)
+			}
 		}
-	}
-	return p.s.store.Delete(ctx, p.entity.Name, id)
+		if err := exchange.RegisterOnDelete(ctx, p.s.store, p.s.reg.ExchangePlans(), p.entity, id); err != nil {
+			return err
+		}
+		return p.s.store.Delete(ctx, p.entity.Name, id)
+	})
 }
 
 // unpostRef отменяет проведение документа: чистит движения по всем регистрам и
@@ -505,7 +553,7 @@ func (w *docWriter) fill(src any) error {
 // у документа есть строковый реквизит Номер и он ещё не задан. Повторяет
 // поведение веб-хендлера: документ, записанный из обработки, нумеруется
 // так же, как созданный через форму. Явно заданный Док.Номер сохраняется.
-func (w *docWriter) autoNumber() {
+func (w *docWriter) autoNumber(ctx context.Context) {
 	if w.entity.Kind != metadata.KindDocument {
 		return
 	}
@@ -514,7 +562,7 @@ func (w *docWriter) autoNumber() {
 			continue
 		}
 		if cur := w.obj.Get("Номер"); cur == nil || fmt.Sprint(cur) == "" {
-			w.obj.Set("Номер", w.s.generateNumber(w.ctx(), w.entity, w.obj.Fields))
+			w.obj.Set("Номер", w.s.generateNumber(ctx, w.entity, w.obj.Fields))
 		}
 		return
 	}
@@ -528,7 +576,10 @@ func (w *docWriter) autoNumber() {
 // Использует живой ctx, поэтому при открытой DSL-транзакции запись
 // участвует в ней; иначе автокоммит.
 func (w *docWriter) write() error {
-	ctx := w.ctx()
+	return w.s.store.WithTxIfNeeded(w.ctx(), w.writeInContext)
+}
+
+func (w *docWriter) writeInContext(ctx context.Context) error {
 	if w.accessID() == uuid.Nil {
 		if err := w.s.autoFillRowAccessFields(ctx, w.entity, "write", w.obj.Fields); err != nil {
 			return err
@@ -537,7 +588,7 @@ func (w *docWriter) write() error {
 	if err := w.s.checkDSLRowAccess(ctx, w.entity, "write", w.accessID(), w.obj.Fields); err != nil {
 		return err
 	}
-	w.autoNumber()
+	w.autoNumber(ctx)
 	mc := runtime.NewMovementsCollector(w.entity.Name, w.obj.ID)
 	setPeriodFromFields(mc, w.entity, w.obj.Fields)
 	if errMsg, _ := w.s.runOnWriteCtx(ctx, w.obj, mc); errMsg != "" {
@@ -554,12 +605,14 @@ func (w *docWriter) write() error {
 	if err := exchange.RegisterOnSave(ctx, w.s.store, w.s.reg.ExchangePlans(), w.entity, w.obj.ID, false); err != nil {
 		return err
 	}
-	w.saved = true
 	// Для непроводимых документов движения, записанные в ПриЗаписи, фиксируем.
 	// У проводимых документов движения формирует проведение (post).
 	if !w.entity.Posting {
-		return w.s.saveMovements(ctx, w.entity.Name, w.obj.ID, mc)
+		if err := w.s.saveMovements(ctx, w.entity.Name, w.obj.ID, mc); err != nil {
+			return err
+		}
 	}
+	w.saved = true
 	return nil
 }
 

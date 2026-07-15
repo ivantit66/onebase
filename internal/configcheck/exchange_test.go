@@ -38,6 +38,8 @@ func TestCheckExchangePlans(t *testing.T) {
 				metadata.ExchangeNode{Code: "hub1", Role: metadata.RoleHub},
 				metadata.ExchangeNode{Code: "hub2", Role: metadata.RoleHub},
 				metadata.ExchangeNode{Code: "fil", Role: metadata.RoleSpoke}),
+			mkPlan("ТриБезХаба", "by_time", []string{"Справочник.Номенклатура"},
+				metadata.ExchangeNode{Code: "a"}, metadata.ExchangeNode{Code: "b"}, metadata.ExchangeNode{Code: "c"}),
 		},
 	}
 
@@ -50,6 +52,7 @@ func TestCheckExchangePlans(t *testing.T) {
 		"код узла \"CENTER\" дублируется",
 		"пустой состав",
 		"ровно один хаб",
+		"тремя и более узлами",
 	} {
 		found := false
 		for _, is := range issues {

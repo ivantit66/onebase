@@ -69,7 +69,8 @@ func TestWatchConfigVersions_FiresOnNewVersion(t *testing.T) {
 	}
 
 	fired := make(chan struct{}, 4)
-	go watchConfigVersions(ctx, repo, 10*time.Millisecond, func() { fired <- struct{}{} })
+	initial := latestConfigVersionID(ctx, repo)
+	go watchConfigVersions(ctx, repo, initial, 10*time.Millisecond, func() error { fired <- struct{}{}; return nil })
 
 	// Без новой версии onChange не должен срабатывать.
 	select {
@@ -86,5 +87,44 @@ func TestWatchConfigVersions_FiresOnNewVersion(t *testing.T) {
 	case <-fired:
 	case <-time.After(2 * time.Second):
 		t.Fatal("onChange не сработал после новой версии")
+	}
+}
+
+func TestWatchConfigVersions_RetriesFailedReload(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	db, err := storage.ConnectSQLite(ctx, filepath.Join(t.TempDir(), "cfg.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := configdb.New(db)
+	if err := repo.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = repo.CreateVersion(ctx, configdb.VersionOptions{Message: "v1"})
+	failed := make(chan struct{}, 1)
+	succeeded := make(chan struct{}, 1)
+	attempts := 0
+	initial := latestConfigVersionID(ctx, repo)
+	go watchConfigVersions(ctx, repo, initial, 10*time.Millisecond, func() error {
+		attempts++
+		if attempts == 1 {
+			failed <- struct{}{}
+			return context.DeadlineExceeded
+		}
+		succeeded <- struct{}{}
+		return nil
+	})
+	_, _ = repo.CreateVersion(ctx, configdb.VersionOptions{Message: "v2"})
+	select {
+	case <-failed:
+	case <-time.After(time.Second):
+		t.Fatal("first reload attempt did not happen")
+	}
+	select {
+	case <-succeeded:
+	case <-time.After(time.Second):
+		t.Fatal("failed reload was not retried")
 	}
 }

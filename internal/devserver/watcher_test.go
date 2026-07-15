@@ -1,12 +1,27 @@
 package devserver
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestWatchContextStopsAndSignalsDone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done, err := WatchContext(ctx, t.TempDir(), func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("watcher did not stop after context cancellation")
+	}
+}
 
 // Watch() должен вызывать onChange при изменении файла.
 func TestWatch_TriggersOnFileChange(t *testing.T) {

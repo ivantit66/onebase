@@ -8,6 +8,8 @@ package exchange
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,6 +17,44 @@ import (
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/storage"
 )
+
+// validateExchangePlan допускает прямой обмен пары баз и многоузловую звезду с
+// единственным хабом. Плоский обмен трёх и более узлов со скалярной версией
+// объекта небезопасен: конкурентные изменения не имеют единого координатора.
+func validateExchangePlan(plan *metadata.ExchangePlan) error {
+	if plan == nil {
+		return fmt.Errorf("exchange: plan is nil")
+	}
+	if len(plan.Nodes) < 2 {
+		return fmt.Errorf("exchange: план %q должен содержать минимум два узла", plan.Name)
+	}
+	seen := make(map[string]struct{}, len(plan.Nodes))
+	hubs := 0
+	for _, node := range plan.Nodes {
+		code := strings.ToLower(strings.TrimSpace(node.Code))
+		if code == "" {
+			return fmt.Errorf("exchange: план %q содержит узел без кода", plan.Name)
+		}
+		if _, ok := seen[code]; ok {
+			return fmt.Errorf("exchange: план %q содержит повторяющийся код узла %q", plan.Name, node.Code)
+		}
+		seen[code] = struct{}{}
+		switch node.Role {
+		case "", metadata.RoleSpoke:
+		case metadata.RoleHub:
+			hubs++
+		default:
+			return fmt.Errorf("exchange: план %q содержит неизвестную роль узла %q", plan.Name, node.Role)
+		}
+	}
+	if hubs > 1 {
+		return fmt.Errorf("exchange: план %q должен содержать не более одного хаба", plan.Name)
+	}
+	if len(plan.Nodes) > 2 && hubs != 1 {
+		return fmt.Errorf("exchange: план %q с тремя и более узлами должен использовать топологию с одним хабом", plan.Name)
+	}
+	return nil
+}
 
 // RegisterOnSave регистрирует изменение объекта во всех планах обмена, чей
 // состав включает его сущность. Для каждого такого плана строка очереди
@@ -26,6 +66,18 @@ import (
 // и путь пометки на удаление), поэтому ошибки возвращаются наверх: сбой
 // регистрации должен откатывать запись, а не молча терять изменение из обмена.
 func RegisterOnSave(ctx context.Context, store *storage.DB, plans []*metadata.ExchangePlan, entity *metadata.Entity, id uuid.UUID, deletion bool) error {
+	return registerChange(ctx, store, plans, entity, id, deletion, false)
+}
+
+// RegisterOnDelete records a physical delete before the row disappears. It
+// reserves the next object version so a peer that already has the current
+// version applies the tombstone instead of treating it as an idempotent replay.
+// The caller must execute this and storage.Delete in the same transaction.
+func RegisterOnDelete(ctx context.Context, store *storage.DB, plans []*metadata.ExchangePlan, entity *metadata.Entity, id uuid.UUID) error {
+	return registerChange(ctx, store, plans, entity, id, true, true)
+}
+
+func registerChange(ctx context.Context, store *storage.DB, plans []*metadata.ExchangePlan, entity *metadata.Entity, id uuid.UUID, deletion, nextVersion bool) error {
 	if store == nil || entity == nil || len(plans) == 0 {
 		return nil
 	}
@@ -39,6 +91,9 @@ func RegisterOnSave(ctx context.Context, store *storage.DB, plans []*metadata.Ex
 		if !plan.Includes(entity) {
 			continue
 		}
+		if err := validateExchangePlan(plan); err != nil {
+			return err
+		}
 		thisNode, err := store.GetExchangeThisNode(ctx, plan.Name)
 		if err != nil {
 			return err
@@ -46,10 +101,18 @@ func RegisterOnSave(ctx context.Context, store *storage.DB, plans []*metadata.Ex
 		if thisNode == "" {
 			continue // база не участвует в этом плане обмена
 		}
+		thisNodeDef := plan.Node(thisNode)
+		if thisNodeDef == nil {
+			return fmt.Errorf("exchange: текущий узел %q не описан в плане %q", thisNode, plan.Name)
+		}
+		thisNode = thisNodeDef.Code
 		if !haveVersion {
 			version, err = store.EntityVersion(ctx, entity.Name, id)
 			if err != nil {
 				return err
+			}
+			if nextVersion {
+				version++
 			}
 			haveVersion = true
 		}
@@ -88,6 +151,9 @@ func RegisterConstantOnSave(ctx context.Context, store *storage.DB, plans []*met
 		if !plan.IncludesConstant(name) {
 			continue
 		}
+		if err := validateExchangePlan(plan); err != nil {
+			return err
+		}
 		thisNode, err := store.GetExchangeThisNode(ctx, plan.Name)
 		if err != nil {
 			return err
@@ -95,6 +161,11 @@ func RegisterConstantOnSave(ctx context.Context, store *storage.DB, plans []*met
 		if thisNode == "" {
 			continue
 		}
+		thisNodeDef := plan.Node(thisNode)
+		if thisNodeDef == nil {
+			return fmt.Errorf("exchange: текущий узел %q не описан в плане %q", thisNode, plan.Name)
+		}
+		thisNode = thisNodeDef.Code
 		for _, target := range plan.RegistrationTargets(thisNode) {
 			if err := store.RegisterExchangeChange(ctx, storage.ExchangeChange{
 				Plan:       plan.Name,

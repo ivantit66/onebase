@@ -25,6 +25,9 @@ func TestHealthzHandler(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("живая БД: ожидали 200, получили %d", rec.Code)
 	}
+	if got := rec.Header().Get("X-OneBase-Version"); got == "" {
+		t.Fatal("readiness-проба должна сообщать версию обслуживающего бинаря")
+	}
 
 	db.Close()
 	rec = httptest.NewRecorder()

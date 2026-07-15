@@ -1148,9 +1148,23 @@ obReady(function () {
         render(d.messages || []);
       }).catch(function () {});
     }
+    window.obReloadMessages = load;
     load();
     setInterval(load, 3000);
     document.addEventListener('submit', function () { setTimeout(load, 400); }, true);
+  }
+  // Во вкладочной оболочке (issue #322/#323) панель сообщений держит только
+  // верхнее окно: каждый iframe со своим setInterval(/ui/messages) + SSE упирал
+  // браузер в лимит ~6 соединений на хост, и переключение вкладок «зависало».
+  // Во фрейме панель не строим и не поллим — после submit просим верхнее окно
+  // обновиться, чтобы сообщение появилось сразу, а не через интервал.
+  if (window.__obEmbedded) {
+    document.addEventListener('submit', function () {
+      setTimeout(function () {
+        try { if (window.top && window.top.obReloadMessages) window.top.obReloadMessages(); } catch (e) {}
+      }, 400);
+    }, true);
+    return;
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
@@ -2031,6 +2045,32 @@ window.onebaseDevice = {
       window.dispatchEvent(ev);
     } catch (_) {}
   }
+  // В режиме вкладок SSE принадлежит оболочке. Ретранслируем уже разобранное
+  // JSON-событие во все её same-origin iframe, чтобы сохранить публичный
+  // контракт window-событий onebase:<имя> для страниц и live-панелей.
+  function forwardOnebaseEvent(msg) {
+    var frames = document.querySelectorAll('.ob-tabbody iframe');
+    for (var i = 0; i < frames.length; i++) {
+      try {
+        if (frames[i].contentWindow) {
+          frames[i].contentWindow.postMessage({
+            source: 'obRealtime',
+            name: msg.name,
+            data: msg.data
+          }, window.location.origin);
+        }
+      } catch (_) {}
+    }
+  }
+  if (window.__obEmbedded) {
+    window.addEventListener('message', function (ev) {
+      // Принимаем realtime-события только от своей same-origin оболочки.
+      if (ev.source !== window.parent || ev.origin !== window.location.origin) return;
+      var msg = ev.data;
+      if (!msg || msg.source !== 'obRealtime' || typeof msg.name !== 'string' || !msg.name) return;
+      emitOnebaseEvent('onebase:' + msg.name, msg.data);
+    });
+  }
   function toast(text) {
     var box = document.getElementById('ob-toasts');
     if (!box) {
@@ -2091,7 +2131,11 @@ window.onebaseDevice = {
       if (el.parentNode) el.remove();
     }, 20000);
   }
-  window.addEventListener('onebase:звонок.входящий', function (ev) { callToast(ev.detail); });
+  // Событие ретранслируется и во фреймы для пользовательских слушателей, но
+  // встроенную всплывашку рисует только оболочка — иначе снова будут дубли.
+  if (!window.__obEmbedded) {
+    window.addEventListener('onebase:звонок.входящий', function (ev) { callToast(ev.detail); });
+  }
   function connect() {
     if (typeof EventSource === 'undefined') return;
     var es = new EventSource('/ui/events');
@@ -2105,12 +2149,20 @@ window.onebaseDevice = {
       }
       if (!msg || !msg.name) return;
       emitOnebaseEvent('onebase:' + msg.name, msg.data);
+      forwardOnebaseEvent(msg);
       if (msg.name === 'уведомление' || msg.name === 'notify') {
         toast(typeof msg.data === 'string' ? msg.data : JSON.stringify(msg.data));
       }
     };
     es.onerror = function () {};
   }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', connect);
-  else connect();
+  // Вкладочная оболочка (issue #322/#323): единственный SSE-поток /ui/events
+  // держит верхнее окно оболочки. Во фрейме не подключаемся — иначе N вкладок =
+  // N постоянных соединений (упор в лимит браузера ~6/хост) и дубли тостов
+  // (Hub.Publish доставляет каждому подписчику). Произвольные onebase:<имя>
+  // события оболочка ретранслирует во фреймы через проверенный postMessage.
+  if (!window.__obEmbedded) {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', connect);
+    else connect();
+  }
 })();

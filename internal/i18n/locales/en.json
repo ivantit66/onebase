@@ -1,4 +1,12 @@
 {
+  "Профиль и интерфейс": "Profile and interface",
+  "Администрирование": "Administration",
+  "Интеграции и задания": "Integrations and jobs",
+  "Обслуживание базы": "Database maintenance",
+  "Расширения и оборудование": "Extensions and equipment",
+  "Хранение конфигурации": "Configuration storage",
+  "Расположение конфигурации": "Configuration location",
+  "Платформенные возможности": "Platform features",
   "Вкладки": "Tabs",
   "Режим открытия форм": "Form opening mode",
   "Отдельные страницы": "Separate pages",
@@ -1019,5 +1027,11 @@
   "Скрытые": "Hidden",
   "Скрыть из выбора": "Hide from choices",
   "Скрыть из выбора?": "Hide from choices?",
-  "Обязательное поле": "Required field"
+  "Обязательное поле": "Required field",
+  "Обмен данными": "Data exchange",
+  "недопустимый тип записи архива: %s": "invalid archive entry type: %s",
+  "неполная запись архива: %s": "incomplete archive entry: %s",
+  "повторяющаяся запись в архиве: %s": "duplicate archive entry: %s",
+  "распакованный архив превышает допустимый размер": "the expanded archive exceeds the allowed size",
+  "слишком много записей в архиве: %d": "too many archive entries: %d"
 }

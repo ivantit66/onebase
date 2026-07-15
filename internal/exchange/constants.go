@@ -33,11 +33,21 @@ func applyConstant(ctx context.Context, store *storage.DB, plan *metadata.Exchan
 			res.Skipped++ // локальное изменение победило
 			return false, nil
 		}
-		return true, applyConstantValue(ctx, store, plan.Name, name, value, obj.ChangedAt, res)
+		if err := applyConstantValue(ctx, store, plan.Name, name, value, obj.ChangedAt, res); err != nil {
+			return false, err
+		}
+		if err := store.DeleteExchangeChange(ctx, plan.Name, name, "", fromNode); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 
 	// Нет встречной правки — идемпотентность по «водяному знаку».
-	if at, ok := store.ExchangeAppliedAt(ctx, plan.Name, name, ""); ok && obj.ChangedAt <= at {
+	at, ok, err := store.ExchangeAppliedAt(ctx, plan.Name, name, "")
+	if err != nil {
+		return false, err
+	}
+	if ok && obj.ChangedAt <= at {
 		res.Skipped++
 		return false, nil
 	}

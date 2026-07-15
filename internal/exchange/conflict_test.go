@@ -3,6 +3,7 @@ package exchange_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -45,10 +46,10 @@ func setupConflict(t *testing.T) (*storage.DB, context.Context, *metadata.Entity
 
 func incomingPkg(id uuid.UUID, version, changedAt int64) []byte {
 	pkg := exchange.Package{
-		Format: exchange.FormatV1, Plan: "Обмен", FromNode: "center", MessageNo: 1,
+		Format: exchange.FormatV1, Plan: "Обмен", FromNode: "CENTER", ToNode: "FIL01", MessageNo: 1,
 		Objects: []exchange.PackageObject{{
-			Type: "Товар", ID: id.String(), Version: version, ChangedAt: changedAt,
-			Fields: map[string]any{"Наименование": "изЦентра", "Цена": "999", "Активен": false},
+			Type: "товар", ID: strings.ToUpper(id.String()), Version: version, ChangedAt: changedAt,
+			Fields: map[string]any{"Наименование": "изЦентра", "Цена": "999", "Дата": nil, "Активен": false},
 		}},
 	}
 	data, _ := json.Marshal(pkg)
@@ -79,6 +80,9 @@ func TestConflictByTime(t *testing.T) {
 	if got := name(t, b, ctx, ent, id); got != "изЦентра" {
 		t.Errorf("by_time позже → должно победить входящее, got %q", got)
 	}
+	if pending, _ := b.PendingExchangeChanges(ctx, "Обмен", "center"); len(pending) != 0 {
+		t.Errorf("проигравшая локальная правка осталась в очереди: %+v", pending)
+	}
 
 	// Входящее раньше (500 < 1000) → побеждает локальное.
 	b2, ctx2, ent2, id2 := setupConflict(t)
@@ -91,6 +95,59 @@ func TestConflictByTime(t *testing.T) {
 	}
 	if got := name(t, b2, ctx2, ent2, id2); got != "локальное" {
 		t.Errorf("by_time раньше → должно победить локальное, got %q", got)
+	}
+}
+
+func TestConflictByTimeEqualTimestampUsesStableNodeTieBreaker(t *testing.T) {
+	b, ctx, ent, id := setupConflict(t)
+	lr, err := exchange.ApplyPackage(ctx, b, fakeResolver{"Товар": ent},
+		planC("by_time", 0, 0), incomingPkg(id, 2, 1000), exchange.ApplyOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// fil01 sorts after center, so both peers make the same choice: fil01 wins.
+	if lr.Conflicts != 1 || lr.Skipped != 1 {
+		t.Fatalf("ожидали детерминированный выбор локальной версии: %+v", lr)
+	}
+	if got := name(t, b, ctx, ent, id); got != "локальное" {
+		t.Fatalf("при равном времени должен победить fil01, got %q", got)
+	}
+}
+
+func TestAcknowledgedChangeIsNotConflict(t *testing.T) {
+	b, ctx, ent, id := setupConflict(t)
+	pending, err := b.PendingExchangeChanges(ctx, "Обмен", "center")
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending: %+v, %v", pending, err)
+	}
+	if n, err := b.NextExchangeMessageNo(ctx, "Обмен", "center"); err != nil || n != 1 {
+		t.Fatalf("next message: %d, %v", n, err)
+	}
+	if err := b.MarkExchangeChangesSent(ctx, pending, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	pkg := exchange.Package{
+		Format: exchange.FormatV1, Plan: "Обмен", FromNode: "center", ToNode: "fil01",
+		MessageNo: 2, AckNo: 1,
+		Objects: []exchange.PackageObject{{
+			Type: "Товар", ID: id.String(), Version: 2, ChangedAt: 2000,
+			Fields: map[string]any{"Наименование": "после подтверждения", "Цена": "2", "Дата": nil, "Активен": false},
+		}},
+	}
+	data, _ := json.Marshal(pkg)
+	// У fil01 приоритет выше. Если подтверждённая строка ошибочно считается
+	// конфликтом, входящий объект будет отвергнут правилом by_node_priority.
+	lr, err := exchange.ApplyPackage(ctx, b, fakeResolver{"Товар": ent},
+		planC("by_node_priority", 1, 10), data, exchange.ApplyOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lr.Conflicts != 0 || lr.Applied != 1 {
+		t.Fatalf("подтверждённая правка не должна быть конфликтом: %+v", lr)
+	}
+	if got := name(t, b, ctx, ent, id); got != "после подтверждения" {
+		t.Fatalf("входящая версия не применена: %q", got)
 	}
 }
 

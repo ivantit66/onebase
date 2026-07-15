@@ -4042,9 +4042,15 @@ document.querySelectorAll('details.cfg-tree').forEach(function(d){
       document.getElementById('cfggen-btn').style.display=on?'':'none';
     }).catch(function(){});
   };
-  initAiHandlers();
-  initGenHandlers();
-  cfgAiRefresh();
+  // Скрипт подключён в шаблоне ВЫШЕ кнопок cfgai-btn/cfggen-btn и панелей
+  // (configurator_tmpl_shell.go: <script src=configurator.js> идёт раньше этих
+  // элементов). На момент разбора IIFE их в DOM ещё нет — голый initAiHandlers
+  // падал на null.addEventListener, и cfgAiRefresh() не вызывался: кнопки ИИ
+  // не появлялись, пока не вызвать cfgAiRefresh() вручную. Поэтому ждём готовности
+  // DOM — так же, как initTree/initResizers выше по файлу.
+  function bootCfgAi(){ initAiHandlers(); initGenHandlers(); cfgAiRefresh(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bootCfgAi);
+  else bootCfgAi();
 
   function initAiHandlers(){
     var btn=document.getElementById('cfgai-btn');

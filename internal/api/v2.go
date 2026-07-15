@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/entityservice"
+	"github.com/ivantit66/onebase/internal/exchange"
 	"github.com/ivantit66/onebase/internal/metadata"
 	reportpkg "github.com/ivantit66/onebase/internal/report"
 	"github.com/ivantit66/onebase/internal/report/compose"
@@ -265,6 +266,9 @@ func (h *handler) deleteObjectV2(kind metadata.Kind) http.HandlerFunc {
 				if err := h.clearMovements(ctx, entityName, id); err != nil {
 					return err
 				}
+			}
+			if err := exchange.RegisterOnDelete(ctx, h.store, h.reg.ExchangePlans(), entity, id); err != nil {
+				return err
 			}
 			return h.store.Delete(ctx, entityName, id)
 		}); err != nil {

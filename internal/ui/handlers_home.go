@@ -27,8 +27,7 @@ func (s *Server) about(w http.ResponseWriter, r *http.Request) {
 			docs++
 		}
 	}
-	cfg := s.cfg
-	cfg.DSN = maskDSN(cfg.DSN)
+	cfg := prepareAboutConfig(s.cfg)
 	user := auth.UserFromContext(r.Context())
 	s.render(w, r, "page-about", map[string]any{
 		"Cfg":       cfg,
@@ -38,6 +37,19 @@ func (s *Server) about(w http.ResponseWriter, r *http.Request) {
 		"Reports":   len(s.reg.Reports()),
 		"User":      user,
 	})
+}
+
+func prepareAboutConfig(cfg Config) Config {
+	if cfg.DatabaseLocation == "" {
+		cfg.DatabaseLocation = cfg.DSN
+	}
+	cfg.DatabaseLocation = maskDSN(cfg.DatabaseLocation)
+	// В database-режиме конфигурация находится там же, где данные. Значение
+	// собираем здесь после маскирования DSN, чтобы пароль не попал в HTML.
+	if cfg.ConfigSource == "database" {
+		cfg.ConfigLocation = cfg.DatabaseLocation
+	}
+	return cfg
 }
 
 func maskDSN(dsn string) string {

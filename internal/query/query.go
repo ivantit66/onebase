@@ -1263,7 +1263,8 @@ func hasFilterArg(args [][]tok) bool {
 }
 
 func monthStartOf(t time.Time) time.Time {
-	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
+	t = t.UTC()
+	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
 }
 
 // genBalancesFromTotals — текущие остатки из помесячных итогов: SUM оборотов по
@@ -1304,6 +1305,7 @@ func (tr *translator) genBalancesFromTotalsAtMoment(reg *metadata.Register, arg0
 	d := dialectOrDefault(tr.opts.Dialect)
 
 	emit := func(period time.Time, condSQL func() string) string {
+		period = period.UTC()
 		// Порядок добавления аргументов = порядку плейсхолдеров в SQL:
 		// сначала месяц-ключ (prior), затем начало месяца (tail), затем условие
 		// момента (его аргументы добавляет condSQL).
