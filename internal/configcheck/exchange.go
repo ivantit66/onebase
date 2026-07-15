@@ -93,6 +93,9 @@ func CheckExchangePlans(proj *project.Project) []Issue {
 		if spokeCount > 0 && hubCount == 0 {
 			add(plan.Name, "в топологии есть узлы-спицы (spoke), но нет ни одного хаба (hub) — спицам некуда регистрировать изменения")
 		}
+		if hubCount > 1 {
+			add(plan.Name, "топология «звезда» поддерживает ровно один хаб (hub)")
+		}
 
 		// Состав: непуст и ссылается на существующие сущности нужного вида.
 		if len(plan.ParsedContent()) == 0 {

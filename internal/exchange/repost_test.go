@@ -2,6 +2,7 @@ package exchange_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -15,6 +16,64 @@ func repostDoc() *metadata.Entity {
 	return &metadata.Entity{
 		Name: "Продажа", Kind: metadata.KindDocument, Posting: true,
 		Fields: []metadata.Field{{Name: "Номер", Type: metadata.FieldTypeString}},
+	}
+}
+
+func TestRepostRetriesAfterCallbackError(t *testing.T) {
+	doc := repostDoc()
+	res := fakeResolver{"Продажа": doc}
+	a, ctxA := newBase(t, doc)
+	if err := a.SaveExchangeThisNode(ctxA, "Обмен", "center"); err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.New()
+	if err := a.Upsert(ctxA, doc.Name, id, map[string]any{"Номер": "0002"}, doc); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetPosted(ctxA, doc.Name, id, true); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := a.EntityVersion(ctxA, doc.Name, id)
+	if err := a.RegisterExchangeChange(ctxA, storage.ExchangeChange{
+		Plan: "Обмен", ObjectType: doc.Name, ObjectID: id.String(), NodeCode: "fil01", Version: v, ChangedAt: 1000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := exchange.BuildPackage(ctxA, a, res, repostPlan(true), "fil01")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b, ctxB := newBase(t, doc)
+	attempts := 0
+	opts := exchange.ApplyOptions{Repost: func(ctx context.Context, entityType string, rid uuid.UUID) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("временная ошибка")
+		}
+		return b.SetPosted(ctx, entityType, rid, true)
+	}}
+	if _, err := exchange.ApplyPackage(ctxB, b, res, repostPlan(true), data, opts); err == nil {
+		t.Fatal("первая ошибка перепроведения должна вернуться вызывающему")
+	}
+	lr, err := exchange.ApplyPackage(ctxB, b, res, repostPlan(true), data, opts)
+	if err != nil {
+		t.Fatalf("повтор пакета должен повторить перепроведение: %v", err)
+	}
+	if attempts != 2 || lr.Reposted != 1 {
+		t.Fatalf("ожидалось две попытки и одно успешное перепроведение: attempts=%d result=%+v", attempts, lr)
+	}
+	if row, err := b.GetByID(ctxB, doc.Name, id, doc); err != nil || !toBoolT(row["posted"]) {
+		t.Fatalf("документ не проведён после повтора: row=%v err=%v", row, err)
+	}
+
+	// Уже проведённый документ повторный пакет больше не перепроводит.
+	lr, err = exchange.ApplyPackage(ctxB, b, res, repostPlan(true), data, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 2 || lr.Reposted != 0 {
+		t.Fatalf("успешное перепроведение не должно повторяться: attempts=%d result=%+v", attempts, lr)
 	}
 }
 

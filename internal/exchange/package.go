@@ -252,28 +252,34 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 		toRepost = toRepost[:0]
 		for _, obj := range pkg.Objects {
 			var objApplied bool
+			var entityCurrent bool
 			switch obj.Kind {
 			case storage.ExchangeKindConstant:
 				objApplied, err = applyConstant(ctx, store, plan, thisNode, pkg.FromNode, obj, &res)
 			case storage.ExchangeKindInfoReg:
 				objApplied, err = applyInfoReg(ctx, store, resolver, plan, thisNode, pkg.FromNode, obj, &res)
 			default:
-				objApplied, err = applyEntity(ctx, store, resolver, plan, thisNode, pkg.FromNode, obj, &res, opts)
+				objApplied, entityCurrent, err = applyEntity(ctx, store, resolver, plan, thisNode, pkg.FromNode, obj, &res, opts)
 			}
 			if err != nil {
 				return err
 			}
-			if !objApplied {
-				continue
-			}
-			if len(transit) > 0 {
+			if objApplied && len(transit) > 0 {
 				applied = append(applied, obj)
 			}
 			// Перепроведение (план 86, фаза 2): применённый документ, проведённый на
 			// источнике, при включённом repost и доступном обработчике — в очередь
 			// на перепроведение ПОСЛЕ коммита (entityservice открывает свою транзакцию).
-			if plan.Repost && opts.Repost != nil && obj.Kind == "" && obj.Posted && !obj.Deletion {
-				toRepost = append(toRepost, obj)
+			// Равная локальная версия тоже считается кандидатом: это повтор пакета
+			// после ошибки перепроведения, когда сами данные уже были закоммичены.
+			if entityCurrent && plan.Repost && opts.Repost != nil && obj.Posted && !obj.Deletion {
+				need, nerr := needsRepost(ctx, store, resolver, obj)
+				if nerr != nil {
+					return nerr
+				}
+				if need {
+					toRepost = append(toRepost, obj)
+				}
 			}
 		}
 		// Ретрансляция применённых изменений спицам (в той же транзакции).
@@ -335,50 +341,75 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 // applyEntity применяет объект-сущность (справочник/документ) из пакета. Возвращает
 // true, если объект был записан (создан/обновлён/помечен на удаление) — только такие
 // изменения хаб ретранслирует спицам.
-func applyEntity(ctx context.Context, store *storage.DB, resolver EntityResolver, plan *metadata.ExchangePlan, thisNode, fromNode string, obj PackageObject, res *LoadResult, opts ApplyOptions) (bool, error) {
+func applyEntity(ctx context.Context, store *storage.DB, resolver EntityResolver, plan *metadata.ExchangePlan, thisNode, fromNode string, obj PackageObject, res *LoadResult, opts ApplyOptions) (applied bool, current bool, err error) {
 	ent := resolver.GetEntity(obj.Type)
 	if ent == nil {
 		res.Skipped++ // сущность неизвестна приёмнику
-		return false, nil
+		return false, false, nil
 	}
 	id, err := uuid.Parse(obj.ID)
 	if err != nil {
 		res.Skipped++
-		return false, nil
+		return false, false, nil
 	}
 	// Встречная правка: приёмник менял тот же объект и ещё не отправил изменение
 	// источнику → конфликт, разрешаемый правилом плана.
 	local, hasLocal, err := store.GetExchangeChange(ctx, plan.Name, obj.Type, obj.ID, fromNode)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if hasLocal {
 		res.Conflicts++
 		win, err := resolveConflict(ctx, store, plan, thisNode, fromNode, ent, id, obj, local.ChangedAt, opts.Hook)
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 		if !win {
 			res.Skipped++ // локальное изменение победило — не применяем
-			return false, nil
+			return false, false, nil
 		}
 	} else {
 		// Нет встречной правки — идемпотентность по версии.
 		localVer, exists := store.EntityVersionExists(ctx, ent.Name, id)
 		if exists && obj.Version <= localVer {
 			res.Skipped++
-			return false, nil
+			// Равная версия может быть повтором после ошибки перепроведения.
+			// Более старая версия никогда не должна менять состояние документа.
+			return false, obj.Version == localVer, nil
 		}
 	}
 	if err := applyObject(ctx, store, ent, id, obj); err != nil {
-		return false, err
+		return false, false, err
 	}
 	if obj.Deletion {
 		res.Deleted++
 	} else {
 		res.Applied++
 	}
-	return true, nil
+	return true, true, nil
+}
+
+// needsRepost проверяет, что текущая версия пакета относится к проводимому
+// документу, который на приёмнике ещё не проведён. Проверка делает повтор после
+// ошибки безопасным и не перепроводит уже успешно обработанный документ.
+func needsRepost(ctx context.Context, store *storage.DB, resolver EntityResolver, obj PackageObject) (bool, error) {
+	ent := resolver.GetEntity(obj.Type)
+	if ent == nil || ent.Kind != metadata.KindDocument || !ent.Posting {
+		return false, nil
+	}
+	id, err := uuid.Parse(obj.ID)
+	if err != nil {
+		return false, nil
+	}
+	version, exists := store.EntityVersionExists(ctx, ent.Name, id)
+	if !exists || version != obj.Version {
+		return false, nil
+	}
+	row, err := store.GetByID(ctx, ent.Name, id, ent)
+	if err != nil {
+		return false, err
+	}
+	return !toBool(row["posted"]), nil
 }
 
 func applyObject(ctx context.Context, store *storage.DB, ent *metadata.Entity, id uuid.UUID, obj PackageObject) error {

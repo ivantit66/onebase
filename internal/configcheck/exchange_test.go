@@ -34,6 +34,10 @@ func TestCheckExchangePlans(t *testing.T) {
 			mkPlan("ОдинУзел", "by_time", []string{"Справочник.Номенклатура"}, center),
 			mkPlan("ДубльУзла", "by_time", []string{"Справочник.Номенклатура"}, center, metadata.ExchangeNode{Code: "CENTER"}),
 			mkPlan("ПустойСостав", "by_time", nil, center, fil),
+			mkPlan("ДваХаба", "by_time", []string{"Справочник.Номенклатура"},
+				metadata.ExchangeNode{Code: "hub1", Role: metadata.RoleHub},
+				metadata.ExchangeNode{Code: "hub2", Role: metadata.RoleHub},
+				metadata.ExchangeNode{Code: "fil", Role: metadata.RoleSpoke}),
 		},
 	}
 
@@ -45,6 +49,7 @@ func TestCheckExchangePlans(t *testing.T) {
 		"минимум два узла",
 		"код узла \"CENTER\" дублируется",
 		"пустой состав",
+		"ровно один хаб",
 	} {
 		found := false
 		for _, is := range issues {
