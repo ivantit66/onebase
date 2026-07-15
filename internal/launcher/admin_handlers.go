@@ -950,7 +950,21 @@ func (h *handler) cfgAdminAbout(w http.ResponseWriter, r *http.Request) {
 		platVer += `</span>`
 	}
 
-	html := fmt.Sprintf(`<div style="padding:24px;max-width:400px">
+	dbLocation := baseDatabaseLocation(b)
+	configMode := "Файлы"
+	configLocation := b.Path
+	if b.ConfigSource == "database" {
+		configMode = "В базе данных"
+		configLocation = dbLocation
+	}
+	if configLocation == "" {
+		configLocation = "—"
+	}
+	if dbLocation == "" {
+		dbLocation = "—"
+	}
+
+	html := fmt.Sprintf(`<div style="padding:24px;max-width:560px">
 	<div style="text-align:center;margin-bottom:20px">
 	  %s
 	  <div style="font-size:18px;font-weight:600;color:#1a5fa8">OneBase</div>
@@ -960,7 +974,8 @@ func (h *handler) cfgAdminAbout(w http.ResponseWriter, r *http.Request) {
 	<tr><td style="padding:6px 0;color:#888;width:140px">Версия платформы</td><td style="padding:6px 0">%s</td></tr>
 	%s
 	<tr><td style="padding:6px 0;color:#888">Режим конфигурации</td><td style="padding:6px 0">%s</td></tr>
-	<tr><td style="padding:6px 0;color:#888">База данных</td><td style="padding:6px 0">%s</td></tr>
+	<tr><td style="padding:6px 0;color:#888">Расположение конфигурации</td><td style="padding:6px 0;word-break:break-all">%s</td></tr>
+	<tr><td style="padding:6px 0;color:#888">База данных</td><td style="padding:6px 0;word-break:break-all">%s</td></tr>
 	<tr><td style="padding:6px 0;color:#888">Порт</td><td style="padding:6px 0">:%d</td></tr>
 	</table>
 	</div>`,
@@ -968,8 +983,9 @@ func (h *handler) cfgAdminAbout(w http.ResponseWriter, r *http.Request) {
 		userRow,
 		platVer,
 		cfgRows,
-		escHTML(b.ConfigSource),
-		maskDSN(escHTML(b.DB)),
+		escHTML(configMode),
+		escHTML(configLocation),
+		escHTML(dbLocation),
 		b.Port)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(html))
@@ -1081,4 +1097,17 @@ func maskDSN(dsn string) string {
 		return dsn[:end] + "***"
 	}
 	return dsn
+}
+
+// baseDatabaseLocation returns the same database location the launcher uses,
+// including the actual file path for SQLite and a password-masked PostgreSQL
+// connection string. The empty DBType/DB fallback mirrors OpenDB.
+func baseDatabaseLocation(b *Base) string {
+	if b.DBType == "sqlite" || (b.DBType == "" && b.DB == "") {
+		if b.DBPath != "" {
+			return b.DBPath
+		}
+		return filepath.Join(os.TempDir(), "onebase_"+b.ID+".db")
+	}
+	return maskDSN(b.DB)
 }

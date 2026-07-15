@@ -10,6 +10,13 @@ const tplAllFunctions = `
     style="width:100%;padding:9px 14px;border:1px solid #d0d7e3;border-radius:6px;font-size:14px">
 </div>
 
+<div class="af-group" data-group="Платформенные возможности">
+  <div class="af-group-hd" data-ob-af-toggle>{{t $.Lang "Платформенные возможности"}} <span class="af-cnt">1</span></div>
+  <div class="af-group-body">
+    <a class="af-link" href="/ui/pos" data-name="РМК Рабочее место кассира">{{t $.Lang "Рабочее место кассира (РМК)"}}</a>
+  </div>
+</div>
+
 {{if .Catalogs}}
 <div class="af-group" data-group="Справочники">
   <div class="af-group-hd" data-ob-af-toggle>{{t $.Lang "Справочники"}} <span class="af-cnt">{{len .Catalogs}}</span></div>
