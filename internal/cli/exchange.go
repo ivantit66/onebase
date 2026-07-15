@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
@@ -61,6 +63,7 @@ func init() {
 	exchangeInitCmd.Flags().String("plan", "", "имя плана обмена (обязательно)")
 	exchangeInitCmd.Flags().String("node", "", "код текущего узла (обязательно)")
 	exchangeInitCmd.Flags().String("token", "", "общий токен плана для онлайн-обмена (одинаковый на всех участниках)")
+	exchangeInitCmd.Flags().String("token-file", "", "прочитать токен онлайн-обмена из файла (предпочтительнее --token)")
 
 	addBaseFlags(exchangeDumpCmd)
 	exchangeDumpCmd.Flags().String("plan", "", "имя плана обмена (обязательно)")
@@ -176,13 +179,96 @@ func runExchangeInit(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stdout, "Текущий узел для плана %q: %s\n", plan.Name, node)
-	if token, _ := cmd.Flags().GetString("token"); strings.TrimSpace(token) != "" {
+	token, err := exchangeInitToken(cmd)
+	if err != nil {
+		return err
+	}
+	if token != "" {
 		if err := sp.db.SaveExchangeToken(sp.ctx, plan.Name, token); err != nil {
 			return err
 		}
 		fmt.Fprintln(os.Stdout, "Токен онлайн-обмена сохранён.")
 	}
 	return nil
+}
+
+func exchangeInitToken(cmd *cobra.Command) (string, error) {
+	if path, _ := cmd.Flags().GetString("token-file"); strings.TrimSpace(path) != "" {
+		f, err := os.Open(path)
+		if err != nil {
+			return "", fmt.Errorf("чтение token-file: %w", err)
+		}
+		defer f.Close()
+		const maxTokenBytes = 64 << 10
+		data, err := io.ReadAll(io.LimitReader(f, maxTokenBytes+1))
+		if err != nil {
+			return "", fmt.Errorf("чтение token-file: %w", err)
+		}
+		if len(data) > maxTokenBytes {
+			return "", fmt.Errorf("token-file превышает лимит %d байт", maxTokenBytes)
+		}
+		return strings.TrimSpace(string(data)), nil
+	}
+	token, _ := cmd.Flags().GetString("token")
+	if strings.TrimSpace(token) != "" {
+		fmt.Fprintln(os.Stderr, "ПРЕДУПРЕЖДЕНИЕ: --token виден в истории shell; используйте --token-file или ONEBASE_EXCHANGE_TOKEN.")
+		return strings.TrimSpace(token), nil
+	}
+	return strings.TrimSpace(os.Getenv("ONEBASE_EXCHANGE_TOKEN")), nil
+}
+
+func writeExchangePackage(path string, data []byte) (err error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		if err != nil {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if err = tmp.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err = tmp.Write(data); err != nil {
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	if d, openErr := os.Open(dir); openErr == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
+}
+
+func readExchangePackage(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, exchange.MaxPackageBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > exchange.MaxPackageBytes {
+		return nil, fmt.Errorf("пакет превышает лимит %d байт", exchange.MaxPackageBytes)
+	}
+	return data, nil
 }
 
 func runExchangeDump(cmd *cobra.Command, _ []string) error {
@@ -210,7 +296,7 @@ func runExchangeDump(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(out, data, 0o644); err != nil {
+	if err := writeExchangePackage(out, data); err != nil {
 		return fmt.Errorf("запись пакета: %w", err)
 	}
 	pkg, _ := exchange.ParsePackage(data)
@@ -224,7 +310,7 @@ func runExchangeLoad(cmd *cobra.Command, _ []string) error {
 	if in == "" {
 		return fmt.Errorf("укажите --in <файл пакета>")
 	}
-	data, err := os.ReadFile(in)
+	data, err := readExchangePackage(in)
 	if err != nil {
 		return fmt.Errorf("чтение пакета: %w", err)
 	}
@@ -270,7 +356,10 @@ func runExchangeStatus(cmd *cobra.Command, _ []string) error {
 	if plan == nil {
 		return fmt.Errorf("план обмена %q не найден в конфигурации", planName)
 	}
-	thisNode, _ := sp.db.GetExchangeThisNode(sp.ctx, plan.Name)
+	thisNode, err := sp.db.GetExchangeThisNode(sp.ctx, plan.Name)
+	if err != nil {
+		return err
+	}
 	counts, err := sp.db.ExchangePendingCounts(sp.ctx, plan.Name)
 	if err != nil {
 		return err
@@ -284,7 +373,10 @@ func runExchangeStatus(cmd *cobra.Command, _ []string) error {
 	}
 	fmt.Fprintln(os.Stdout, "\nУзлы (очередь = ждут выгрузки; отпр./подтв. — номера сообщений):")
 	for _, n := range plan.Nodes {
-		peer, _ := sp.db.GetExchangePeer(sp.ctx, plan.Name, n.Code)
+		peer, err := sp.db.GetExchangePeer(sp.ctx, plan.Name, n.Code)
+		if err != nil {
+			return err
+		}
 		mark := ""
 		if thisNode != "" && strings.EqualFold(n.Code, thisNode) {
 			mark = " ← этот узел"
@@ -319,11 +411,17 @@ func runExchangeSync(cmd *cobra.Command, _ []string) error {
 	if strings.TrimSpace(peer.URL) == "" {
 		return fmt.Errorf("у узла %q нет url — онлайн-обмен недоступен (задайте nodes[].url в плане)", with)
 	}
-	token, _ := sp.db.GetExchangeToken(sp.ctx, plan.Name)
-	if token == "" {
-		return fmt.Errorf("токен плана не задан — выполните `onebase exchange init --token <секрет>`")
+	token, err := sp.db.GetExchangeToken(sp.ctx, plan.Name)
+	if err != nil {
+		return err
 	}
-	thisNode, _ := sp.db.GetExchangeThisNode(sp.ctx, plan.Name)
+	if token == "" {
+		return fmt.Errorf("токен плана не задан — выполните `onebase exchange init --token-file <файл>` или задайте ONEBASE_EXCHANGE_TOKEN")
+	}
+	thisNode, err := sp.db.GetExchangeThisNode(sp.ctx, plan.Name)
+	if err != nil {
+		return err
+	}
 	if thisNode == "" {
 		return fmt.Errorf("узел этой базы не задан — выполните `onebase exchange init --node <код>`")
 	}

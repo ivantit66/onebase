@@ -16,6 +16,10 @@ import (
 	"github.com/ivantit66/onebase/internal/metadata"
 )
 
+func exchangeNoRows(err error) bool {
+	return IsNotFound(err)
+}
+
 // ExchangeChange — одна строка очереди регистрации: объект из состава плана,
 // ждущий отправки узлу NodeCode. SentNo — номер сообщения, в котором строка была
 // в последний раз выгружена (0 = ещё не выгружалась); сбрасывается в 0 при новой
@@ -89,8 +93,11 @@ func (db *DB) GetExchangeThisNode(ctx context.Context, plan string) (string, err
 	err := db.QueryRow(ctx,
 		`SELECT value FROM _settings WHERE key = `+d.Placeholder(1),
 		exchangeThisNodeKey(plan)).Scan(&v)
-	if err != nil {
+	if exchangeNoRows(err) {
 		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("exchange: read this_node: %w", err)
 	}
 	return strings.TrimSpace(v), nil
 }
@@ -130,8 +137,11 @@ func (db *DB) GetExchangeToken(ctx context.Context, plan string) (string, error)
 	err := db.QueryRow(ctx,
 		`SELECT value FROM _settings WHERE key = `+d.Placeholder(1),
 		exchangeTokenKey(plan)).Scan(&v)
-	if err != nil {
+	if exchangeNoRows(err) {
 		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("exchange: read token: %w", err)
 	}
 	return strings.TrimSpace(v), nil
 }
@@ -211,8 +221,8 @@ func (db *DB) PendingExchangeChanges(ctx context.Context, plan, nodeCode string)
 }
 
 // GetExchangeChange возвращает строку очереди для конкретного объекта и узла
-// (для обнаружения встречной правки при загрузке). Любая ошибка/отсутствие →
-// (zero, false, nil): «локальной неотправленной правки нет».
+// (для обнаружения встречной правки при загрузке). Отсутствие строки означает
+// «локальной неотправленной правки нет»; прочие ошибки возвращаются вызывающему.
 func (db *DB) GetExchangeChange(ctx context.Context, plan, objectType, objectID, nodeCode string) (ExchangeChange, bool, error) {
 	d := db.dialect
 	var ch ExchangeChange
@@ -224,8 +234,11 @@ func (db *DB) GetExchangeChange(ctx context.Context, plan, objectType, objectID,
 			d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4)),
 		plan, objectType, objectID, nodeCode).
 		Scan(&ch.Plan, &ch.ObjectType, &ch.ObjectID, &ch.NodeCode, &ch.Version, &del, &ch.ChangedAt, &ch.SentNo)
-	if err != nil {
+	if exchangeNoRows(err) {
 		return ExchangeChange{}, false, nil
+	}
+	if err != nil {
+		return ExchangeChange{}, false, fmt.Errorf("exchange: read change: %w", err)
 	}
 	ch.Deletion = del != 0
 	return ch, true, nil
@@ -312,8 +325,11 @@ func (db *DB) GetExchangePeer(ctx context.Context, plan, nodeCode string) (Excha
 		fmt.Sprintf(`SELECT sent_no, ack_no, recv_no FROM _exchange_peers WHERE plan = %s AND node_code = %s`,
 			d.Placeholder(1), d.Placeholder(2)),
 		plan, nodeCode).Scan(&p.SentNo, &p.AckNo, &p.RecvNo)
-	if err != nil {
+	if exchangeNoRows(err) {
 		return ExchangePeer{Plan: plan, NodeCode: nodeCode}, nil
+	}
+	if err != nil {
+		return ExchangePeer{}, fmt.Errorf("exchange: read peer: %w", err)
 	}
 	return p, nil
 }
@@ -394,19 +410,20 @@ func (db *DB) EntityVersion(ctx context.Context, entityName string, id uuid.UUID
 }
 
 // EntityVersionExists возвращает (_version, true), если объект есть локально,
-// иначе (0, false). Используется идемпотентной загрузкой пакета для сравнения
-// входящей версии с локальной. Любая ошибка чтения трактуется как «нет объекта»
-// (как в GetListPageSize и др. — путь чтения настроек толерантен к отсутствию).
-func (db *DB) EntityVersionExists(ctx context.Context, entityName string, id uuid.UUID) (int64, bool) {
+// иначе (0, false). Ошибки чтения не маскируются под отсутствие объекта.
+func (db *DB) EntityVersionExists(ctx context.Context, entityName string, id uuid.UUID) (int64, bool, error) {
 	d := db.dialect
 	var v int64
 	err := db.QueryRow(ctx,
 		fmt.Sprintf("SELECT _version FROM %s WHERE id = %s", metadata.TableName(entityName), d.Placeholder(1)),
 		idArg(d, id)).Scan(&v)
-	if err != nil {
-		return 0, false
+	if exchangeNoRows(err) {
+		return 0, false, nil
 	}
-	return v, true
+	if err != nil {
+		return 0, false, fmt.Errorf("exchange: read object version %s: %w", entityName, err)
+	}
+	return v, true, nil
 }
 
 // SetExchangeObjectState принудительно выставляет системные колонки объекта при

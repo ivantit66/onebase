@@ -24,9 +24,9 @@ type Event struct {
 	Data any
 }
 
-// subscriberBuffer — ёмкость канала одного подписчика. При переполнении кадры
-// дропаются (см. Publish), издатель не блокируется медленным клиентом.
-const subscriberBuffer = 32
+// subscriberBuffer holds the full replay window. A slower live subscriber is
+// disconnected on overflow so EventSource reconnects and resumes by event ID.
+const subscriberBuffer = recentLimit
 
 const recentTTL = 15 * time.Second
 
@@ -66,8 +66,8 @@ func (h *Hub) Subscribe(userID, login string, roles []string) (id string, ch <-c
 }
 
 // SubscribeSince регистрирует подписчика и сразу отдаёт ему недавние события,
-// которые он мог пропустить при перезагрузке страницы. lastID берётся из
-// Last-Event-ID SSE-клиента; 0 означает новую страницу без истории.
+// которые он мог пропустить при автоматическом reconnect. lastID берётся из
+// Last-Event-ID SSE-клиента; 0 означает новую страницу без replay.
 func (h *Hub) SubscribeSince(userID, login string, roles []string, lastID int64) (id string, ch <-chan Event, cancel func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -96,7 +96,8 @@ func (h *Hub) unsubscribe(id string) {
 }
 
 // Publish доставляет событие всем подписчикам, чей адрес совпал с target.
-// Отправка неблокирующая: если буфер подписчика полон, кадр для него дропается.
+// Отправка неблокирующая: переполненный подписчик отключается и восстановит
+// пропущенные кадры из replay-окна после EventSource reconnect.
 func (h *Hub) Publish(target string, ev Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -104,11 +105,15 @@ func (h *Hub) Publish(target string, ev Event) {
 	ev.ID = h.seq
 	now := time.Now()
 	h.appendRecentLocked(target, ev, now)
-	for _, s := range h.subs {
+	for id, s := range h.subs {
 		if matches(s, target) {
 			select {
 			case s.ch <- ev:
-			default: // буфер полон — дропаем кадр, не блокируем издателя
+			default:
+				// A silent drop would leave an ID gap while the connection remains
+				// open. Closing it makes EventSource reconnect with Last-Event-ID.
+				delete(h.subs, id)
+				close(s.ch)
 			}
 		}
 	}
@@ -129,6 +134,9 @@ func (h *Hub) appendRecentLocked(target string, ev Event, now time.Time) {
 }
 
 func (h *Hub) replayLocked(s *subscriber, lastID int64, now time.Time) {
+	if lastID <= 0 {
+		return
+	}
 	cutoff := now.Add(-recentTTL)
 	for _, item := range h.recent {
 		if item.ev.ID <= lastID || item.at.Before(cutoff) || !matches(s, item.target) {

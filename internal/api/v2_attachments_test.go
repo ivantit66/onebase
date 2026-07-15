@@ -62,11 +62,20 @@ func attachTestHandler(t *testing.T) (*handler, *metadata.Entity) {
 	return h, cat
 }
 
+func seedAttachOwner(t *testing.T, h *handler, entity *metadata.Entity) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	if err := h.store.Upsert(context.Background(), entity.Name, id, map[string]any{"Наименование": "Владелец"}, entity); err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	return id
+}
+
 // Полный цикл под пользователем с правами read+write на владельца.
 func TestAPI_V2Attachments_UploadListDownloadDelete(t *testing.T) {
-	h, _ := attachTestHandler(t)
+	h, entity := attachTestHandler(t)
 	user := apiUser("editor", auth.Permission{Catalogs: map[string][]string{"Товар": {"read", "write"}}})
-	ownerID := uuid.New()
+	ownerID := seedAttachOwner(t, h, entity)
 	collParams := map[string]string{"name": "Товар", "id": ownerID.String()}
 
 	// --- upload ---
@@ -139,9 +148,9 @@ func TestAPI_V2Attachments_UploadListDownloadDelete(t *testing.T) {
 
 // RBAC: без права write загрузка запрещена (403), без read — список запрещён.
 func TestAPI_V2Attachments_RBACDenies(t *testing.T) {
-	h, _ := attachTestHandler(t)
+	h, entity := attachTestHandler(t)
 	reader := apiUser("reader", auth.Permission{Catalogs: map[string][]string{"Товар": {"read"}}})
-	ownerID := uuid.New()
+	ownerID := seedAttachOwner(t, h, entity)
 	collParams := map[string]string{"name": "Товар", "id": ownerID.String()}
 
 	body, ctype := multipartFile(t, "file", "f.pdf", "application/pdf", []byte("X"))
@@ -164,10 +173,10 @@ func TestAPI_V2Attachments_RBACDenies(t *testing.T) {
 // allowed_types: файл с запрещённым расширением отклоняется 415, даже у
 // пользователя с правом записи.
 func TestAPI_V2Attachments_AllowedTypesRejected(t *testing.T) {
-	h, _ := attachTestHandler(t)
+	h, entity := attachTestHandler(t)
 	h.allowedAttachmentTypes = []string{"pdf", "png"}
 	user := apiUser("editor", auth.Permission{Catalogs: map[string][]string{"Товар": {"read", "write"}}})
-	ownerID := uuid.New()
+	ownerID := seedAttachOwner(t, h, entity)
 	collParams := map[string]string{"name": "Товар", "id": ownerID.String()}
 
 	body, ctype := multipartFile(t, "file", "notes.txt", "text/plain", []byte("hi"))
@@ -193,11 +202,11 @@ func TestAPI_V2Attachments_AllowedTypesRejected(t *testing.T) {
 // упирается в 404 роутера. Ловит опечатки в путях; сама Bearer/session-мидлвара
 // проверяется отдельно в auth (TestAPITokenOrSessionMiddleware).
 func TestAPI_V2Attachments_RoutesMounted(t *testing.T) {
-	h, _ := attachTestHandler(t)
+	h, entity := attachTestHandler(t)
 	router := chi.NewRouter()
 	h.mountV2(router)
 	user := apiUser("editor", auth.Permission{Catalogs: map[string][]string{"Товар": {"read"}}})
-	ownerID := uuid.New()
+	ownerID := seedAttachOwner(t, h, entity)
 
 	req := httptest.NewRequest("GET", "/api/v2/catalog/Товар/"+ownerID.String()+"/attachments", nil)
 	req = withUser(req, user)
@@ -233,5 +242,38 @@ func TestAPI_V2Attachments_DownloadIDOR(t *testing.T) {
 	h.downloadAttachmentV2().ServeHTTP(w, r)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("download чужого вложения: код %d, ожидался 403 (%s)", w.Code, w.Body.String())
+	}
+}
+
+func TestAPI_V2Attachments_RejectsMissingOwner(t *testing.T) {
+	h, _ := attachTestHandler(t)
+	user := apiUser("editor", auth.Permission{Catalogs: map[string][]string{"Товар": {"read", "write"}}})
+	ownerID := uuid.New()
+	params := map[string]string{"name": "Товар", "id": ownerID.String()}
+	body, ctype := multipartFile(t, "file", "f.pdf", "application/pdf", []byte("PDF"))
+	r := withUser(reqWithEntity("POST", "/api/v2/catalog/Товар/"+ownerID.String()+"/attachments", body, params,
+		map[string]string{"Content-Type": ctype}), user)
+	w := httptest.NewRecorder()
+	h.uploadAttachmentV2(metadata.KindCatalog).ServeHTTP(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("missing owner: status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPI_V2Attachments_WriteDoesNotImplyDownload(t *testing.T) {
+	h, entity := attachTestHandler(t)
+	ownerID := seedAttachOwner(t, h, entity)
+	att, err := h.store.UploadAttachment(context.Background(), string(metadata.KindCatalog), entity.Name, ownerID,
+		"secret.pdf", "application/pdf", "", bytes.NewReader([]byte("SECRET")), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := apiUser("writer", auth.Permission{Catalogs: map[string][]string{"Товар": {"write"}}})
+	params := map[string]string{"aid": att.ID.String()}
+	r := withUser(reqWithEntity("GET", "/api/v2/attachments/"+att.ID.String(), nil, params, nil), writer)
+	w := httptest.NewRecorder()
+	h.downloadAttachmentV2().ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("write-only download: status=%d body=%s", w.Code, w.Body.String())
 	}
 }

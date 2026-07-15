@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/i18n/i18nerr"
 )
+
+var ErrAttachmentTooLarge = errors.New("attachment exceeds maximum size")
 
 // Attachment represents a file attached to a document or catalog record.
 type Attachment struct {
@@ -147,7 +150,7 @@ func (db *DB) UploadAttachment(ctx context.Context, ownerKind, ownerName string,
 		return Attachment{}, err
 	}
 	filePath := filepath.Join(dir, id.String())
-	f, err := os.Create(filePath)
+	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return Attachment{}, err
 	}
@@ -160,8 +163,19 @@ func (db *DB) UploadAttachment(ctx context.Context, ownerKind, ownerName string,
 		return Attachment{}, err
 	}
 	if n > maxSizeBytes {
+		_ = f.Close()
 		os.Remove(filePath)
-		return Attachment{}, i18nerr.Errorf("файл превышает максимальный размер %d МБ", maxSizeBytes/(1024*1024))
+		return Attachment{}, fmt.Errorf("%w: %s", ErrAttachmentTooLarge,
+			i18nerr.Errorf("файл превышает максимальный размер %d МБ", maxSizeBytes/(1024*1024)))
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(filePath)
+		return Attachment{}, err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(filePath)
+		return Attachment{}, err
 	}
 
 	q := fmt.Sprintf(`

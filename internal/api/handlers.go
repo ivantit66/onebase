@@ -14,6 +14,7 @@ import (
 	"github.com/ivantit66/onebase/internal/auth"
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
 	"github.com/ivantit66/onebase/internal/entityservice"
+	"github.com/ivantit66/onebase/internal/exchange"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/runtime"
 	"github.com/ivantit66/onebase/internal/storage"
@@ -336,6 +337,9 @@ func (h *handler) deleteObject(kind metadata.Kind) http.HandlerFunc {
 						return err
 					}
 				}
+			}
+			if err := exchange.RegisterOnDelete(ctx, h.store, h.reg.ExchangePlans(), entity, id); err != nil {
+				return err
 			}
 			return h.store.Delete(ctx, entityName, id)
 		}); err != nil {

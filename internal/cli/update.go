@@ -22,14 +22,14 @@ var updateCmd = &cobra.Command{
 offline-серверов, куда обновление приносят на флешке. Останавливает сервис,
 подменяет бинарь (сохраняя старый рядом), запускает сервис и опрашивает /healthz.
 Если новый бинарь не отвечает за --timeout — откатывает старый и перезапускает.`,
-	Example: `  onebase update --from D:\flash\onebase-v0.9.1.zip --id my-base
+	Example: `  onebase update --from D:\flash\onebase-v0.9.1.zip --sha256 <hex> --id my-base
   onebase update --from ./onebase.exe --service onebase-docflow --port 8080 --sha256 <hex>`,
 	RunE: runUpdate,
 }
 
 func init() {
 	updateCmd.Flags().String("from", "", "путь к обновлению: .zip (внутри ищется onebase[.exe]) или сам бинарь (обязателен)")
-	updateCmd.Flags().String("sha256", "", "ожидаемая SHA256 файла обновления (.zip/.exe, hex) — при указании проверяется до установки")
+	updateCmd.Flags().String("sha256", "", "ожидаемая SHA256 файла обновления (.zip/.exe, 64 hex; обязательна)")
 	updateCmd.Flags().String("service", "", "имя системного сервиса (иначе выводится из --id)")
 	updateCmd.Flags().String("id", "", "ID базы из реестра ibases (даёт имя сервиса и порт)")
 	updateCmd.Flags().String("target", "", "путь к заменяемому бинарю onebase (по умолчанию — текущий исполняемый файл)")
@@ -48,15 +48,16 @@ func runUpdate(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	if strings.TrimSpace(sha) == "" {
+		return fmt.Errorf("укажите --sha256: обновление без проверки контрольной суммы запрещено")
+	}
 
 	// 1. Проверить артефакт обновления, затем извлечь/подготовить новый бинарь
 	// во временный каталог.
-	if sha != "" {
-		if err := selfupdate.VerifySHA256(from, sha); err != nil {
-			return err
-		}
-		fmt.Fprintln(os.Stdout, "SHA256 файла обновления совпала.")
+	if err := selfupdate.VerifySHA256(from, sha); err != nil {
+		return err
 	}
+	fmt.Fprintln(os.Stdout, "SHA256 файла обновления совпала.")
 	stageDir, err := os.MkdirTemp("", "onebase-update-*")
 	if err != nil {
 		return err
@@ -64,6 +65,10 @@ func runUpdate(cmd *cobra.Command, _ []string) error {
 	defer os.RemoveAll(stageDir)
 
 	newBin, err := selfupdate.StageBinary(from, stageDir)
+	if err != nil {
+		return err
+	}
+	expectedVersion, err := binaryVersion(newBin)
 	if err != nil {
 		return err
 	}
@@ -87,7 +92,7 @@ func runUpdate(cmd *cobra.Command, _ []string) error {
 	fmt.Fprintf(os.Stdout, "Запускаю сервис и жду %s (%s) ...\n", healthzURL, timeout)
 	startErr := startService(svcName, timeout)
 	if startErr == nil {
-		startErr = selfupdate.PollHealthz(context.Background(), healthzURL, timeout, time.Second)
+		startErr = selfupdate.PollHealthzVersion(context.Background(), healthzURL, expectedVersion, timeout, time.Second)
 	}
 	if startErr != nil {
 		// 5. Откат: остановить, вернуть старый бинарь, снова запустить.
@@ -106,6 +111,18 @@ func runUpdate(cmd *cobra.Command, _ []string) error {
 	_ = os.Remove(backup)
 	fmt.Fprintf(os.Stdout, "Готово: обновление применено, %s отвечает 200.\n", healthzURL)
 	return nil
+}
+
+func binaryVersion(path string) (string, error) {
+	out, err := exec.Command(path, "--version").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("не удалось определить версию нового бинаря: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	fields := strings.Fields(strings.TrimSpace(string(out)))
+	if len(fields) == 0 {
+		return "", fmt.Errorf("новый бинарь вернул пустую версию")
+	}
+	return fields[len(fields)-1], nil
 }
 
 // resolveUpdateTarget вычисляет имя сервиса, URL пробы и путь к заменяемому бинарю

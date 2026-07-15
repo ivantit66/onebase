@@ -332,6 +332,115 @@ func TestPackageAckDrains(t *testing.T) {
 	}
 }
 
+func TestPhysicalDeleteBuildsTombstoneAndPreservesRemoteFields(t *testing.T) {
+	ent := catalogTovar()
+	res := fakeResolver{"Товар": ent}
+	plan := planTovar()
+	source, sourceCtx := newBase(t, ent)
+	target, targetCtx := newBase(t, ent)
+	if err := source.SaveExchangeThisNode(sourceCtx, plan.Name, "center"); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.SaveExchangeThisNode(targetCtx, plan.Name, "fil01"); err != nil {
+		t.Fatal(err)
+	}
+
+	id := uuid.New()
+	if err := source.Upsert(sourceCtx, ent.Name, id, map[string]any{"Наименование": "на источнике"}, ent); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Upsert(targetCtx, ent.Name, id, map[string]any{"Наименование": "сохранить на приёмнике"}, ent); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.WithTx(sourceCtx, func(txCtx context.Context) error {
+		if err := exchange.RegisterOnDelete(txCtx, source, []*metadata.ExchangePlan{plan}, ent, id); err != nil {
+			return err
+		}
+		return source.Delete(txCtx, ent.Name, id)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := exchange.BuildPackage(sourceCtx, source, res, plan, "fil01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := exchange.ParsePackage(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pkg.Objects) != 1 || !pkg.Objects[0].Tombstone {
+		t.Fatalf("физическое удаление должно выгружаться tombstone: %+v", pkg.Objects)
+	}
+	result, err := exchange.ApplyPackage(targetCtx, target, res, plan, data, exchange.ApplyOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Deleted != 1 {
+		t.Fatalf("ожидалась одна пометка удаления: %+v", result)
+	}
+	row, err := target.GetByID(targetCtx, ent.Name, id, ent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row["Наименование"] != "сохранить на приёмнике" || !toBoolT(row["deletion_mark"]) {
+		t.Fatalf("tombstone должен сохранить данные и поставить пометку: %+v", row)
+	}
+}
+
+func TestInvalidObjectDoesNotApplyAcknowledgement(t *testing.T) {
+	ent := catalogTovar()
+	db, ctx := newBase(t, ent)
+	if err := db.SaveExchangeThisNode(ctx, "Обмен", "fil01"); err != nil {
+		t.Fatal(err)
+	}
+	change := storage.ExchangeChange{
+		Plan: "Обмен", ObjectType: ent.Name, ObjectID: uuid.NewString(), NodeCode: "center",
+		Version: 1, ChangedAt: 1000,
+	}
+	if err := db.RegisterExchangeChange(ctx, change); err != nil {
+		t.Fatal(err)
+	}
+	messageNo, err := db.NextExchangeMessageNo(ctx, "Обмен", "center")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkExchangeChangesSent(ctx, []storage.ExchangeChange{change}, messageNo); err != nil {
+		t.Fatal(err)
+	}
+
+	pkg := exchange.Package{
+		Format: exchange.FormatV1, Plan: "Обмен", FromNode: "center", ToNode: "fil01",
+		MessageNo: 1, AckNo: messageNo,
+		Objects: []exchange.PackageObject{{
+			Type: ent.Name, ID: uuid.NewString(), Version: 1, ChangedAt: 1000,
+			Fields: map[string]any{"Наименование": "x", "НеизвестноеПоле": "y"},
+		}},
+	}
+	data, _ := json.Marshal(pkg)
+	if _, err := exchange.ApplyPackage(ctx, db, fakeResolver{"Товар": ent}, planTovar(), data, exchange.ApplyOptions{}); err == nil {
+		t.Fatal("несовместимый объект должен отклоняться")
+	}
+	pending, err := db.PendingExchangeChanges(ctx, "Обмен", "center")
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("ACK из отклонённого пакета не должен очищать очередь: %+v, %v", pending, err)
+	}
+}
+
+func TestParsePackageRejectsNonDeletingTombstone(t *testing.T) {
+	pkg := exchange.Package{
+		Format: exchange.FormatV1, Plan: "Обмен", FromNode: "center", ToNode: "fil01", MessageNo: 1,
+		Objects: []exchange.PackageObject{{
+			Type: "Товар", ID: uuid.NewString(), Version: 1, ChangedAt: 1,
+			Tombstone: true,
+		}},
+	}
+	data, _ := json.Marshal(pkg)
+	if _, err := exchange.ParsePackage(data); err == nil {
+		t.Fatal("tombstone без deletion=true должен отклоняться")
+	}
+}
+
 func markVersion(db *storage.DB, ctx context.Context, ent *metadata.Entity, id uuid.UUID, v int64) error {
 	// Обновляем и объект, и строку очереди до одной версии.
 	if err := db.SetExchangeObjectState(ctx, ent, id, v, false); err != nil {

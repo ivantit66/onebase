@@ -10,8 +10,11 @@ package api
 // 201/204 вместо редиректов.
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -47,7 +50,16 @@ func (h *handler) listAttachmentsV2(kind metadata.Kind) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid id", "", 0)
 			return
 		}
-		if !h.rowAllowedID(r.Context(), entity, "read", id) {
+		row, err := h.store.GetByID(r.Context(), entity.Name, id, entity)
+		if err != nil {
+			if storage.IsNotFound(err) {
+				writeError(w, http.StatusNotFound, "owner not found", "", 0)
+			} else {
+				writeError(w, http.StatusInternalServerError, "cannot read owner", "", 0)
+			}
+			return
+		}
+		if !h.rowAllowed(r.Context(), entity, "read", row) {
 			writeError(w, http.StatusForbidden, "forbidden", "", 0)
 			return
 		}
@@ -78,7 +90,16 @@ func (h *handler) uploadAttachmentV2(kind metadata.Kind) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid id", "", 0)
 			return
 		}
-		if !h.rowAllowedID(r.Context(), entity, "write", id) {
+		row, err := h.store.GetByID(r.Context(), entity.Name, id, entity)
+		if err != nil {
+			if storage.IsNotFound(err) {
+				writeError(w, http.StatusNotFound, "owner not found", "", 0)
+			} else {
+				writeError(w, http.StatusInternalServerError, "cannot read owner", "", 0)
+			}
+			return
+		}
+		if !h.rowAllowed(r.Context(), entity, "write", row) {
 			writeError(w, http.StatusForbidden, "forbidden", "", 0)
 			return
 		}
@@ -87,9 +108,14 @@ func (h *handler) uploadAttachmentV2(kind metadata.Kind) http.HandlerFunc {
 		if maxSize <= 0 {
 			maxSize = 50 * 1024 * 1024
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxSize+1024)
+		r.Body = http.MaxBytesReader(w, r.Body, maxSize+(2<<20))
 		if err := r.ParseMultipartForm(32 << 20); err != nil {
-			writeError(w, http.StatusBadRequest, "cannot parse multipart form: "+err.Error(), "", 0)
+			status := http.StatusBadRequest
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				status = http.StatusRequestEntityTooLarge
+			}
+			writeError(w, status, "cannot parse multipart form: "+err.Error(), "", 0)
 			return
 		}
 		file, header, err := r.FormFile("file")
@@ -104,10 +130,17 @@ func (h *handler) uploadAttachmentV2(kind metadata.Kind) http.HandlerFunc {
 			writeError(w, http.StatusUnsupportedMediaType, "file type not allowed", "", 0)
 			return
 		}
-		mimeType := header.Header.Get("Content-Type")
-		if mimeType == "" {
-			mimeType = "application/octet-stream"
+		sniff := make([]byte, 512)
+		n, readErr := io.ReadFull(file, sniff)
+		if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+			writeError(w, http.StatusBadRequest, "cannot inspect uploaded file", "", 0)
+			return
 		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			writeError(w, http.StatusBadRequest, "cannot rewind uploaded file", "", 0)
+			return
+		}
+		mimeType := http.DetectContentType(sniff[:n])
 		uploadedBy := ""
 		if u := auth.UserFromContext(r.Context()); u != nil {
 			uploadedBy = u.Login
@@ -116,7 +149,11 @@ func (h *handler) uploadAttachmentV2(kind metadata.Kind) http.HandlerFunc {
 		att, err := h.store.UploadAttachment(r.Context(), string(entity.Kind), entity.Name, id,
 			filename, mimeType, uploadedBy, file, maxSize)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error(), "", 0)
+			status := http.StatusInternalServerError
+			if errors.Is(err, storage.ErrAttachmentTooLarge) {
+				status = http.StatusRequestEntityTooLarge
+			}
+			writeError(w, status, err.Error(), "", 0)
 			return
 		}
 		writeJSONV2(w, http.StatusCreated, restV2Envelope{Data: att})
@@ -131,22 +168,33 @@ func (h *handler) downloadAttachmentV2() http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid id", "", 0)
 			return
 		}
-		f, att, err := h.store.OpenAttachment(r.Context(), aid)
+		att, err := h.store.GetAttachment(r.Context(), aid)
 		if err != nil {
-			writeError(w, http.StatusNotFound, "attachment not found", "", 0)
+			if storage.IsNotFound(err) {
+				writeError(w, http.StatusNotFound, "attachment not found", "", 0)
+			} else {
+				writeError(w, http.StatusInternalServerError, "cannot read attachment", "", 0)
+			}
+			return
+		}
+		// Защита от IDOR: write не расширяет независимое право read.
+		if !h.rowAllowsOwnerID(r.Context(), att.OwnerKind, att.OwnerName, "read", att.OwnerID) {
+			writeError(w, http.StatusForbidden, "forbidden", "", 0)
+			return
+		}
+		f, _, err := h.store.OpenAttachment(r.Context(), aid)
+		if err != nil {
+			if storage.IsNotFound(err) || os.IsNotExist(err) {
+				writeError(w, http.StatusNotFound, "attachment not found", "", 0)
+			} else {
+				writeError(w, http.StatusInternalServerError, "cannot open attachment", "", 0)
+			}
 			return
 		}
 		defer f.Close()
 
-		// Защита от IDOR: отдаём файл только при праве чтения (или записи — чтобы
-		// предпросмотр у загрузчика работал сразу) на строку-владельца.
-		if !h.rowAllowsOwnerID(r.Context(), att.OwnerKind, att.OwnerName, "read", att.OwnerID) &&
-			!h.rowAllowsOwnerID(r.Context(), att.OwnerKind, att.OwnerName, "write", att.OwnerID) {
-			writeError(w, http.StatusForbidden, "forbidden", "", 0)
-			return
-		}
-
 		w.Header().Set("Content-Type", att.MimeType)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Content-Disposition", attachmentContentDisposition(att.Filename))
 		http.ServeContent(w, r, att.Filename, att.UploadedAt, f)
 	}
@@ -162,7 +210,11 @@ func (h *handler) deleteAttachmentV2() http.HandlerFunc {
 		}
 		att, err := h.store.GetAttachment(r.Context(), aid)
 		if err != nil {
-			writeError(w, http.StatusNotFound, "attachment not found", "", 0)
+			if storage.IsNotFound(err) {
+				writeError(w, http.StatusNotFound, "attachment not found", "", 0)
+			} else {
+				writeError(w, http.StatusInternalServerError, "cannot read attachment", "", 0)
+			}
 			return
 		}
 		// Удалять вложение может только тот, у кого есть право записи на владельца.

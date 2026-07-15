@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"strings"
 
@@ -31,11 +32,9 @@ const totalsMonthCol = metadata.RegisterTotalsMonthCol
 // сравнивались со строками итогов согласованно на обоих диалектах.
 func monthKeyExpr(d Dialect, col string) string {
 	if d.Name() == "sqlite" {
-		// substr(...,1,19) отсекает возможный хвост таймзоны у старых баз
-		// (как в query.periodTruncSQL), иначе strftime вернул бы NULL.
-		return "strftime('%Y-%m', substr(" + col + ",1,19))"
+		return "strftime('%Y-%m', " + col + ")"
 	}
-	return "to_char(" + col + ", 'YYYY-MM')"
+	return "to_char(" + col + " AT TIME ZONE 'UTC', 'YYYY-MM')"
 }
 
 // signedResourceSum возвращает выражение знаковой суммы ресурса (как в genBalances).
@@ -61,11 +60,14 @@ func CreateRegisterTotalsSQL(d Dialect, reg *metadata.Register) string {
 	sb.WriteString(table)
 	sb.WriteString(" (\n    ")
 	sb.WriteString(strings.Join(cols, ",\n    "))
-	sb.WriteString(",\n    PRIMARY KEY (")
-	sb.WriteString(strings.Join(append(dimColNames(reg.Dimensions), totalsMonthCol), ", "))
-	sb.WriteString(")")
 	sb.WriteString("\n)")
 	return sb.String()
+}
+
+func CreateRegisterTotalsIndexSQL(reg *metadata.Register) string {
+	cols := append(dimColNames(reg.Dimensions), totalsMonthCol)
+	return "CREATE INDEX IF NOT EXISTS idx_" + metadata.RegisterTotalsTableName(reg.Name) +
+		"_dims_month ON " + metadata.RegisterTotalsTableName(reg.Name) + " (" + strings.Join(cols, ", ") + ")"
 }
 
 func dimColNames(dims []metadata.Field) []string {
@@ -117,27 +119,93 @@ func insertTotalsSelectSQL(d Dialect, reg *metadata.Register, where string) stri
 	return sb.String()
 }
 
-// ensureRegisterTotals создаёт таблицу итогов и наполняет её при первом
-// включении. Если итоги уже ведутся — только создаёт таблицу (idempotent).
-func (db *DB) ensureRegisterTotals(ctx context.Context, reg *metadata.Register) error {
+const totalsMetaTable = "_register_totals_meta"
+
+func registerTotalsFingerprint(reg *metadata.Register) string {
+	var b strings.Builder
+	b.WriteString("totals-v3-utc-nullable-dims|")
+	for _, f := range reg.Dimensions {
+		fmt.Fprintf(&b, "d:%s:%s:%s|", strings.ToLower(metadata.ColumnName(f)), f.Type, strings.ToLower(f.RefEntity))
+	}
+	for _, f := range reg.Resources {
+		fmt.Fprintf(&b, "r:%s:%s|", strings.ToLower(metadata.ColumnName(f)), f.Type)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(b.String())))
+}
+
+func (db *DB) ensureTotalsMeta(ctx context.Context) error {
+	_, err := db.Exec(ctx, `CREATE TABLE IF NOT EXISTS `+totalsMetaTable+` (
+		register_name TEXT PRIMARY KEY,
+		state TEXT NOT NULL
+	)`)
+	return err
+}
+
+func (db *DB) totalsState(ctx context.Context, regName string) (string, error) {
+	d := db.dialect
+	var state string
+	err := db.QueryRow(ctx, `SELECT state FROM `+totalsMetaTable+` WHERE register_name = `+d.Placeholder(1), strings.ToLower(regName)).Scan(&state)
+	if exchangeNoRows(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return state, nil
+}
+
+func (db *DB) saveTotalsState(ctx context.Context, regName, state string) error {
+	d := db.dialect
+	q := fmt.Sprintf(`INSERT INTO %s (register_name, state) VALUES (%s, %s)
+		ON CONFLICT (register_name) DO UPDATE SET state = EXCLUDED.state`, totalsMetaTable, d.Placeholder(1), d.Placeholder(2))
+	_, err := db.Exec(ctx, q, strings.ToLower(regName), state)
+	return err
+}
+
+// syncRegisterTotals records disabled periods and rebuilds totals whenever the
+// usable state or the dimensions/resources schema changes.
+func (db *DB) syncRegisterTotals(ctx context.Context, reg *metadata.Register) error {
+	return db.WithTxIfNeeded(ctx, func(ctx context.Context) error {
+		if err := db.ensureTotalsMeta(ctx); err != nil {
+			return err
+		}
+		fingerprint := registerTotalsFingerprint(reg)
+		if !reg.TotalsUsable() {
+			return db.saveTotalsState(ctx, reg.Name, "disabled:"+fingerprint)
+		}
+		if err := db.AdvisoryXactLock(ctx, []string{"register-totals|" + strings.ToLower(reg.Name)}); err != nil {
+			return err
+		}
+		return db.ensureRegisterTotals(ctx, reg, fingerprint)
+	})
+}
+
+func (db *DB) ensureRegisterTotals(ctx context.Context, reg *metadata.Register, fingerprint string) error {
+	table := metadata.RegisterTotalsTableName(reg.Name)
+	state, err := db.totalsState(ctx, reg.Name)
+	if err != nil {
+		return err
+	}
+	exists, err := db.dialect.ColumnExists(ctx, db, table, totalsMonthCol)
+	if err != nil {
+		return err
+	}
+	if state == "active:"+fingerprint && exists {
+		return nil
+	}
+	if _, err := db.Exec(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
+		return fmt.Errorf("drop stale totals table %s: %w", reg.Name, err)
+	}
 	if _, err := db.Exec(ctx, CreateRegisterTotalsSQL(db.dialect, reg)); err != nil {
 		return fmt.Errorf("create totals table %s: %w", reg.Name, err)
 	}
-	var totalsCount int
-	if err := db.QueryRow(ctx, "SELECT COUNT(*) FROM "+metadata.RegisterTotalsTableName(reg.Name)).Scan(&totalsCount); err != nil {
-		return fmt.Errorf("count totals %s: %w", reg.Name, err)
+	if _, err := db.Exec(ctx, CreateRegisterTotalsIndexSQL(reg)); err != nil {
+		return fmt.Errorf("create totals index %s: %w", reg.Name, err)
 	}
-	if totalsCount > 0 {
-		return nil
+	if err := db.recalcRegisterTotalsInTx(ctx, reg); err != nil {
+		return err
 	}
-	var movesCount int
-	if err := db.QueryRow(ctx, "SELECT COUNT(*) FROM "+metadata.RegisterTableName(reg.Name)).Scan(&movesCount); err != nil {
-		return fmt.Errorf("count movements %s: %w", reg.Name, err)
-	}
-	if movesCount == 0 {
-		return nil
-	}
-	return db.RecalcRegisterTotals(ctx, reg)
+	return db.saveTotalsState(ctx, reg.Name, "active:"+fingerprint)
 }
 
 // RecalcRegisterTotals полностью пересчитывает итоги регистра из движений.
@@ -145,6 +213,15 @@ func (db *DB) RecalcRegisterTotals(ctx context.Context, reg *metadata.Register) 
 	if !reg.TotalsUsable() {
 		return nil
 	}
+	return db.WithTxIfNeeded(ctx, func(ctx context.Context) error {
+		if err := db.AdvisoryXactLock(ctx, []string{"register-totals|" + strings.ToLower(reg.Name)}); err != nil {
+			return err
+		}
+		return db.recalcRegisterTotalsInTx(ctx, reg)
+	})
+}
+
+func (db *DB) recalcRegisterTotalsInTx(ctx context.Context, reg *metadata.Register) error {
 	totals := metadata.RegisterTotalsTableName(reg.Name)
 	if err := db.exec(ctx, "DELETE FROM "+totals); err != nil {
 		return fmt.Errorf("recalc totals %s: clear: %w", reg.Name, err)

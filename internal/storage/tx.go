@@ -3,15 +3,31 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/jackc/pgx/v5"
 )
 
 type txKey struct{}
 
+// IsNotFound reports the portable no-row condition for both storage drivers.
+func IsNotFound(err error) bool {
+	return errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows)
+}
+
 // HasTx reports whether ctx already carries an active storage transaction.
 func HasTx(ctx context.Context) bool {
 	return ctx.Value(txKey{}) != nil
+}
+
+// WithTxIfNeeded joins an existing storage transaction or starts a new one.
+// It is the safe entry point for write paths callable both from HTTP and from
+// DSL code that may already run inside an explicit transaction.
+func (db *DB) WithTxIfNeeded(ctx context.Context, fn func(context.Context) error) error {
+	if HasTx(ctx) {
+		return fn(ctx)
+	}
+	return db.WithTx(ctx, fn)
 }
 
 // WithTx runs fn inside a transaction. On fn error the transaction is rolled

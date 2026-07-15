@@ -39,6 +39,17 @@ func TestExchangeThisNode(t *testing.T) {
 	}
 }
 
+func TestExchangeReadsDoNotHideStorageErrors(t *testing.T) {
+	db, ctx := newExchangeDB(t)
+	db.Close()
+	if _, err := db.GetExchangeThisNode(ctx, "Обмен"); err == nil {
+		t.Fatal("ошибка закрытой БД не должна выглядеть как незаданный this_node")
+	}
+	if _, err := db.GetExchangeToken(ctx, "Обмен"); err == nil {
+		t.Fatal("ошибка закрытой БД не должна выглядеть как отсутствующий token")
+	}
+}
+
 func TestExchangeRegisterAndPending(t *testing.T) {
 	db, ctx := newExchangeDB(t)
 	ch := ExchangeChange{Plan: "Обмен", ObjectType: "Номенклатура", ObjectID: "id-1", Version: 1, ChangedAt: 1000}

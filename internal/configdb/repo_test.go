@@ -135,3 +135,34 @@ func TestRepo_ImportReplacesPrevious(t *testing.T) {
 		t.Fatal("file2.txt should exist")
 	}
 }
+
+func TestRepo_ImportFailureRollsBackPreviousConfig(t *testing.T) {
+	db := connectTestDB(t)
+	ctx := context.Background()
+	repo := configdb.New(db)
+	if err := repo.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `DELETE FROM _onebase_config`); err != nil {
+		t.Fatal(err)
+	}
+	good := t.TempDir()
+	if err := os.WriteFile(filepath.Join(good, "old.yaml"), []byte("old: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ImportFromDir(ctx, good); err != nil {
+		t.Fatal(err)
+	}
+
+	bad := t.TempDir()
+	if err := os.Symlink(filepath.Join(bad, "missing-target"), filepath.Join(bad, "bad.yaml")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := repo.ImportFromDir(ctx, bad); err == nil {
+		t.Fatal("expected broken-file import to fail")
+	}
+	content, ok, err := repo.ReadFile(ctx, "old.yaml")
+	if err != nil || !ok || string(content) != "old: true\n" {
+		t.Fatalf("previous config was not rolled back: ok=%v content=%q err=%v", ok, content, err)
+	}
+}

@@ -171,6 +171,17 @@ func (db *DB) DeleteOrphanMovements(ctx context.Context, registers []*metadata.R
 
 // WriteMovements replaces all movements for a document in the given register.
 func (db *DB) WriteMovements(ctx context.Context, regName, recorderType string, recorderID uuid.UUID, rows []map[string]any, reg *metadata.Register, period *time.Time) error {
+	return db.WithTxIfNeeded(ctx, func(ctx context.Context) error {
+		if reg.TotalsUsable() {
+			if err := db.AdvisoryXactLock(ctx, []string{"register-totals|" + strings.ToLower(reg.Name)}); err != nil {
+				return err
+			}
+		}
+		return db.writeMovementsInTx(ctx, regName, recorderType, recorderID, rows, reg, period)
+	})
+}
+
+func (db *DB) writeMovementsInTx(ctx context.Context, regName, recorderType string, recorderID uuid.UUID, rows []map[string]any, reg *metadata.Register, period *time.Time) error {
 	d := db.dialect
 	table := metadata.RegisterTableName(regName)
 
@@ -380,8 +391,8 @@ func (db *DB) GetBalances(ctx context.Context, regName string, reg *metadata.Reg
 	}
 	if len(groupBy) > 0 {
 		query += " GROUP BY " + strings.Join(groupBy, ", ")
+		query += " ORDER BY " + strings.Join(groupBy, ", ")
 	}
-	query += " ORDER BY " + strings.Join(groupBy, ", ")
 
 	rows, err := db.Query(ctx, query, args...)
 	if err != nil {

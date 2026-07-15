@@ -142,3 +142,25 @@ func TestInstallSystemdPrintUsesSQLite(t *testing.T) {
 		t.Fatalf("systemd unit lost project/watch args:\n%s", out)
 	}
 }
+
+func TestSystemdQuoteEscapesSpecialCharacters(t *testing.T) {
+	got, err := systemdQuote("/srv/a b/onebase\\bin\"x%")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != `"/srv/a b/onebase\\bin\"x%%"` {
+		t.Fatalf("systemdQuote=%q", got)
+	}
+	if _, err := systemdQuote("bad\narg"); err == nil {
+		t.Fatal("newline must be rejected")
+	}
+}
+
+func TestValidServiceNameRejectsPath(t *testing.T) {
+	if validServiceName("../../evil") || validServiceName("bad name") {
+		t.Fatal("unsafe service name accepted")
+	}
+	if !validServiceName("onebase-app_1@blue") {
+		t.Fatal("valid service name rejected")
+	}
+}

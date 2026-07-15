@@ -10,6 +10,7 @@ package ui
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -36,7 +37,11 @@ func (s *Server) exchangeAuthedPlan(w http.ResponseWriter, r *http.Request) *met
 		http.Error(w, "план обмена не найден", http.StatusNotFound)
 		return nil
 	}
-	token, _ := s.store.GetExchangeToken(r.Context(), plan.Name)
+	token, err := s.store.GetExchangeToken(r.Context(), plan.Name)
+	if err != nil {
+		http.Error(w, "настройки обмена недоступны", http.StatusInternalServerError)
+		return nil
+	}
 	if strings.TrimSpace(token) == "" {
 		http.Error(w, "онлайн-обмен по плану не настроен (нет токена)", http.StatusForbidden)
 		return nil
@@ -49,6 +54,31 @@ func (s *Server) exchangeAuthedPlan(w http.ResponseWriter, r *http.Request) *met
 	return plan
 }
 
+func (s *Server) exchangePair(w http.ResponseWriter, r *http.Request, plan *metadata.ExchangePlan) (thisNode, peerNode string, ok bool) {
+	if len(plan.Nodes) != 2 {
+		http.Error(w, "онлайн-обмен поддерживает только планы из двух узлов", http.StatusConflict)
+		return "", "", false
+	}
+	thisNode, err := s.store.GetExchangeThisNode(r.Context(), plan.Name)
+	if err != nil {
+		http.Error(w, "не удалось прочитать текущий узел", http.StatusInternalServerError)
+		return "", "", false
+	}
+	thisDef := plan.Node(thisNode)
+	if thisDef == nil {
+		http.Error(w, "текущий узел базы не настроен", http.StatusConflict)
+		return "", "", false
+	}
+	thisNode = thisDef.Code
+	for _, node := range plan.Nodes {
+		if !strings.EqualFold(node.Code, thisNode) {
+			return thisNode, node.Code, true
+		}
+	}
+	http.Error(w, "партнёр плана не найден", http.StatusConflict)
+	return "", "", false
+}
+
 func (s *Server) exchangePush(w http.ResponseWriter, r *http.Request) {
 	plan := s.exchangeAuthedPlan(w, r)
 	if plan == nil {
@@ -56,7 +86,25 @@ func (s *Server) exchangePush(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxExchangeBody))
 	if err != nil {
-		http.Error(w, "тело пакета: "+err.Error(), http.StatusBadRequest)
+		status := http.StatusBadRequest
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		http.Error(w, "тело пакета: "+err.Error(), status)
+		return
+	}
+	thisNode, peerNode, ok := s.exchangePair(w, r, plan)
+	if !ok {
+		return
+	}
+	pkg, err := exchange.ParsePackage(body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !strings.EqualFold(pkg.FromNode, peerNode) || !strings.EqualFold(pkg.ToNode, thisNode) {
+		http.Error(w, "пакет не принадлежит настроенной паре узлов", http.StatusForbidden)
 		return
 	}
 	res, err := exchange.ApplyPackage(r.Context(), s.store, s.reg, plan, body,
@@ -74,9 +122,13 @@ func (s *Server) exchangePull(w http.ResponseWriter, r *http.Request) {
 	if plan == nil {
 		return
 	}
+	_, peerNode, ok := s.exchangePair(w, r, plan)
+	if !ok {
+		return
+	}
 	toNode := strings.TrimSpace(r.URL.Query().Get("to"))
-	if toNode == "" || plan.Node(toNode) == nil {
-		http.Error(w, "неизвестный узел-получатель (параметр to)", http.StatusBadRequest)
+	if toNode == "" || !strings.EqualFold(toNode, peerNode) {
+		http.Error(w, "пакет можно получить только для узла-партнёра", http.StatusForbidden)
 		return
 	}
 	data, err := exchange.BuildPackage(r.Context(), s.store, s.reg, plan, toNode)

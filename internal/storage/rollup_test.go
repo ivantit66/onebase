@@ -279,12 +279,25 @@ func TestRollup_DeleteDocuments(t *testing.T) {
 	mkDoc("2025-06-20")
 	cutoff := mustDate(t, "2025-03-01")
 
-	rep, err := db.Rollup(ctx, nil, []*metadata.Entity{doc}, nil, nil, RollupOptions{Date: cutoff, DeleteDocuments: true})
+	var tombstones []uuid.UUID
+	rep, err := db.Rollup(ctx, nil, []*metadata.Entity{doc}, nil, nil, RollupOptions{
+		Date: cutoff, DeleteDocuments: true,
+		BeforeDeleteDocument: func(_ context.Context, got *metadata.Entity, id uuid.UUID) error {
+			if got != doc {
+				t.Fatalf("delete hook entity=%v, want %v", got, doc)
+			}
+			tombstones = append(tombstones, id)
+			return nil
+		},
+	})
 	if err != nil {
 		t.Fatalf("Rollup delete: %v", err)
 	}
 	if rep.DeletedDocs != 2 {
 		t.Errorf("DeletedDocs=%d, ждали 2", rep.DeletedDocs)
+	}
+	if len(tombstones) != 2 {
+		t.Errorf("delete hook calls=%d, ждали 2", len(tombstones))
 	}
 	var left int
 	db.QueryRow(ctx, "SELECT COUNT(*) FROM "+metadata.TableName(doc.Name)).Scan(&left)

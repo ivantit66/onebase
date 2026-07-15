@@ -221,7 +221,7 @@ Copy-Item "C:\onebase\backups\backup_*_$today*" "\\backup-nas\onebase\" -Force
 
 ```powershell
 # С флешки D:\ ; --id берёт имя службы и порт из реестра
-C:\onebase\bin\onebase.exe update --from D:\onebase-v1.1.0.zip --id <ID-базы>
+C:\onebase\bin\onebase.exe update --from D:\onebase-v1.1.0.zip --sha256 <ожидаемый-hex> --id <ID-базы>
 
 # С проверкой контрольной суммы и увеличенным ожиданием готовности
 C:\onebase\bin\onebase.exe update `
@@ -232,12 +232,12 @@ C:\onebase\bin\onebase.exe update `
 Что происходит по шагам:
 
 1. Из `--from` берётся бинарь: `.zip` (внутри ищется `onebase.exe`) или сам `.exe`.
-2. Если задан `--sha256` — сверяется контрольная сумма (до остановки службы).
+2. Обязательная `--sha256` сверяется до остановки службы.
 3. Служба останавливается (ожидание состояния `STOPPED`).
-4. Текущий `onebase.exe` переименовывается в `onebase.exe.old`, на его место
+4. Текущий `onebase.exe` атомарно копируется в `onebase.exe.old`, на его место
    пишется новый бинарь.
-5. Служба запускается; сервер опрашивается по `/healthz` до `--timeout` (30 с по
-   умолчанию).
+5. Служба запускается; `/healthz` должен ответить версией именно нового бинаря
+   до `--timeout` (30 с по умолчанию).
 6. **Успех** → `.old` удаляется, выводится «обновление применено».
    **Неудача** (не поднялся / БД недоступна) → служба останавливается, из `.old`
    восстанавливается прежний бинарь, служба снова запускается; команда сообщает,
@@ -249,12 +249,13 @@ C:\onebase\bin\onebase.exe update `
 |------|-----------|
 | `--from` | путь к `.zip` или `.exe` (обязателен) |
 | `--id` / `--service` | база из реестра / явное имя службы |
-| `--sha256` | ожидаемая контрольная сумма файла обновления (`.zip` или `.exe`) |
+| `--sha256` | ожидаемая контрольная сумма файла обновления (`.zip` или `.exe`), обязательна |
 | `--target` | какой файл заменять (по умолчанию — текущий `onebase.exe`) |
 | `--port` / `--healthz-url` | куда стучаться пробой (по умолчанию порт базы) |
 | `--timeout` | сколько ждать `200` от `/healthz` (по умолчанию 30с) |
 
-> Получить SHA256 файла на флешке: `Get-FileHash D:\onebase-v1.1.0.zip -Algorithm SHA256`.
+> Release публикует рядом файл `<артефакт>.sha256`; в `--sha256` передайте первый
+> столбец из него. Для локальной проверки: `Get-FileHash D:\onebase-v1.1.0.zip -Algorithm SHA256`.
 
 ---
 
@@ -329,7 +330,7 @@ sc.exe stop onebase-docflow
 C:\onebase\bin\onebase.exe restore --db "postgres://onebase:secret@localhost/docflow" --file C:\onebase\backups\backup_docflow_2026-07-09_02-00-00.sql.gz
 
 # SQLite
-C:\onebase\bin\onebase.exe restore --sqlite C:\onebase\data\docflow.db --file C:\onebase\backups\backup_docflow_2026-07-09_02-00-00.db
+C:\onebase\bin\onebase.exe restore --sqlite C:\onebase\data\docflow.db --file C:\onebase\backups\backup_docflow_2026-07-09_02-00-00.db --force
 
 sc.exe start onebase-docflow
 ```

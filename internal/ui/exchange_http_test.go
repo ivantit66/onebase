@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -112,5 +113,19 @@ func TestExchangeHTTPPushPull(t *testing.T) {
 	}
 	if _, err := exchange.ParsePackage(pulled); err != nil {
 		t.Fatalf("pull вернул невалидный пакет: %v", err)
+	}
+
+	// Общий токен плана не должен позволять подменить направление обмена.
+	if _, err := exchange.PullPackage(ctx, ts.URL, "Обмен", "s3cret", "fil01"); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("pull от имени текущего узла должен быть отклонён, got %v", err)
+	}
+	forged, err := exchange.ParsePackage(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged.FromNode = "fil01"
+	forgedData, _ := json.Marshal(forged)
+	if _, err := exchange.PushPackage(ctx, ts.URL, "Обмен", "s3cret", forgedData); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("push с неверной парой узлов должен быть отклонён, got %v", err)
 	}
 }

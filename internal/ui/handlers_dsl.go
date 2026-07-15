@@ -25,8 +25,11 @@ import (
 // (план 86) для прямых записей из DSL (справочники/документы), минующих
 // entityservice.Save. Регистрация — no-op, если планов нет или this-node не задан.
 func (s *Server) exchangeRegistrar() interpreter.ExchangeRegistrar {
-	return func(ctx context.Context, entity *metadata.Entity, id uuid.UUID) error {
-		return exchange.RegisterOnSave(ctx, s.store, s.reg.ExchangePlans(), entity, id, false)
+	return func(ctx context.Context, entity *metadata.Entity, id uuid.UUID, deletion bool) error {
+		if deletion {
+			return exchange.RegisterOnDelete(ctx, s.store, s.reg.ExchangePlans(), entity, id)
+		}
+		return exchange.RegisterOnSave(ctx, s.store, s.reg.ExchangePlans(), entity, id, deletion)
 	}
 }
 

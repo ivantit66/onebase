@@ -39,7 +39,7 @@ func TestStageBinary_FromZip(t *testing.T) {
 	zipPath := filepath.Join(dir, "onebase-v0.9.1.zip")
 	// В архиве кладём бинарь в подкаталог — StageBinary ищет по базовому имени.
 	writeZip(t, zipPath, map[string]string{
-		"README.txt":            "release notes",
+		"README.txt":           "release notes",
 		"dist/" + BinaryName(): "NEW-BINARY",
 	})
 	stage := filepath.Join(dir, "stage")
@@ -68,6 +68,23 @@ func TestStageBinary_PlainFile(t *testing.T) {
 	}
 	if got != bin {
 		t.Fatalf("для прямого файла вернули %q, ждали %q", got, bin)
+	}
+}
+
+func TestStageBinary_RejectsOversizedPlainFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), BinaryName())
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(MaxBinaryBytes + 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StageBinary(path, t.TempDir()); err == nil {
+		t.Fatal("ожидался отказ от слишком большого бинаря")
 	}
 }
 
@@ -150,5 +167,20 @@ func TestPollHealthz_Timeout(t *testing.T) {
 
 	if err := PollHealthz(context.Background(), srv.URL, 100*time.Millisecond, 20*time.Millisecond); err == nil {
 		t.Fatal("ожидали таймаут, получили nil")
+	}
+}
+
+func TestPollHealthzVersion_RequiresExpectedBinary(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-OneBase-Version", "old")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	if err := PollHealthzVersion(context.Background(), srv.URL, "new", 100*time.Millisecond, 20*time.Millisecond); err == nil {
+		t.Fatal("HTTP 200 от старой версии не должен подтверждать обновление")
+	}
+	if err := PollHealthzVersion(context.Background(), srv.URL, "old", time.Second, 20*time.Millisecond); err != nil {
+		t.Fatalf("ожидался успех для правильной версии: %v", err)
 	}
 }

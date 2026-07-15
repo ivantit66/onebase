@@ -133,8 +133,8 @@ func TestCatalogWriteRegistersExchange(t *testing.T) {
 		t.Fatal(err)
 	}
 	lookup := fakeExchangeReg{ents: map[string]*metadata.Entity{"Товар": ent}}
-	registrar := func(ctx context.Context, entity *metadata.Entity, id uuid.UUID) error {
-		return exchange.RegisterOnSave(ctx, db, []*metadata.ExchangePlan{plan}, entity, id, false)
+	registrar := func(ctx context.Context, entity *metadata.Entity, id uuid.UUID, deletion bool) error {
+		return exchange.RegisterOnSave(ctx, db, []*metadata.ExchangePlan{plan}, entity, id, deletion)
 	}
 	root := NewCatalogsRoot(NewStaticCtx(ctx), db, lookup).WithExchangeRegistrar(registrar)
 

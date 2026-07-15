@@ -62,7 +62,7 @@ func TestInfoRegList_PeriodKeyRoundTripsToDelete(t *testing.T) {
 		if !ok {
 			t.Fatalf("ParseRegPeriod(%q) не разобрал период", key)
 		}
-		if p.Month() == time.May {
+		if p.In(time.Local).Month() == time.May {
 			mayKey = key
 		}
 	}
@@ -83,19 +83,20 @@ func TestInfoRegList_PeriodKeyRoundTripsToDelete(t *testing.T) {
 		t.Fatalf("после удаления майской записи ожидалась 1 строка (июнь), получили %d", len(rows2))
 	}
 	if key, _ := rows2[0]["period_key"].(string); true {
-		if rem, ok := ParseRegPeriod(key); !ok || rem.Month() != time.June {
+		if rem, ok := ParseRegPeriod(key); !ok || rem.In(time.Local).Month() != time.June {
 			t.Errorf("осталась не та запись: period_key=%q (ожидался июнь)", key)
 		}
 	}
 }
 
 // ParseRegPeriod должен разбирать оба транспортных формата period_key:
-// RFC3339 (PostgreSQL timestamptz — несёт инстант) и зононезависимую строку
-// SQLite TEXT (стенные часы), а также суточный «2006-01-02» из формы.
+// RFC3339/SQLite UTC (несут инстант), старую зононезависимую SQLite-строку
+// (локальные стенные часы), а также суточный «2006-01-02» из формы.
 func TestParseRegPeriod(t *testing.T) {
 	cases := []string{
 		"2026-05-01T00:00:00+03:00",
 		"2026-05-01T00:00:00Z",
+		"2026-05-01 00:00:00+03:00",
 		"2026-05-01 00:00:00",
 		"2026-05-01T00:00:00",
 		"2026-05-01",
@@ -106,7 +107,7 @@ func TestParseRegPeriod(t *testing.T) {
 			t.Errorf("ParseRegPeriod(%q) = false, ожидался успех", s)
 			continue
 		}
-		if got.Year() != 2026 || got.Month() != time.May || got.Day() != 1 {
+		if local := got.In(time.FixedZone("UTC+3", 3*60*60)); local.Year() != 2026 || local.Month() != time.May || local.Day() != 1 {
 			t.Errorf("ParseRegPeriod(%q) = %v, ожидался 2026-05-01", s, got)
 		}
 	}
