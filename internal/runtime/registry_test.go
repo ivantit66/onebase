@@ -12,6 +12,20 @@ import (
 	"github.com/ivantit66/onebase/internal/report"
 )
 
+func TestGetProcedureResolvesOnUnpostAlias(t *testing.T) {
+	prog, err := parser.New(lexer.New(`
+Процедура ОбработкаУдаленияПроведения()
+КонецПроцедуры`, "unpost.os")).ParseProgram()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	r.Load(LoadOptions{Programs: map[string]*ast.Program{"Документ": prog}})
+	if proc := r.GetProcedure("Документ", "OnUnpost"); proc == nil {
+		t.Fatal("OnUnpost не разрешился в ОбработкаУдаленияПроведения")
+	}
+}
+
 // Legacy YAML-форма СРАЗУ конвертируется в макет v2 при обращении к реестру:
 // PrintFormRef.Decl несёт результат ConvertLegacy (план 64, этап 4).
 func TestGetAllPrintForms_LegacyConvertedToDecl(t *testing.T) {

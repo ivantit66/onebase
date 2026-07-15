@@ -848,6 +848,7 @@ func collectLintPrograms(dir string, proj *project.Project) []lintProgram {
 			add(name, "DSL объект", prog, rootNames(
 				"OnWrite", "ПриЗаписи",
 				"OnPost", "ОбработкаПроведения",
+				"OnUnpost", "ОбработкаУдаленияПроведения",
 				"OnFill", "ОбработкаЗаполнения",
 				"Печать", "Print",
 			), false)

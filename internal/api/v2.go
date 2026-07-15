@@ -342,19 +342,20 @@ func (h *handler) unpostDocumentV2() http.HandlerFunc {
 			writeError(w, http.StatusForbidden, "forbidden", "", 0)
 			return
 		}
-		if err := h.store.WithTx(r.Context(), func(ctx context.Context) error {
-			if err := h.clearMovements(ctx, entityName, id); err != nil {
-				return err
-			}
-			return h.store.SetPosted(ctx, entityName, id, false)
-		}); err != nil {
+		result, err := h.entitySvc.Unpost(r.Context(), entity, id)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error(), "", 0)
+			return
+		}
+		if result.DSLError != "" {
+			writeError(w, http.StatusUnprocessableEntity, result.DSLError, "", 0)
 			return
 		}
 		h.dispatchHook(r.Context(), "document.unpost", entityName, id)
 		writeJSONV2(w, http.StatusOK, restV2Envelope{Data: map[string]any{
-			"id":     id.String(),
-			"posted": false,
+			"id":       id.String(),
+			"posted":   false,
+			"messages": result.DSLMessages,
 		}})
 	}
 }

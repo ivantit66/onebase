@@ -828,9 +828,10 @@ func (r *Registry) Entities() []*metadata.Entity {
 
 // eventAliases maps lowercase English event names to their Russian equivalents.
 var eventAliases = map[string]string{
-	"onwrite": "призаписи",
-	"onpost":  "обработкапроведения",
-	"onfill":  "обработказаполнения",
+	"onwrite":  "призаписи",
+	"onpost":   "обработкапроведения",
+	"onunpost": "обработкаудаленияпроведения",
+	"onfill":   "обработказаполнения",
 }
 
 func (r *Registry) LoadModules(modules map[string]*ast.Program) {

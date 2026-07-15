@@ -12,6 +12,7 @@ import (
 
 	"github.com/ivantit66/onebase/internal/dsl/ast"
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
+	"github.com/ivantit66/onebase/internal/entityservice"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/runtime"
 	"github.com/ivantit66/onebase/internal/storage"
@@ -67,6 +68,17 @@ func newPostingDoc(t *testing.T) (context.Context, *storage.DB, *Server, *docPro
 	interp := interpreter.New()
 	interp.LookupProc = registry.GetModuleProc
 	s := &Server{store: db, reg: registry, interp: interp, lockMgr: runtime.NewLockManager(), messages: NewMessageStore()}
+	s.entitySvc = &entityservice.Service{
+		Store:        db,
+		Reg:          registry,
+		Interp:       interp,
+		PrepareHook:  s.enrichHeaderRefs,
+		EnrichTPRows: s.enrichTPRowsWithRefs,
+		BuildVars:    s.buildDSLVarsWithMessages,
+		MakeThis: func(ctx context.Context, obj *runtime.Object, e *metadata.Entity) interpreter.This {
+			return s.newFormObjectThis(ctx, obj, e, nil)
+		},
+	}
 	dp := newDocsRoot(s, interpreter.NewTxState(ctx)).Get("ПоступлениеТоваров").(*docProxy)
 	return ctx, db, s, dp, doc
 }
@@ -196,6 +208,46 @@ func TestDocsRoot_UnpostAndMarkMethods(t *testing.T) {
 	db.QueryRow(ctx, "SELECT deletion_mark FROM поступлениетоваров LIMIT 1").Scan(&marked)
 	if marked {
 		t.Error("пометка должна быть снята после СнятьПометку")
+	}
+}
+
+func TestUnpostDocument_HookErrorRollsBack(t *testing.T) {
+	ctx, db, s, dp, doc := newPostingDoc(t)
+	w := postOne(t, dp)
+
+	program := mustParse(t, `Процедура ОбработкаУдаленияПроведения()
+  ВызватьИсключение("отмена из UI запрещена");
+КонецПроцедуры`)
+	s.reg.Load(runtime.LoadOptions{
+		Entities:  []*metadata.Entity{doc},
+		Registers: s.reg.Registers(),
+		Programs:  map[string]*ast.Program{doc.Name: program},
+	})
+
+	r := reqWithChi("POST", "/ui/document/поступлениетоваров/"+w.obj.ID.String()+"/unpost", url.Values{},
+		map[string]string{"kind": "document", "entity": "поступлениетоваров", "id": w.obj.ID.String()})
+	rec := httptest.NewRecorder()
+	s.unpostDocument(rec, r)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("ожидался 303, получен %d: %s", rec.Code, rec.Body.String())
+	}
+	if location := rec.Header().Get("Location"); !strings.Contains(location, "posting_error=") {
+		t.Fatalf("редирект не содержит ошибку OnUnpost: %s", location)
+	}
+	row, err := db.GetByID(ctx, doc.Name, w.obj.ID, doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !asBool(row["posted"]) {
+		t.Fatalf("ошибка OnUnpost не откатила posted: %#v", row)
+	}
+	var movements int
+	if err := db.QueryRow(ctx, "SELECT COUNT(*) FROM рег_остаткитоваров").Scan(&movements); err != nil {
+		t.Fatal(err)
+	}
+	if movements != 1 {
+		t.Fatalf("ошибка OnUnpost не откатила движения: осталось %d", movements)
 	}
 }
 

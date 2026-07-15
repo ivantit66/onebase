@@ -71,6 +71,33 @@ permissions:
 	}
 }
 
+func TestLintTreatsUnpostHooksAsEntityRoots(t *testing.T) {
+	dir := t.TempDir()
+	mkFile(t, filepath.Join(dir, "documents", "заказ.yaml"), `name: Заказ
+posting: true
+fields:
+  - name: Номер
+    type: string
+`)
+	mkFile(t, filepath.Join(dir, "src", "заказ.posting.os"), `Процедура ОбработкаУдаленияПроведения()
+КонецПроцедуры
+
+Процедура OnUnpost()
+КонецПроцедуры
+`)
+
+	res := RunFullWithOptions(dir, Options{Lint: true})
+	if !res.OK {
+		t.Fatalf("lint failed: %+v", res.Issues)
+	}
+	for _, warning := range res.Warnings {
+		if warning.Code == "dsl.dead-procedure" &&
+			(strings.Contains(warning.Message, "ОбработкаУдаленияПроведения") || strings.Contains(warning.Message, "OnUnpost")) {
+			t.Fatalf("unpost hook отмечен как недостижимый: %+v", warning)
+		}
+	}
+}
+
 func TestLintYAML_ActivityKeyKnown(t *testing.T) {
 	dir := t.TempDir()
 	// Блок activity (активность справочников) читается загрузчиком — линт не

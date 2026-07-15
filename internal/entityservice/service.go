@@ -12,6 +12,7 @@ package entityservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -320,6 +321,103 @@ func (s *Service) Save(ctx context.Context, req SaveRequest) (SaveResult, error)
 	return SaveResult{ID: req.ID, DSLMessages: msgs, Movements: mc}, nil
 }
 
+// hookRunError distinguishes a DSL business error from a technical storage
+// error. Returning it from WithTx rolls the transaction back; Unpost then
+// exposes the message through SaveResult, consistently with Save.
+type hookRunError struct{ err error }
+
+func (e *hookRunError) Error() string { return e.err.Error() }
+func (e *hookRunError) Unwrap() error { return e.err }
+
+// Unpost cancels document posting atomically: removes every movement, sets
+// posted=false and then runs OnUnpost/ОбработкаУдаленияПроведения. The hook is
+// deliberately executed after the storage changes but inside the same
+// transaction, so it observes the unposted state and any hook error restores
+// both the posted flag and the removed movements.
+func (s *Service) Unpost(ctx context.Context, entity *metadata.Entity, id uuid.UUID) (SaveResult, error) {
+	result := SaveResult{
+		ID:        id,
+		Movements: runtime.NewMovementsCollector(entity.Name, id),
+	}
+	proc := s.Reg.GetProcedure(entity.Name, "OnUnpost")
+	lockCollector := runtime.NewLockCollector()
+	defer lockCollector.ReleaseAll()
+
+	err := s.Store.WithTxIfNeeded(ctx, func(txCtx context.Context) error {
+		if err := s.clearMovements(txCtx, entity.Name, id); err != nil {
+			return err
+		}
+		if err := s.Store.SetPosted(txCtx, entity.Name, id, false); err != nil {
+			return err
+		}
+		if proc == nil {
+			return nil
+		}
+
+		fields, err := s.Store.GetByID(txCtx, entity.Name, id, entity)
+		if err != nil {
+			return fmt.Errorf("отмена проведения %s: чтение документа: %w", entity.Name, err)
+		}
+		tpRows := make(map[string][]map[string]any, len(entity.TableParts))
+		for _, tp := range entity.TableParts {
+			rows, err := s.Store.GetTablePartRows(txCtx, entity.Name, tp.Name, id, tp)
+			if err != nil {
+				return fmt.Errorf("отмена проведения %s: чтение ТЧ %s: %w", entity.Name, tp.Name, err)
+			}
+			tpRows[tp.Name] = rows
+		}
+
+		obj := &runtime.Object{
+			Type:          entity.Name,
+			Kind:          entity.Kind,
+			ID:            id,
+			Fields:        fields,
+			TablePartRows: tpRows,
+		}
+		if obj.Fields == nil {
+			obj.Fields = map[string]any{}
+		}
+		selfRef := &interpreter.Ref{UUID: id.String(), Type: entity.Name}
+		obj.Fields["ссылка"] = selfRef
+		obj.Fields["reference"] = selfRef
+
+		hookCtx := runtime.ContextWithLockCollector(txCtx, lockCollector)
+		if s.PrepareHook != nil {
+			s.PrepareHook(hookCtx, entity, obj)
+		}
+		if s.EnrichTPRows != nil {
+			for _, tp := range entity.TableParts {
+				if rows, ok := obj.TablePartRows[tp.Name]; ok {
+					s.EnrichTPRows(hookCtx, tp, rows)
+				}
+			}
+		}
+		SetPeriodFromFields(result.Movements, entity, obj.Fields)
+
+		var vars map[string]any
+		if s.BuildVars != nil {
+			vars = s.BuildVars(hookCtx, result.Movements, &result.DSLMessages)
+		}
+		var thisVal interpreter.This = obj
+		if s.MakeThis != nil {
+			thisVal = s.MakeThis(hookCtx, obj, entity)
+		}
+		if err := s.Interp.Run(proc, thisVal, vars); err != nil {
+			return &hookRunError{err: err}
+		}
+		return s.Store.AdvisoryXactLock(txCtx, lockCollector.Keys())
+	})
+	if err != nil {
+		var hookErr *hookRunError
+		if errors.As(err, &hookErr) {
+			result.DSLError = hookErr.err.Error()
+			return result, nil
+		}
+		return SaveResult{}, err
+	}
+	return result, nil
+}
+
 // FillRequest — входной DTO для Service.Fill (ввод на основании).
 type FillRequest struct {
 	// Receiver — сущность-приёмник (создаваемый объект). Должна содержать
@@ -614,6 +712,28 @@ func (s *Service) Repost(ctx context.Context, entityName string, id uuid.UUID) e
 		}
 		return s.Store.SetPosted(ctx, ent.Name, id, true)
 	})
+}
+
+// clearMovements removes every register row recorded by the document. Passing
+// nil rows to the storage writers performs only DELETE-by-recorder, therefore
+// it is safe to visit registers the document did not write to.
+func (s *Service) clearMovements(ctx context.Context, entityName string, id uuid.UUID) error {
+	for _, reg := range s.Reg.Registers() {
+		if err := s.Store.WriteMovements(ctx, reg.Name, entityName, id, nil, reg, nil); err != nil {
+			return err
+		}
+	}
+	for _, ir := range s.Reg.InfoRegisters() {
+		if err := s.Store.WriteInfoMovements(ctx, ir.Name, entityName, id, nil, ir, nil); err != nil {
+			return err
+		}
+	}
+	for _, ar := range s.Reg.AccountRegisters() {
+		if err := s.Store.WriteAccountMovements(ctx, ar.Name, entityName, id, nil, ar, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // writeMovements распределяет накопленные в mc движения по нужным типам

@@ -1345,7 +1345,8 @@ func (s *Server) markForDeletion(ctx context.Context, entity *metadata.Entity, i
 	return exchange.RegisterOnSave(ctx, s.store, s.reg.ExchangePlans(), entity, id, mark)
 }
 
-// unpostDocument clears movements and sets posted=false.
+// unpostDocument clears movements, sets posted=false and runs
+// ОбработкаУдаленияПроведения in the same transaction.
 func (s *Server) unpostDocument(w http.ResponseWriter, r *http.Request) {
 	entity := s.getEntity(w, r)
 	if entity == nil {
@@ -1363,13 +1364,14 @@ func (s *Server) unpostDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.WithTx(r.Context(), func(ctx context.Context) error {
-		if err := s.clearMovements(ctx, entity.Name, id); err != nil {
-			return err
-		}
-		return s.store.SetPosted(ctx, entity.Name, id, false)
-	}); err != nil {
+	result, err := s.entitySvc.Unpost(r.Context(), entity, id)
+	if err != nil {
 		http.Error(w, s.errText(r, err), 500)
+		return
+	}
+	if result.DSLError != "" {
+		docURL := "/ui/" + strings.ToLower(string(entity.Kind)) + "/" + entity.Name + "/" + id.String()
+		http.Redirect(w, r, docURL+"?posting_error="+url.QueryEscape(result.DSLError), http.StatusSeeOther)
 		return
 	}
 	// Веб-хук document.unpost (план 29) — после успешной транзакции.

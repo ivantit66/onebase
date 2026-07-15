@@ -774,7 +774,10 @@ func TestAPIV2_UnpostDocument(t *testing.T) {
 		Posting: true,
 		Fields:  []metadata.Field{{Name: "Номер", Type: metadata.FieldTypeString}},
 	}
-	h, ctx := newAPITestHandler(t, []*metadata.Entity{doc}, nil)
+	prog := mustParseProgram(t, `Процедура ОбработкаУдаленияПроведения()
+  Сообщить("unpost hook called");
+КонецПроцедуры`)
+	h, ctx := newAPITestHandler(t, []*metadata.Entity{doc}, map[string]*ast.Program{doc.Name: prog})
 	id := uuid.New()
 	if err := h.store.Upsert(ctx, "Поступление", id, map[string]any{"Номер": "1"}, doc); err != nil {
 		t.Fatal(err)
@@ -796,6 +799,45 @@ func TestAPIV2_UnpostDocument(t *testing.T) {
 	}
 	if row["posted"] != false {
 		t.Fatalf("posted = %#v, want false; row=%#v", row["posted"], row)
+	}
+	if !strings.Contains(w.Body.String(), "unpost hook called") {
+		t.Fatalf("ответ не содержит сообщение OnUnpost: %s", w.Body.String())
+	}
+}
+
+func TestAPIV2_UnpostDocumentHookErrorRollsBack(t *testing.T) {
+	doc := &metadata.Entity{
+		Name:    "Поступление",
+		Kind:    metadata.KindDocument,
+		Posting: true,
+		Fields:  []metadata.Field{{Name: "Номер", Type: metadata.FieldTypeString}},
+	}
+	prog := mustParseProgram(t, `Процедура ОбработкаУдаленияПроведения()
+  ВызватьИсключение("unpost denied");
+КонецПроцедуры`)
+	h, ctx := newAPITestHandler(t, []*metadata.Entity{doc}, map[string]*ast.Program{doc.Name: prog})
+	id := uuid.New()
+	if err := h.store.Upsert(ctx, doc.Name, id, map[string]any{"Номер": "1"}, doc); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.SetPosted(ctx, doc.Name, id, true); err != nil {
+		t.Fatal(err)
+	}
+
+	r := reqWithEntity("POST", "/api/v2/document/Поступление/"+id.String()+"/unpost", nil,
+		map[string]string{"name": doc.Name, "id": id.String()}, nil)
+	w := httptest.NewRecorder()
+	h.unpostDocumentV2().ServeHTTP(w, r)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", w.Code, w.Body.String())
+	}
+	row, err := h.store.GetByID(ctx, doc.Name, id, doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row["posted"] != true {
+		t.Fatalf("ошибка хука не откатила posted: row=%#v", row)
 	}
 }
 
