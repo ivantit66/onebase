@@ -6,9 +6,9 @@ package interpreter
 //	Применено = ПланыОбмена.ФилиалыЦентр.ЗагрузитьПакет(Пакет);
 //
 // Операции сами открывают транзакцию (BuildPackage/ApplyPackage), поэтому их не
-// следует оборачивать в DSL-Транзацию(). Правило конфликта hook при загрузке из
-// DSL откатывается к by_time; обработчик ПриКонфликтеОбмена работает на Go-путях
-// приёма (онлайн push и CLI load/sync).
+// следует оборачивать в DSL-Транзацию(). Правило конфликта hook (ПриКонфликтеОбмена)
+// работает и при загрузке из DSL — если объект построен с WithHook (dslvars.Build
+// подключает его, когда доступен интерпретатор); иначе откат к by_time.
 
 import (
 	"context"
@@ -33,6 +33,10 @@ type ExchangePlansRoot struct {
 	ctx   context.Context
 	store *storage.DB
 	reg   ExchangeRegistry
+	// hook — необязательный обработчик правила конфликта hook. nil → загрузка из
+	// DSL по правилу hook откатывается к by_time. Подключается через WithHook в
+	// dslvars.Build, когда доступен интерпретатор конфигурации.
+	hook exchange.HookResolver
 }
 
 // NewExchangePlansRoot создаёт объект для инъекции в extraVars как «ПланыОбмена».
@@ -40,12 +44,19 @@ func NewExchangePlansRoot(ctx context.Context, store *storage.DB, reg ExchangeRe
 	return &ExchangePlansRoot{ctx: ctx, store: store, reg: reg}
 }
 
+// WithHook подключает обработчик правила конфликта hook к загрузке пакетов из DSL
+// (ЗагрузитьПакет). Возвращает тот же объект для цепочечной инициализации.
+func (r *ExchangePlansRoot) WithHook(h exchange.HookResolver) *ExchangePlansRoot {
+	r.hook = h
+	return r
+}
+
 func (r *ExchangePlansRoot) Get(planName string) any {
 	plan := r.reg.GetExchangePlan(planName)
 	if plan == nil {
 		return nil
 	}
-	return &exchangePlanProxy{ctx: r.ctx, store: r.store, reg: r.reg, plan: plan}
+	return &exchangePlanProxy{ctx: r.ctx, store: r.store, reg: r.reg, plan: plan, hook: r.hook}
 }
 
 func (r *ExchangePlansRoot) Set(_ string, _ any) {}
@@ -56,6 +67,7 @@ type exchangePlanProxy struct {
 	store *storage.DB
 	reg   ExchangeRegistry
 	plan  *metadata.ExchangePlan
+	hook  exchange.HookResolver
 }
 
 func (p *exchangePlanProxy) Get(_ string) any    { return nil }
@@ -80,7 +92,7 @@ func (p *exchangePlanProxy) CallMethod(method string, args []any) any {
 		if len(args) < 1 {
 			panic(userError{Msg: "ЗагрузитьПакет: передайте строку пакета"})
 		}
-		res, err := exchange.ApplyPackage(p.ctx, p.store, p.reg, p.plan, []byte(exchangeArgString(args[0])), exchange.ApplyOptions{})
+		res, err := exchange.ApplyPackage(p.ctx, p.store, p.reg, p.plan, []byte(exchangeArgString(args[0])), exchange.ApplyOptions{Hook: p.hook})
 		if err != nil {
 			panic(userError{Msg: "ЗагрузитьПакет: " + err.Error()})
 		}
