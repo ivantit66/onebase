@@ -91,3 +91,52 @@ func TestLoadExchangePlanDirMissing(t *testing.T) {
 		t.Errorf("отсутствующий каталог должен давать (nil, nil), получено (%v, %v)", plans, err)
 	}
 }
+
+func sameSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	m := map[string]int{}
+	for _, x := range a {
+		m[x]++
+	}
+	for _, x := range b {
+		m[x]--
+	}
+	for _, v := range m {
+		if v != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func TestTopologyTargets(t *testing.T) {
+	// Плоская топология: регистрируем всем, кроме себя; транзита нет.
+	flat := &ExchangePlan{Nodes: []ExchangeNode{{Code: "center"}, {Code: "fil01"}, {Code: "fil02"}}}
+	flat.Normalize()
+	if got := flat.RegistrationTargets("center"); !sameSet(got, []string{"fil01", "fil02"}) {
+		t.Errorf("плоская: RegistrationTargets(center) = %v", got)
+	}
+	if got := flat.TransitTargets("center", "fil01"); got != nil {
+		t.Errorf("плоская: транзита быть не должно, got %v", got)
+	}
+
+	// Звезда: hub + две спицы.
+	star := &ExchangePlan{Nodes: []ExchangeNode{
+		{Code: "hub", Role: RoleHub}, {Code: "filA", Role: RoleSpoke}, {Code: "filB", Role: RoleSpoke},
+	}}
+	star.Normalize()
+	if got := star.RegistrationTargets("filA"); !sameSet(got, []string{"hub"}) {
+		t.Errorf("звезда: спица регистрирует только хабу, got %v", got)
+	}
+	if got := star.RegistrationTargets("hub"); !sameSet(got, []string{"filA", "filB"}) {
+		t.Errorf("звезда: хаб регистрирует всем спицам, got %v", got)
+	}
+	if got := star.TransitTargets("hub", "filA"); !sameSet(got, []string{"filB"}) {
+		t.Errorf("звезда: хаб ретранслирует остальным спицам (кроме источника), got %v", got)
+	}
+	if got := star.TransitTargets("filA", "hub"); got != nil {
+		t.Errorf("звезда: спица не ретранслирует, got %v", got)
+	}
+}

@@ -68,6 +68,7 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 		NetGuard:  s.netGuard(ctx),
 		ExecGuard: s.execGuard(ctx),
 		Notifier:  s.notifier(),
+		Interp:    s.interp, // для hook-правила конфликта в ПланыОбмена.ЗагрузитьПакет
 	}.Build()
 
 	// TxState несёт «живой» контекст. Транзакционные функции

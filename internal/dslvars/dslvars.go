@@ -43,6 +43,11 @@ type Common struct {
 	// (план 74). nil → функции ОтправитьУведомление/PublishNotification
 	// остаются тихим no-op (фоновые задания/тесты без подключённой шины).
 	Notifier interpreter.Notifier
+	// Interp — интерпретатор конфигурации. Нужен ТОЛЬКО объекту ПланыОбмена, чтобы
+	// правило конфликта hook (ПриКонфликтеОбмена) работало при загрузке пакета из
+	// DSL (ЗагрузитьПакет). nil → hook на DSL-пути откатывается к by_time (как
+	// прежде); остальные DSL-переменные от Interp не зависят.
+	Interp *interpreter.Interpreter
 }
 
 // Build возвращает map с пересечением DSL-переменных, общих для UI и scheduler.
@@ -177,6 +182,11 @@ func (c Common) Build() map[string]any {
 	// .ЗагрузитьПакет(Пакет). Нужны и store, и реестр; без них не инжектируем.
 	if c.Store != nil && c.Reg != nil {
 		exchangeRoot := interpreter.NewExchangePlansRoot(c.Ctx, c.Store, c.Reg)
+		// С доступным интерпретатором подключаем обработчик правила конфликта hook
+		// к загрузке пакета из DSL (иначе hook на этом пути откатывается к by_time).
+		if c.Interp != nil {
+			exchangeRoot = exchangeRoot.WithHook(NewExchangeHook(c.Store, c.Reg, c.Interp))
+		}
 		vars["ПланыОбмена"] = exchangeRoot
 		vars["ExchangePlans"] = exchangeRoot
 	}

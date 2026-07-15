@@ -480,6 +480,7 @@ func (s *Scheduler) buildDSLVars(ctx context.Context, mc *runtime.MovementsColle
 		Store:     s.db,
 		Mailer:    s.mailer,
 		Movements: mc,
+		Interp:    s.interp, // hook-правило конфликта в ПланыОбмена.ЗагрузитьПакет
 		// Предохранитель сети (план 62): регламентные задания тоже инициируют
 		// HTTP/email из конфигурации — гейтим тем же флагом.
 		NetGuard: func() error {

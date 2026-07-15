@@ -34,6 +34,12 @@ func TestCheckExchangePlans(t *testing.T) {
 			mkPlan("ОдинУзел", "by_time", []string{"Справочник.Номенклатура"}, center),
 			mkPlan("ДубльУзла", "by_time", []string{"Справочник.Номенклатура"}, center, metadata.ExchangeNode{Code: "CENTER"}),
 			mkPlan("ПустойСостав", "by_time", nil, center, fil),
+			mkPlan("ДваХаба", "by_time", []string{"Справочник.Номенклатура"},
+				metadata.ExchangeNode{Code: "hub1", Role: metadata.RoleHub},
+				metadata.ExchangeNode{Code: "hub2", Role: metadata.RoleHub},
+				metadata.ExchangeNode{Code: "fil", Role: metadata.RoleSpoke}),
+			mkPlan("ТриБезХаба", "by_time", []string{"Справочник.Номенклатура"},
+				metadata.ExchangeNode{Code: "a"}, metadata.ExchangeNode{Code: "b"}, metadata.ExchangeNode{Code: "c"}),
 		},
 	}
 
@@ -42,9 +48,11 @@ func TestCheckExchangePlans(t *testing.T) {
 		"неизвестное правило конфликта",
 		"несуществующая сущность",
 		"нет документа с таким именем",
-		"ровно два узла",
+		"минимум два узла",
 		"код узла \"CENTER\" дублируется",
 		"пустой состав",
+		"ровно один хаб",
+		"тремя и более узлами",
 	} {
 		found := false
 		for _, is := range issues {

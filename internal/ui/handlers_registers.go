@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/ivantit66/onebase/internal/exchange"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/storage"
 )
@@ -331,7 +332,16 @@ func (s *Server) infoRegSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.InfoRegSet(r.Context(), ir, dims, resources, periodPtr); err != nil {
+	// Запись и регистрация изменения в планах обмена (план 86) — в одной
+	// транзакции. RegisterInfoRegOnSave пропускает периодические регистры и те,
+	// что не входят в состав обмена.
+	plans := s.reg.ExchangePlans()
+	if err := s.store.WithTx(r.Context(), func(ctx context.Context) error {
+		if err := s.store.InfoRegSet(ctx, ir, dims, resources, periodPtr); err != nil {
+			return err
+		}
+		return exchange.RegisterInfoRegOnSave(ctx, s.store, plans, ir, dims, false)
+	}); err != nil {
 		s.render(w, r, "page-inforeg-form", map[string]any{
 			"InfoReg": ir,
 			"Values":  formValuesFromRequest(r, ir),
@@ -371,7 +381,13 @@ func (s *Server) infoRegDelete(w http.ResponseWriter, r *http.Request) {
 	if !s.rowAllowedFor(w, r, "inforeg", ir.Name, "delete", storage.InfoRegisterPredicateEntity(ir), row) {
 		return
 	}
-	if err := s.store.InfoRegDelete(r.Context(), ir, dims, periodPtr); err != nil {
+	plans := s.reg.ExchangePlans()
+	if err := s.store.WithTx(r.Context(), func(ctx context.Context) error {
+		if err := s.store.InfoRegDelete(ctx, ir, dims, periodPtr); err != nil {
+			return err
+		}
+		return exchange.RegisterInfoRegOnSave(ctx, s.store, plans, ir, dims, true)
+	}); err != nil {
 		http.Error(w, s.errText(r, err), 500)
 		return
 	}
@@ -518,7 +534,10 @@ func (s *Server) constantsSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.store.WithTx(r.Context(), func(ctx context.Context) error {
+	// Запись констант и регистрация изменений в планах обмена (план 86) — в одной
+	// транзакции, чтобы сбой регистрации откатывал запись (как для сущностей).
+	plans := s.reg.ExchangePlans()
+	err := s.store.WithTx(r.Context(), func(ctx context.Context) error {
 		for _, c := range consts {
 			val := submitted[c.Name]
 			var v any
@@ -528,9 +547,13 @@ func (s *Server) constantsSave(w http.ResponseWriter, r *http.Request) {
 			if err := s.store.SetConstant(ctx, c.Name, v); err != nil {
 				return err
 			}
+			if err := exchange.RegisterConstantOnSave(ctx, s.store, plans, c.Name); err != nil {
+				return err
+			}
 		}
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		http.Error(w, s.errText(r, err), 500)
 		return
 	}

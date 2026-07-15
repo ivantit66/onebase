@@ -29,11 +29,13 @@ const (
 	MaxPackageObjects = 10_000
 )
 
-// EntityResolver отдаёт метаданные сущности по имени. Реализуется
-// runtime.Registry (метод GetEntity), но объявлен здесь, чтобы пакет обмена не
-// зависел от runtime и был тестируем с фейковым резолвером.
+// EntityResolver отдаёт метаданные состава обмена по имени (сущность или регистр
+// сведений). Реализуется runtime.Registry, но объявлен здесь, чтобы пакет обмена
+// не зависел от runtime и был тестируем с фейковым резолвером.
 type EntityResolver interface {
 	GetEntity(name string) *metadata.Entity
+	GetConstantMeta(name string) *metadata.Constant
+	GetInfoRegister(name string) *metadata.InfoRegister
 }
 
 // Package — конверт обмена.
@@ -54,11 +56,17 @@ type Package struct {
 // значения (числа — точной строкой, даты — RFC3339, ссылки — UUID-строкой),
 // пригодные для обратной записи через тот же путь, что и обычное сохранение.
 type PackageObject struct {
-	Type       string                      `json:"type"`
-	ID         string                      `json:"id"`
-	Version    int64                       `json:"version"`
-	Deletion   bool                        `json:"deletion,omitempty"`
-	Tombstone  bool                        `json:"tombstone,omitempty"`
+	// Kind — категория объекта: "" (сущность), storage.ExchangeKindConstant,
+	// storage.ExchangeKindInfoReg. Определяет форму полей и путь применения.
+	Kind      string `json:"kind,omitempty"`
+	Type      string `json:"type"`
+	ID        string `json:"id,omitempty"`
+	Version   int64  `json:"version"`
+	Deletion  bool   `json:"deletion,omitempty"`
+	Tombstone bool   `json:"tombstone,omitempty"`
+	// Posted — документ был проведён на источнике. Приёмник по нему перепроводит
+	// документ, если у плана включён repost (иначе документ приходит непроведённым).
+	Posted     bool                        `json:"posted,omitempty"`
 	ChangedAt  int64                       `json:"changed_at"`
 	Fields     map[string]any              `json:"fields,omitempty"`
 	TableParts map[string][]map[string]any `json:"table_parts,omitempty"`
@@ -66,17 +74,18 @@ type PackageObject struct {
 
 // LoadResult — итог загрузки пакета.
 type LoadResult struct {
-	Applied   int `json:"applied"`   // применено (создано/обновлено)
-	Skipped   int `json:"skipped"`   // пропущено (идемпотентно: версия не новее, либо сущность неизвестна)
-	Deleted   int `json:"deleted"`   // применено с пометкой на удаление
-	Conflicts int `json:"conflicts"` // обнаружено встречных правок (разрешено правилом)
+	Applied   int `json:"applied"`            // применено (создано/обновлено)
+	Skipped   int `json:"skipped"`            // пропущено (идемпотентно: версия не новее, либо сущность неизвестна)
+	Deleted   int `json:"deleted"`            // применено с пометкой на удаление
+	Conflicts int `json:"conflicts"`          // обнаружено встречных правок (разрешено правилом)
+	Reposted  int `json:"reposted,omitempty"` // перепроведено документов на приёмнике (repost)
 }
 
 // BuildPackage собирает пакет незапподтверждённых изменений для узла toNode,
 // присваивает ему следующий номер сообщения и помечает вошедшие строки очереди
 // как выгруженные. Всё — в одной транзакции.
 func BuildPackage(ctx context.Context, store *storage.DB, resolver EntityResolver, plan *metadata.ExchangePlan, toNode string) ([]byte, error) {
-	if err := validatePairPlan(plan); err != nil {
+	if err := validateExchangePlan(plan); err != nil {
 		return nil, err
 	}
 	toNodeDef := plan.Node(toNode)
@@ -118,66 +127,126 @@ func BuildPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 		pkg := Package{Format: FormatV1, Plan: plan.Name, FromNode: thisNode, ToNode: toNode, MessageNo: msgNo, AckNo: peer.RecvNo}
 		var included []storage.ExchangeChange
 		for _, ch := range changes {
-			ent := resolver.GetEntity(ch.ObjectType)
-			if ent == nil {
-				return fmt.Errorf("exchange: сущность очереди %q отсутствует в конфигурации; пакет не сформирован", ch.ObjectType)
-			}
-			id, err := uuid.Parse(ch.ObjectID)
-			if err != nil {
-				return fmt.Errorf("exchange: неверный id %q в очереди: %w", ch.ObjectID, err)
-			}
-			version, exists, err := store.EntityVersionExists(ctx, ent.Name, id)
-			if err != nil {
-				return err
-			}
-			if !exists && !ch.Deletion {
-				return fmt.Errorf("exchange: объект очереди %s/%s физически удалён без tombstone", ent.Name, id)
-			}
-			// Между чтением очереди и объекта могла завершиться новая запись.
-			// Не смешиваем её поля со старой версией пакета: новая строка очереди
-			// останется sent_no=0 и попадёт в следующий пакет.
-			if exists && version != ch.Version {
-				continue
-			}
-			var row map[string]any
-			if exists {
-				row, err = store.GetByID(ctx, ent.Name, id, ent)
+			switch ch.Kind {
+			case storage.ExchangeKindConstant:
+				constant := resolver.GetConstantMeta(ch.ObjectType)
+				if constant == nil {
+					return fmt.Errorf("exchange: константа очереди %q отсутствует в конфигурации", ch.ObjectType)
+				}
+				if !plan.IncludesConstant(constant.Name) {
+					return fmt.Errorf("exchange: константа очереди %q не входит в состав плана", ch.ObjectType)
+				}
+				val, err := store.GetConstant(ctx, constant.Name)
 				if err != nil {
-					return fmt.Errorf("exchange: объект очереди %s/%s недоступен: %w", ent.Name, id, err)
+					return fmt.Errorf("exchange: константа очереди %q недоступна: %w", ch.ObjectType, err)
 				}
-			}
-			obj := PackageObject{
-				Type:      ch.ObjectType,
-				ID:        ch.ObjectID,
-				Version:   ch.Version,
-				Deletion:  ch.Deletion,
-				ChangedAt: ch.ChangedAt,
-				Fields:    canonicalHeader(ent, row),
-			}
-			if !exists {
-				obj.Tombstone = true
-				obj.Fields = emptyCanonicalHeader(ent)
-			}
-			if len(ent.TableParts) > 0 {
-				obj.TableParts = make(map[string][]map[string]any, len(ent.TableParts))
-			}
-			for _, tp := range ent.TableParts {
-				if obj.Tombstone {
-					obj.TableParts[tp.Name] = []map[string]any{}
-					continue
+				pkg.Objects = append(pkg.Objects, PackageObject{
+					Kind:      storage.ExchangeKindConstant,
+					Type:      constant.Name,
+					Version:   ch.Version,
+					ChangedAt: ch.ChangedAt,
+					Fields:    map[string]any{"value": val},
+				})
+				included = append(included, ch)
+			case storage.ExchangeKindInfoReg:
+				ir := resolver.GetInfoRegister(ch.ObjectType)
+				if ir == nil {
+					return fmt.Errorf("exchange: регистр сведений очереди %q отсутствует в конфигурации", ch.ObjectType)
 				}
-				rows, err := store.GetTablePartRows(ctx, ent.Name, tp.Name, id, tp)
+				if ir.Periodic || !plan.IncludesInfoRegister(ir.Name) {
+					return fmt.Errorf("exchange: регистр сведений очереди %q не поддержан или не входит в состав плана", ch.ObjectType)
+				}
+				dims, derr := decodeInfoRegKey(ch.ObjectID)
+				if derr != nil {
+					return fmt.Errorf("exchange: неверный ключ регистра сведений %q: %w", ch.ObjectType, derr)
+				}
+				obj := PackageObject{
+					Kind:      storage.ExchangeKindInfoReg,
+					Type:      ch.ObjectType,
+					ID:        ch.ObjectID,
+					Version:   ch.Version,
+					Deletion:  ch.Deletion,
+					ChangedAt: ch.ChangedAt,
+					Fields:    map[string]any{},
+				}
+				for k, v := range dims { // измерения из ключа уже каноничны
+					obj.Fields[k] = v
+				}
+				if !ch.Deletion {
+					rec, rerr := store.InfoRegGetExact(ctx, ir, dims, nil)
+					if rerr != nil {
+						return rerr
+					}
+					if rec == nil {
+						return fmt.Errorf("exchange: запись регистра сведений %s/%s исчезла без регистрации удаления", ir.Name, ch.ObjectID)
+					}
+					for _, rf := range ir.Resources {
+						obj.Fields[rf.Name] = canonicalScalar(rf, rec[rf.Name])
+					}
+				}
+				pkg.Objects = append(pkg.Objects, obj)
+				included = append(included, ch)
+			default: // сущность (справочник/документ)
+				ent := resolver.GetEntity(ch.ObjectType)
+				if ent == nil {
+					return fmt.Errorf("exchange: сущность очереди %q отсутствует в конфигурации; пакет не сформирован", ch.ObjectType)
+				}
+				id, err := uuid.Parse(ch.ObjectID)
+				if err != nil {
+					return fmt.Errorf("exchange: неверный id %q в очереди: %w", ch.ObjectID, err)
+				}
+				version, exists, err := store.EntityVersionExists(ctx, ent.Name, id)
 				if err != nil {
 					return err
 				}
-				canon := make([]map[string]any, 0, len(rows))
-				for _, r := range rows {
-					canon = append(canon, canonicalRow(tp.Fields, r))
+				if !exists && !ch.Deletion {
+					return fmt.Errorf("exchange: объект очереди %s/%s физически удалён без tombstone", ent.Name, id)
 				}
-				obj.TableParts[tp.Name] = canon
+				// Не смешиваем поля новой записи со старой версией строки очереди.
+				if exists && version != ch.Version {
+					continue
+				}
+				var row map[string]any
+				if exists {
+					row, err = store.GetByID(ctx, ent.Name, id, ent)
+					if err != nil {
+						return fmt.Errorf("exchange: объект очереди %s/%s недоступен: %w", ent.Name, id, err)
+					}
+				}
+				obj := PackageObject{
+					Type:      ch.ObjectType,
+					ID:        ch.ObjectID,
+					Version:   ch.Version,
+					Deletion:  ch.Deletion,
+					Posted:    exists && ent.Kind == metadata.KindDocument && toBool(row["posted"]),
+					ChangedAt: ch.ChangedAt,
+					Fields:    canonicalHeader(ent, row),
+				}
+				if !exists {
+					obj.Tombstone = true
+					obj.Fields = emptyCanonicalHeader(ent)
+				}
+				if len(ent.TableParts) > 0 {
+					obj.TableParts = make(map[string][]map[string]any, len(ent.TableParts))
+				}
+				for _, tp := range ent.TableParts {
+					if obj.Tombstone {
+						obj.TableParts[tp.Name] = []map[string]any{}
+						continue
+					}
+					rows, err := store.GetTablePartRows(ctx, ent.Name, tp.Name, id, tp)
+					if err != nil {
+						return err
+					}
+					canon := make([]map[string]any, 0, len(rows))
+					for _, r := range rows {
+						canon = append(canon, canonicalRow(tp.Fields, r))
+					}
+					obj.TableParts[tp.Name] = canon
+				}
+				pkg.Objects = append(pkg.Objects, obj)
+				included = append(included, ch)
 			}
-			pkg.Objects = append(pkg.Objects, obj)
-			included = append(included, ch)
 		}
 		if err := store.MarkExchangeChangesSent(ctx, included, msgNo); err != nil {
 			return err
@@ -229,6 +298,7 @@ func ParsePackage(data []byte) (*Package, error) {
 	seen := make(map[string]struct{}, len(pkg.Objects))
 	for i := range pkg.Objects {
 		obj := &pkg.Objects[i]
+		obj.Kind = strings.ToLower(strings.TrimSpace(obj.Kind))
 		obj.Type = strings.TrimSpace(obj.Type)
 		if obj.Type == "" || obj.Version <= 0 || obj.ChangedAt <= 0 {
 			return nil, fmt.Errorf("exchange: объект %d имеет неверные type/version/changed_at", i)
@@ -236,12 +306,34 @@ func ParsePackage(data []byte) (*Package, error) {
 		if obj.Tombstone && !obj.Deletion {
 			return nil, fmt.Errorf("exchange: tombstone объекта %d должен иметь deletion=true", i)
 		}
-		id, err := uuid.Parse(obj.ID)
-		if err != nil {
-			return nil, fmt.Errorf("exchange: объект %d: неверный id: %w", i, err)
+		switch obj.Kind {
+		case storage.ExchangeKindConstant:
+			if obj.ID != "" || obj.Deletion || obj.Tombstone || obj.Posted {
+				return nil, fmt.Errorf("exchange: константа %d имеет несовместимые системные поля", i)
+			}
+		case storage.ExchangeKindInfoReg:
+			if obj.ID == "" || obj.Tombstone || obj.Posted {
+				return nil, fmt.Errorf("exchange: запись регистра сведений %d имеет несовместимые системные поля", i)
+			}
+			dims, err := decodeInfoRegKey(obj.ID)
+			if err != nil {
+				return nil, fmt.Errorf("exchange: запись регистра сведений %d: неверный ключ: %w", i, err)
+			}
+			canonical, err := json.Marshal(dims)
+			if err != nil {
+				return nil, fmt.Errorf("exchange: запись регистра сведений %d: неверный ключ: %w", i, err)
+			}
+			obj.ID = string(canonical)
+		case "":
+			id, err := uuid.Parse(obj.ID)
+			if err != nil {
+				return nil, fmt.Errorf("exchange: объект %d: неверный id: %w", i, err)
+			}
+			obj.ID = id.String()
+		default:
+			return nil, fmt.Errorf("exchange: объект %d имеет неизвестный kind %q", i, obj.Kind)
 		}
-		obj.ID = id.String()
-		key := strings.ToLower(obj.Type) + "/" + obj.ID
+		key := obj.Kind + "/" + strings.ToLower(obj.Type) + "/" + obj.ID
 		if _, ok := seen[key]; ok {
 			return nil, fmt.Errorf("exchange: объект %s продублирован в пакете", key)
 		}
@@ -253,7 +345,7 @@ func ParsePackage(data []byte) (*Package, error) {
 func validateObjectShape(ent *metadata.Entity, obj PackageObject) error {
 	wantFields := make(map[string]struct{}, len(ent.Fields)+2)
 	for _, f := range ent.Fields {
-		wantFields[strings.ToLower(f.Name)] = struct{}{}
+		wantFields[f.Name] = struct{}{}
 	}
 	if ent.Hierarchical {
 		wantFields["parent_id"] = struct{}{}
@@ -263,7 +355,7 @@ func validateObjectShape(ent *metadata.Entity, obj PackageObject) error {
 		return fmt.Errorf("exchange: объект %s/%s содержит неполную или несовместимую шапку", ent.Name, obj.ID)
 	}
 	for name := range obj.Fields {
-		if _, ok := wantFields[strings.ToLower(name)]; !ok {
+		if _, ok := wantFields[name]; !ok {
 			return fmt.Errorf("exchange: объект %s/%s содержит неизвестное поле %q", ent.Name, obj.ID, name)
 		}
 	}
@@ -272,23 +364,23 @@ func validateObjectShape(ent *metadata.Entity, obj PackageObject) error {
 	}
 	parts := make(map[string]metadata.TablePart, len(ent.TableParts))
 	for _, tp := range ent.TableParts {
-		parts[strings.ToLower(tp.Name)] = tp
+		parts[tp.Name] = tp
 	}
 	for name, rows := range obj.TableParts {
-		tp, ok := parts[strings.ToLower(name)]
+		tp, ok := parts[name]
 		if !ok {
 			return fmt.Errorf("exchange: объект %s/%s содержит неизвестную табличную часть %q", ent.Name, obj.ID, name)
 		}
 		want := make(map[string]struct{}, len(tp.Fields))
 		for _, f := range tp.Fields {
-			want[strings.ToLower(f.Name)] = struct{}{}
+			want[f.Name] = struct{}{}
 		}
 		for rowNo, row := range rows {
 			if len(row) != len(want) {
 				return fmt.Errorf("exchange: %s/%s.%s[%d] имеет несовместимый набор полей", ent.Name, obj.ID, tp.Name, rowNo)
 			}
 			for field := range row {
-				if _, ok := want[strings.ToLower(field)]; !ok {
+				if _, ok := want[field]; !ok {
 					return fmt.Errorf("exchange: %s/%s.%s[%d] содержит неизвестное поле %q", ent.Name, obj.ID, tp.Name, rowNo, field)
 				}
 			}
@@ -298,17 +390,83 @@ func validateObjectShape(ent *metadata.Entity, obj PackageObject) error {
 }
 
 func validatePackageObjects(pkg *Package, resolver EntityResolver, plan *metadata.ExchangePlan) error {
-	for _, obj := range pkg.Objects {
-		ent := resolver.GetEntity(obj.Type)
-		if ent == nil {
-			return fmt.Errorf("exchange: сущность %q неизвестна приёмнику; пакет отклонён без подтверждения", obj.Type)
+	for i := range pkg.Objects {
+		obj := &pkg.Objects[i]
+		switch obj.Kind {
+		case storage.ExchangeKindConstant:
+			constant := resolver.GetConstantMeta(obj.Type)
+			if constant == nil {
+				return fmt.Errorf("exchange: константа %q неизвестна приёмнику", obj.Type)
+			}
+			if !plan.IncludesConstant(constant.Name) {
+				return fmt.Errorf("exchange: константа %q не входит в состав плана %q", obj.Type, plan.Name)
+			}
+			obj.Type = constant.Name
+			if len(obj.Fields) != 1 {
+				return fmt.Errorf("exchange: константа %q содержит несовместимый набор полей", obj.Type)
+			}
+			if _, ok := obj.Fields["value"]; !ok {
+				return fmt.Errorf("exchange: константа %q не содержит поле value", obj.Type)
+			}
+		case storage.ExchangeKindInfoReg:
+			ir := resolver.GetInfoRegister(obj.Type)
+			if ir == nil {
+				return fmt.Errorf("exchange: регистр сведений %q неизвестен приёмнику", obj.Type)
+			}
+			if ir.Periodic || !plan.IncludesInfoRegister(ir.Name) {
+				return fmt.Errorf("exchange: регистр сведений %q не поддержан или не входит в состав плана %q", obj.Type, plan.Name)
+			}
+			obj.Type = ir.Name
+			if err := validateInfoRegObjectShape(ir, *obj); err != nil {
+				return err
+			}
+		default:
+			ent := resolver.GetEntity(obj.Type)
+			if ent == nil {
+				return fmt.Errorf("exchange: сущность %q неизвестна приёмнику; пакет отклонён без подтверждения", obj.Type)
+			}
+			if !plan.Includes(ent) {
+				return fmt.Errorf("exchange: сущность %q не входит в состав плана %q", obj.Type, plan.Name)
+			}
+			if obj.Posted && (ent.Kind != metadata.KindDocument || !ent.Posting || obj.Tombstone) {
+				return fmt.Errorf("exchange: объект %s/%s имеет несовместимый признак posted", ent.Name, obj.ID)
+			}
+			obj.Type = ent.Name
+			if err := validateObjectShape(ent, *obj); err != nil {
+				return err
+			}
 		}
-		if !plan.Includes(ent) {
-			return fmt.Errorf("exchange: сущность %q не входит в состав плана %q", obj.Type, plan.Name)
+	}
+	return nil
+}
+
+func validateInfoRegObjectShape(ir *metadata.InfoRegister, obj PackageObject) error {
+	want := make(map[string]struct{}, len(ir.Dimensions)+len(ir.Resources))
+	dims := make(map[string]any, len(ir.Dimensions))
+	for _, field := range ir.Dimensions {
+		want[field.Name] = struct{}{}
+		value, ok := obj.Fields[field.Name]
+		if !ok {
+			return fmt.Errorf("exchange: запись регистра сведений %s/%s не содержит измерение %q", ir.Name, obj.ID, field.Name)
 		}
-		if err := validateObjectShape(ent, obj); err != nil {
-			return err
+		dims[field.Name] = value
+	}
+	if !obj.Deletion {
+		for _, field := range ir.Resources {
+			want[field.Name] = struct{}{}
 		}
+	}
+	if len(obj.Fields) != len(want) {
+		return fmt.Errorf("exchange: запись регистра сведений %s/%s содержит несовместимый набор полей", ir.Name, obj.ID)
+	}
+	for name := range obj.Fields {
+		if _, ok := want[name]; !ok {
+			return fmt.Errorf("exchange: запись регистра сведений %s/%s содержит неизвестное поле %q", ir.Name, obj.ID, name)
+		}
+	}
+	key, err := json.Marshal(dims)
+	if err != nil || string(key) != obj.ID {
+		return fmt.Errorf("exchange: ключ записи регистра сведений %s не совпадает с измерениями", ir.Name)
 	}
 	return nil
 }
@@ -330,7 +488,7 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 	if plan == nil {
 		return LoadResult{}, fmt.Errorf("exchange: план %q не найден на приёмнике", pkg.Plan)
 	}
-	if err := validatePairPlan(plan); err != nil {
+	if err := validateExchangePlan(plan); err != nil {
 		return LoadResult{}, err
 	}
 	if !strings.EqualFold(pkg.Plan, plan.Name) {
@@ -340,6 +498,7 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 		return LoadResult{}, err
 	}
 	var res LoadResult
+	var toRepost []PackageObject // проведённые документы к перепроведению (после коммита)
 	err = store.WithTx(ctx, func(ctx context.Context) error {
 		thisNode, err := store.GetExchangeThisNode(ctx, plan.Name)
 		if err != nil {
@@ -368,67 +527,85 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 		if pkg.AckNo > peer.SentNo {
 			return fmt.Errorf("exchange: ack_no=%d больше последнего отправленного сообщения %d узлу %q", pkg.AckNo, peer.SentNo, fromNode)
 		}
-		// Сначала применяем подтверждение. Подтверждённая отправителем строка
-		// очереди уже не является встречной правкой и не должна участвовать в
-		// разрешении конфликта (особенно при by_node_priority).
+		// Подтверждённая отправителем строка очереди уже не является встречной
+		// правкой и не должна участвовать в разрешении конфликта.
 		if pkg.AckNo > 0 {
 			if _, err := store.AckExchangeChanges(ctx, plan.Name, fromNode, pkg.AckNo); err != nil {
 				return err
 			}
 		}
+		toRepost = toRepost[:0]
 		if pkg.MessageNo <= peer.RecvNo {
+			// Данные повторного сообщения уже применены. Единственная операция,
+			// которую надо безопасно повторить, — перепроведение после прошлой ошибки.
 			res.Skipped = len(pkg.Objects)
-			return nil
-		}
-		for _, obj := range pkg.Objects {
-			ent := resolver.GetEntity(obj.Type)
-			id, _ := uuid.Parse(obj.ID) // ParsePackage already canonicalised it.
-			// Встречная правка: приёмник менял тот же объект и ещё не отправил
-			// изменение источнику → конфликт, разрешаемый правилом плана.
-			objectID := id.String()
-			local, hasLocal, err := store.GetExchangeChange(ctx, plan.Name, ent.Name, objectID, fromNode)
-			if err != nil {
-				return err
-			}
-			if hasLocal {
-				res.Conflicts++
-				win, err := resolveConflict(ctx, store, plan, thisNode, fromNode, ent, id, obj, local.ChangedAt, opts.Hook)
+			for _, obj := range pkg.Objects {
+				if obj.Kind != "" || !plan.Repost || opts.Repost == nil || !obj.Posted || obj.Deletion {
+					continue
+				}
+				need, err := needsRepost(ctx, store, resolver, obj)
 				if err != nil {
 					return err
 				}
-				if !win {
-					res.Skipped++ // локальное изменение победило — не применяем
-					continue
+				if need {
+					toRepost = append(toRepost, obj)
 				}
-				if err := applyObject(ctx, store, ent, id, obj); err != nil {
-					return err
-				}
-				if err := store.DeleteExchangeChange(ctx, plan.Name, ent.Name, objectID, fromNode); err != nil {
-					return err
-				}
-				if obj.Deletion {
-					res.Deleted++
-				} else {
-					res.Applied++
-				}
-				continue
 			}
-			// Нет встречной правки — идемпотентность по версии.
-			localVer, exists, err := store.EntityVersionExists(ctx, ent.Name, id)
+			return nil
+		}
+
+		// Транзит хаб→спицы (план 86, фаза 2): если этот узел — хаб, применённые
+		// изменения ретранслируются остальным спицам (кроме источника). Пусто, если
+		// узел не хаб или топология плоская — тогда обмен работает как раньше.
+		transit := plan.TransitTargets(thisNode, fromNode)
+		var applied []PackageObject
+		for _, obj := range pkg.Objects {
+			var objApplied bool
+			var entityCurrent bool
+			switch obj.Kind {
+			case storage.ExchangeKindConstant:
+				objApplied, err = applyConstant(ctx, store, plan, thisNode, fromNode, obj, &res)
+			case storage.ExchangeKindInfoReg:
+				objApplied, err = applyInfoReg(ctx, store, resolver, plan, thisNode, fromNode, obj, &res)
+			default:
+				objApplied, entityCurrent, err = applyEntity(ctx, store, resolver, plan, thisNode, fromNode, obj, &res, opts)
+			}
 			if err != nil {
 				return err
 			}
-			if exists && obj.Version <= localVer {
-				res.Skipped++
-				continue
+			if objApplied && len(transit) > 0 {
+				applied = append(applied, obj)
 			}
-			if err := applyObject(ctx, store, ent, id, obj); err != nil {
-				return err
+			// Перепроведение (план 86, фаза 2): применённый документ, проведённый на
+			// источнике, при включённом repost и доступном обработчике — в очередь
+			// на перепроведение ПОСЛЕ коммита (entityservice открывает свою транзакцию).
+			// Равная локальная версия тоже считается кандидатом: это повтор пакета
+			// после ошибки перепроведения, когда сами данные уже были закоммичены.
+			if entityCurrent && plan.Repost && opts.Repost != nil && obj.Posted && !obj.Deletion {
+				need, nerr := needsRepost(ctx, store, resolver, obj)
+				if nerr != nil {
+					return nerr
+				}
+				if need {
+					toRepost = append(toRepost, obj)
+				}
 			}
-			if obj.Deletion {
-				res.Deleted++
-			} else {
-				res.Applied++
+		}
+		// Ретрансляция применённых изменений спицам (в той же транзакции).
+		for _, obj := range applied {
+			for _, target := range transit {
+				if err := store.RegisterExchangeChange(ctx, storage.ExchangeChange{
+					Plan:       plan.Name,
+					ObjectType: obj.Type,
+					ObjectID:   obj.ID,
+					NodeCode:   target,
+					Kind:       obj.Kind,
+					Version:    obj.Version,
+					Deletion:   obj.Deletion,
+					ChangedAt:  obj.ChangedAt,
+				}); err != nil {
+					return err
+				}
 			}
 		}
 		// Запоминаем номер принятого сообщения от узла-источника.
@@ -440,12 +617,112 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 	if err != nil {
 		return LoadResult{}, err
 	}
+	// Перепроведение документов — ВНЕ транзакции загрузки: entityservice.Repost
+	// открывает собственную транзакцию (storage.WithTx не вложенная), запускает
+	// ОбработкаПроведения и пишет движения в регистры приёмника. Данные уже
+	// закоммичены, поэтому ошибка перепроведения не откатывает загрузку — сообщаем
+	// её вызывающему, документ останется непроведённым до следующей синхронизации.
+	for _, obj := range toRepost {
+		id, perr := uuid.Parse(obj.ID)
+		if perr != nil {
+			continue
+		}
+		if rerr := opts.Repost(ctx, obj.Type, id); rerr != nil {
+			return res, fmt.Errorf("exchange: перепроведение %s %s: %w", obj.Type, obj.ID, rerr)
+		}
+		res.Reposted++
+	}
 	return res, nil
 }
 
 // applyObject записывает один объект пакета: шапку (через db.Upsert — тот же
 // путь коэрции значений, что и обычное сохранение), затем принудительно ставит
 // системные колонки (точная версия/пометка/непроведён), затем табличные части.
+// applyEntity применяет объект-сущность (справочник/документ) из пакета. Возвращает
+// true, если объект был записан (создан/обновлён/помечен на удаление) — только такие
+// изменения хаб ретранслирует спицам.
+func applyEntity(ctx context.Context, store *storage.DB, resolver EntityResolver, plan *metadata.ExchangePlan, thisNode, fromNode string, obj PackageObject, res *LoadResult, opts ApplyOptions) (applied bool, current bool, err error) {
+	ent := resolver.GetEntity(obj.Type)
+	if ent == nil {
+		res.Skipped++ // сущность неизвестна приёмнику
+		return false, false, nil
+	}
+	id, err := uuid.Parse(obj.ID)
+	if err != nil {
+		res.Skipped++
+		return false, false, nil
+	}
+	// Встречная правка: приёмник менял тот же объект и ещё не отправил изменение
+	// источнику → конфликт, разрешаемый правилом плана.
+	local, hasLocal, err := store.GetExchangeChange(ctx, plan.Name, obj.Type, obj.ID, fromNode)
+	if err != nil {
+		return false, false, err
+	}
+	if hasLocal {
+		res.Conflicts++
+		win, err := resolveConflict(ctx, store, plan, thisNode, fromNode, ent, id, obj, local.ChangedAt, opts.Hook)
+		if err != nil {
+			return false, false, err
+		}
+		if !win {
+			res.Skipped++ // локальное изменение победило — не применяем
+			return false, false, nil
+		}
+	} else {
+		// Нет встречной правки — идемпотентность по версии.
+		localVer, exists, err := store.EntityVersionExists(ctx, ent.Name, id)
+		if err != nil {
+			return false, false, err
+		}
+		if exists && obj.Version <= localVer {
+			res.Skipped++
+			// Равная версия может быть повтором после ошибки перепроведения.
+			// Более старая версия никогда не должна менять состояние документа.
+			return false, obj.Version == localVer, nil
+		}
+	}
+	if err := applyObject(ctx, store, ent, id, obj); err != nil {
+		return false, false, err
+	}
+	if hasLocal {
+		if err := store.DeleteExchangeChange(ctx, plan.Name, ent.Name, id.String(), fromNode); err != nil {
+			return false, false, err
+		}
+	}
+	if obj.Deletion {
+		res.Deleted++
+	} else {
+		res.Applied++
+	}
+	return true, true, nil
+}
+
+// needsRepost проверяет, что текущая версия пакета относится к проводимому
+// документу, который на приёмнике ещё не проведён. Проверка делает повтор после
+// ошибки безопасным и не перепроводит уже успешно обработанный документ.
+func needsRepost(ctx context.Context, store *storage.DB, resolver EntityResolver, obj PackageObject) (bool, error) {
+	ent := resolver.GetEntity(obj.Type)
+	if ent == nil || ent.Kind != metadata.KindDocument || !ent.Posting {
+		return false, nil
+	}
+	id, err := uuid.Parse(obj.ID)
+	if err != nil {
+		return false, nil
+	}
+	version, exists, err := store.EntityVersionExists(ctx, ent.Name, id)
+	if err != nil {
+		return false, err
+	}
+	if !exists || version != obj.Version {
+		return false, nil
+	}
+	row, err := store.GetByID(ctx, ent.Name, id, ent)
+	if err != nil {
+		return false, err
+	}
+	return !toBool(row["posted"]), nil
+}
+
 func applyObject(ctx context.Context, store *storage.DB, ent *metadata.Entity, id uuid.UUID, obj PackageObject) error {
 	_, exists, err := store.EntityVersionExists(ctx, ent.Name, id)
 	if err != nil {

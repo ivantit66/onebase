@@ -60,7 +60,9 @@ go build -o onebase.exe ./cmd/onebase
    ```
 
 4. Проверить в филиале: `./onebase.exe run --project examples/trade --sqlite ./fil01.db --port 8081`
-   → «Гвоздь 4×100» на месте. Документ, если бы переносился, пришёл бы **непроведённым**.
+   → «Гвоздь 4×100» на месте. Документ по умолчанию приходит **непроведённым**; с
+   `repost: true` в плане онлайн-приёмник (сервер) перепроводит его — движения
+   ложатся в регистры филиала. Файловая CLI-загрузка перепроведение не выполняет.
 
 ## 2. Идемпотентность
 
@@ -114,8 +116,9 @@ go build -o onebase.exe ./cmd/onebase
    ```bash
    export OB_EXCHANGE_CENTER_URL=http://127.0.0.1:8080
    export OB_EXCHANGE_FIL01_URL=http://127.0.0.1:8081
-   ./onebase.exe exchange init --project examples/trade --sqlite ./center.db --plan ФилиалыЦентр --node center --token S3CRET
-   ./onebase.exe exchange init --project examples/trade --sqlite ./fil01.db  --plan ФилиалыЦентр --node fil01  --token S3CRET
+   export ONEBASE_EXCHANGE_TOKEN=S3CRET
+   ./onebase.exe exchange init --project examples/trade --sqlite ./center.db --plan ФилиалыЦентр --node center
+   ./onebase.exe exchange init --project examples/trade --sqlite ./fil01.db  --plan ФилиалыЦентр --node fil01
    ```
 2. Поднять обе базы серверами (в отдельных терминалах):
    ```bash
@@ -150,11 +153,13 @@ go build -o onebase.exe ./cmd/onebase
 - Изменения регистрируются на всех путях записи: UI/REST (`entityservice.Save`),
   прямые записи из DSL (`Справочники.X.Создать().Записать()`, `Документы.X.Записать()/.Провести()`)
   и пометка на удаление.
-- Правило `hook` (`ПриКонфликтеОбмена` в общем модуле) работает на путях приёма
-  push и CLI load/sync; в DSL-`ЗагрузитьПакет` — откат к `by_time`.
+- Правило `hook` (`ПриКонфликтеОбмена` в общем модуле) работает на всех путях
+  приёма: онлайн push, CLI load/sync и DSL-`ЗагрузитьПакет` (обработка/задание).
 - Монитор обмена — в интерфейсе администратора (Система → **Обмен данными**,
   `/ui/admin/exchange`): очередь и счётчики по узлам, кнопка «Синхронизировать».
-- Хаб-транзит и перенос движений — фаза 2.
+- Хаб-транзит (топология `role: hub|spoke`), константы и непериодические регистры
+  сведений в составе, перепроведение документов на онлайн-приёмнике (`repost: true`)
+  — фаза 2 (готово).
 
 Автоматическая проверка сквозного цикла — `TestExchangeCLIRoundTrip`
 (`internal/cli/exchange_test.go`): две базы, dump→load, идемпотентный повтор.

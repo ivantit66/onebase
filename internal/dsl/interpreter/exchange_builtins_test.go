@@ -36,6 +36,10 @@ func (f fakeExchangeReg) GetEntity(name string) *metadata.Entity {
 	return nil
 }
 
+func (f fakeExchangeReg) GetInfoRegister(string) *metadata.InfoRegister { return nil }
+
+func (f fakeExchangeReg) GetConstantMeta(string) *metadata.Constant { return nil }
+
 func exchDB(t *testing.T, ent *metadata.Entity) (*storage.DB, context.Context) {
 	t.Helper()
 	ctx := context.Background()

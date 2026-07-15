@@ -18,19 +18,40 @@ import (
 	"github.com/ivantit66/onebase/internal/storage"
 )
 
-// validatePairPlan deliberately limits the phase-1 protocol to a pair of
-// nodes. A scalar object version cannot make concurrent edits converge through
-// a third node; accepting larger topologies would silently corrupt replicas.
-func validatePairPlan(plan *metadata.ExchangePlan) error {
+// validateExchangePlan допускает прямой обмен пары баз и многоузловую звезду с
+// единственным хабом. Плоский обмен трёх и более узлов со скалярной версией
+// объекта небезопасен: конкурентные изменения не имеют единого координатора.
+func validateExchangePlan(plan *metadata.ExchangePlan) error {
 	if plan == nil {
 		return fmt.Errorf("exchange: plan is nil")
 	}
-	if len(plan.Nodes) != 2 {
-		return fmt.Errorf("exchange: план %q должен содержать ровно два узла; многоузловой транзит этим форматом не поддерживается", plan.Name)
+	if len(plan.Nodes) < 2 {
+		return fmt.Errorf("exchange: план %q должен содержать минимум два узла", plan.Name)
 	}
-	if strings.TrimSpace(plan.Nodes[0].Code) == "" || strings.TrimSpace(plan.Nodes[1].Code) == "" ||
-		strings.EqualFold(plan.Nodes[0].Code, plan.Nodes[1].Code) {
-		return fmt.Errorf("exchange: план %q содержит пустые или повторяющиеся коды узлов", plan.Name)
+	seen := make(map[string]struct{}, len(plan.Nodes))
+	hubs := 0
+	for _, node := range plan.Nodes {
+		code := strings.ToLower(strings.TrimSpace(node.Code))
+		if code == "" {
+			return fmt.Errorf("exchange: план %q содержит узел без кода", plan.Name)
+		}
+		if _, ok := seen[code]; ok {
+			return fmt.Errorf("exchange: план %q содержит повторяющийся код узла %q", plan.Name, node.Code)
+		}
+		seen[code] = struct{}{}
+		switch node.Role {
+		case "", metadata.RoleSpoke:
+		case metadata.RoleHub:
+			hubs++
+		default:
+			return fmt.Errorf("exchange: план %q содержит неизвестную роль узла %q", plan.Name, node.Role)
+		}
+	}
+	if hubs > 1 {
+		return fmt.Errorf("exchange: план %q должен содержать не более одного хаба", plan.Name)
+	}
+	if len(plan.Nodes) > 2 && hubs != 1 {
+		return fmt.Errorf("exchange: план %q с тремя и более узлами должен использовать топологию с одним хабом", plan.Name)
 	}
 	return nil
 }
@@ -70,7 +91,7 @@ func registerChange(ctx context.Context, store *storage.DB, plans []*metadata.Ex
 		if !plan.Includes(entity) {
 			continue
 		}
-		if err := validatePairPlan(plan); err != nil {
+		if err := validateExchangePlan(plan); err != nil {
 			return err
 		}
 		thisNode, err := store.GetExchangeThisNode(ctx, plan.Name)
@@ -80,6 +101,11 @@ func registerChange(ctx context.Context, store *storage.DB, plans []*metadata.Ex
 		if thisNode == "" {
 			continue // база не участвует в этом плане обмена
 		}
+		thisNodeDef := plan.Node(thisNode)
+		if thisNodeDef == nil {
+			return fmt.Errorf("exchange: текущий узел %q не описан в плане %q", thisNode, plan.Name)
+		}
+		thisNode = thisNodeDef.Code
 		if !haveVersion {
 			version, err = store.EntityVersion(ctx, entity.Name, id)
 			if err != nil {
@@ -90,17 +116,64 @@ func registerChange(ctx context.Context, store *storage.DB, plans []*metadata.Ex
 			}
 			haveVersion = true
 		}
-		for _, node := range plan.Nodes {
-			if strings.EqualFold(node.Code, thisNode) {
-				continue // источнику изменения регистрировать не нужно
-			}
+		// Кому регистрировать — по топологии плана (плоская: всем; звезда: спица →
+		// только хабу, хаб → спицам). Источник исключён внутри RegistrationTargets.
+		for _, target := range plan.RegistrationTargets(thisNode) {
 			if err := store.RegisterExchangeChange(ctx, storage.ExchangeChange{
 				Plan:       plan.Name,
 				ObjectType: entity.Name,
 				ObjectID:   id.String(),
-				NodeCode:   node.Code,
+				NodeCode:   target,
 				Version:    version,
 				Deletion:   deletion,
+				ChangedAt:  changedAt,
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// RegisterConstantOnSave регистрирует изменение константы во всех планах обмена,
+// чей состав включает её (Константа.X). Строка очереди ставится всем узлам плана,
+// кроме текущего. Вызывается в транзакции записи константы.
+//
+// У констант нет _version: идемпотентность и by_time на приёмнике опираются на
+// changed_at (момент записи) и «водяной знак» _exchange_applied. Version в строке
+// очереди тоже несёт changed_at — только для единообразия с сущностным путём.
+func RegisterConstantOnSave(ctx context.Context, store *storage.DB, plans []*metadata.ExchangePlan, name string) error {
+	if store == nil || name == "" || len(plans) == 0 {
+		return nil
+	}
+	changedAt := time.Now().UnixMilli()
+	for _, plan := range plans {
+		if !plan.IncludesConstant(name) {
+			continue
+		}
+		if err := validateExchangePlan(plan); err != nil {
+			return err
+		}
+		thisNode, err := store.GetExchangeThisNode(ctx, plan.Name)
+		if err != nil {
+			return err
+		}
+		if thisNode == "" {
+			continue
+		}
+		thisNodeDef := plan.Node(thisNode)
+		if thisNodeDef == nil {
+			return fmt.Errorf("exchange: текущий узел %q не описан в плане %q", thisNode, plan.Name)
+		}
+		thisNode = thisNodeDef.Code
+		for _, target := range plan.RegistrationTargets(thisNode) {
+			if err := store.RegisterExchangeChange(ctx, storage.ExchangeChange{
+				Plan:       plan.Name,
+				ObjectType: name,
+				ObjectID:   "", // единственное глобальное значение
+				NodeCode:   target,
+				Kind:       storage.ExchangeKindConstant,
+				Version:    changedAt,
 				ChangedAt:  changedAt,
 			}); err != nil {
 				return err

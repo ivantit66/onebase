@@ -28,6 +28,41 @@ func (f fakeResolver) GetEntity(name string) *metadata.Entity {
 	return nil
 }
 
+func (f fakeResolver) GetInfoRegister(string) *metadata.InfoRegister { return nil }
+
+func (f fakeResolver) GetConstantMeta(name string) *metadata.Constant {
+	if strings.EqualFold(name, "СтавкаНДС") {
+		return &metadata.Constant{Name: "СтавкаНДС", Type: metadata.FieldTypeString}
+	}
+	return nil
+}
+
+// fakeResolverIR — резолвер с регистрами сведений (для тестов инфо-регистров).
+type fakeResolverIR struct {
+	ents     map[string]*metadata.Entity
+	inforegs map[string]*metadata.InfoRegister
+}
+
+func (f fakeResolverIR) GetEntity(name string) *metadata.Entity {
+	for k, e := range f.ents {
+		if strings.EqualFold(k, name) {
+			return e
+		}
+	}
+	return nil
+}
+
+func (f fakeResolverIR) GetInfoRegister(name string) *metadata.InfoRegister {
+	for k, ir := range f.inforegs {
+		if strings.EqualFold(k, name) {
+			return ir
+		}
+	}
+	return nil
+}
+
+func (f fakeResolverIR) GetConstantMeta(string) *metadata.Constant { return nil }
+
 func newBase(t *testing.T, entities ...*metadata.Entity) (*storage.DB, context.Context) {
 	t.Helper()
 	ctx := context.Background()

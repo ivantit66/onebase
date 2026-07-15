@@ -8,6 +8,7 @@ package ui
 //	GET  /exchange/{plan}/pull?to=X  — собрать и отдать пакет для узла X.
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -16,12 +17,26 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/ivantit66/onebase/internal/exchange"
 	"github.com/ivantit66/onebase/internal/metadata"
 )
 
 const maxExchangeBody = 64 << 20 // 64 MiB
+
+// exchangeApplyOptions собирает параметры загрузки пакета для Go-путей приёма
+// (онлайн push и монитор): обработчик правила конфликта hook и перепроведение
+// проведённых документов (repost) поверх entityservice. entitySvc есть у сервера,
+// поэтому перепроведение доступно на онлайн-приёмнике (в отличие от headless CLI).
+func (s *Server) exchangeApplyOptions() exchange.ApplyOptions {
+	return exchange.ApplyOptions{
+		Hook: NewExchangeHook(s.store, s.reg, s.interp),
+		Repost: func(ctx context.Context, entityType string, id uuid.UUID) error {
+			return s.entitySvc.Repost(ctx, entityType, id)
+		},
+	}
+}
 
 // MountExchange монтирует эндпоинты онлайн-обмена на верхнеуровневый роутер.
 func (s *Server) MountExchange(r chi.Router) {
@@ -107,8 +122,7 @@ func (s *Server) exchangePush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "пакет не принадлежит настроенной паре узлов", http.StatusForbidden)
 		return
 	}
-	res, err := exchange.ApplyPackage(r.Context(), s.store, s.reg, plan, body,
-		exchange.ApplyOptions{Hook: NewExchangeHook(s.store, s.reg, s.interp)})
+	res, err := exchange.ApplyPackage(r.Context(), s.store, s.reg, plan, body, s.exchangeApplyOptions())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
