@@ -8,7 +8,6 @@ package exchange
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -54,15 +53,14 @@ func RegisterOnSave(ctx context.Context, store *storage.DB, plans []*metadata.Ex
 			}
 			haveVersion = true
 		}
-		for _, node := range plan.Nodes {
-			if strings.EqualFold(node.Code, thisNode) {
-				continue // источнику изменения регистрировать не нужно
-			}
+		// Кому регистрировать — по топологии плана (плоская: всем; звезда: спица →
+		// только хабу, хаб → спицам). Источник исключён внутри RegistrationTargets.
+		for _, target := range plan.RegistrationTargets(thisNode) {
 			if err := store.RegisterExchangeChange(ctx, storage.ExchangeChange{
 				Plan:       plan.Name,
 				ObjectType: entity.Name,
 				ObjectID:   id.String(),
-				NodeCode:   node.Code,
+				NodeCode:   target,
 				Version:    version,
 				Deletion:   deletion,
 				ChangedAt:  changedAt,
@@ -97,15 +95,12 @@ func RegisterConstantOnSave(ctx context.Context, store *storage.DB, plans []*met
 		if thisNode == "" {
 			continue
 		}
-		for _, node := range plan.Nodes {
-			if strings.EqualFold(node.Code, thisNode) {
-				continue
-			}
+		for _, target := range plan.RegistrationTargets(thisNode) {
 			if err := store.RegisterExchangeChange(ctx, storage.ExchangeChange{
 				Plan:       plan.Name,
 				ObjectType: name,
 				ObjectID:   "", // единственное глобальное значение
-				NodeCode:   node.Code,
+				NodeCode:   target,
 				Kind:       storage.ExchangeKindConstant,
 				Version:    changedAt,
 				ChangedAt:  changedAt,

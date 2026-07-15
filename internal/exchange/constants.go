@@ -13,8 +13,9 @@ import (
 	"github.com/ivantit66/onebase/internal/storage"
 )
 
-// applyConstant идемпотентно применяет константу из пакета.
-func applyConstant(ctx context.Context, store *storage.DB, plan *metadata.ExchangePlan, thisNode, fromNode string, obj PackageObject, res *LoadResult) error {
+// applyConstant идемпотентно применяет константу из пакета. Возвращает true, если
+// значение было записано (для транзитной ретрансляции хабом).
+func applyConstant(ctx context.Context, store *storage.DB, plan *metadata.ExchangePlan, thisNode, fromNode string, obj PackageObject, res *LoadResult) (bool, error) {
 	name := obj.Type
 	var value any
 	if obj.Fields != nil {
@@ -24,23 +25,23 @@ func applyConstant(ctx context.Context, store *storage.DB, plan *metadata.Exchan
 	// Встречная правка: приёмник менял ту же константу и ещё не отправил источнику.
 	local, hasLocal, err := store.GetExchangeChange(ctx, plan.Name, name, "", fromNode)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if hasLocal {
 		res.Conflicts++
 		if !resolveScalarConflict(plan, thisNode, fromNode, obj.ChangedAt, local.ChangedAt) {
 			res.Skipped++ // локальное изменение победило
-			return nil
+			return false, nil
 		}
-		return applyConstantValue(ctx, store, plan.Name, name, value, obj.ChangedAt, res)
+		return true, applyConstantValue(ctx, store, plan.Name, name, value, obj.ChangedAt, res)
 	}
 
 	// Нет встречной правки — идемпотентность по «водяному знаку».
 	if at, ok := store.ExchangeAppliedAt(ctx, plan.Name, name, ""); ok && obj.ChangedAt <= at {
 		res.Skipped++
-		return nil
+		return false, nil
 	}
-	return applyConstantValue(ctx, store, plan.Name, name, value, obj.ChangedAt, res)
+	return true, applyConstantValue(ctx, store, plan.Name, name, value, obj.ChangedAt, res)
 }
 
 func applyConstantValue(ctx context.Context, store *storage.DB, plan, name string, value any, changedAt int64, res *LoadResult) error {

@@ -238,68 +238,43 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 		if err != nil {
 			return err
 		}
+		// Транзит хаб→спицы (план 86, фаза 2): если этот узел — хаб, применённые
+		// изменения ретранслируются остальным спицам (кроме источника). Пусто, если
+		// узел не хаб или топология плоская — тогда обмен работает как раньше.
+		transit := plan.TransitTargets(thisNode, pkg.FromNode)
+		var applied []PackageObject
 		for _, obj := range pkg.Objects {
-			if obj.Kind == storage.ExchangeKindConstant {
-				if err := applyConstant(ctx, store, plan, thisNode, pkg.FromNode, obj, &res); err != nil {
-					return err
-				}
-				continue
+			var objApplied bool
+			switch obj.Kind {
+			case storage.ExchangeKindConstant:
+				objApplied, err = applyConstant(ctx, store, plan, thisNode, pkg.FromNode, obj, &res)
+			case storage.ExchangeKindInfoReg:
+				objApplied, err = applyInfoReg(ctx, store, resolver, plan, thisNode, pkg.FromNode, obj, &res)
+			default:
+				objApplied, err = applyEntity(ctx, store, resolver, plan, thisNode, pkg.FromNode, obj, &res, opts)
 			}
-			if obj.Kind == storage.ExchangeKindInfoReg {
-				if err := applyInfoReg(ctx, store, resolver, plan, thisNode, pkg.FromNode, obj, &res); err != nil {
-					return err
-				}
-				continue
-			}
-			ent := resolver.GetEntity(obj.Type)
-			if ent == nil {
-				res.Skipped++ // сущность неизвестна приёмнику
-				continue
-			}
-			id, err := uuid.Parse(obj.ID)
-			if err != nil {
-				res.Skipped++
-				continue
-			}
-			// Встречная правка: приёмник менял тот же объект и ещё не отправил
-			// изменение источнику → конфликт, разрешаемый правилом плана.
-			local, hasLocal, err := store.GetExchangeChange(ctx, plan.Name, obj.Type, obj.ID, pkg.FromNode)
 			if err != nil {
 				return err
 			}
-			if hasLocal {
-				res.Conflicts++
-				win, err := resolveConflict(ctx, store, plan, thisNode, pkg.FromNode, ent, id, obj, local.ChangedAt, opts.Hook)
-				if err != nil {
+			if objApplied && len(transit) > 0 {
+				applied = append(applied, obj)
+			}
+		}
+		// Ретрансляция применённых изменений спицам (в той же транзакции).
+		for _, obj := range applied {
+			for _, target := range transit {
+				if err := store.RegisterExchangeChange(ctx, storage.ExchangeChange{
+					Plan:       plan.Name,
+					ObjectType: obj.Type,
+					ObjectID:   obj.ID,
+					NodeCode:   target,
+					Kind:       obj.Kind,
+					Version:    obj.Version,
+					Deletion:   obj.Deletion,
+					ChangedAt:  obj.ChangedAt,
+				}); err != nil {
 					return err
 				}
-				if !win {
-					res.Skipped++ // локальное изменение победило — не применяем
-					continue
-				}
-				if err := applyObject(ctx, store, ent, id, obj); err != nil {
-					return err
-				}
-				if obj.Deletion {
-					res.Deleted++
-				} else {
-					res.Applied++
-				}
-				continue
-			}
-			// Нет встречной правки — идемпотентность по версии.
-			localVer, exists := store.EntityVersionExists(ctx, ent.Name, id)
-			if exists && obj.Version <= localVer {
-				res.Skipped++
-				continue
-			}
-			if err := applyObject(ctx, store, ent, id, obj); err != nil {
-				return err
-			}
-			if obj.Deletion {
-				res.Deleted++
-			} else {
-				res.Applied++
 			}
 		}
 		if pkg.FromNode != "" {
@@ -326,6 +301,55 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 // applyObject записывает один объект пакета: шапку (через db.Upsert — тот же
 // путь коэрции значений, что и обычное сохранение), затем принудительно ставит
 // системные колонки (точная версия/пометка/непроведён), затем табличные части.
+// applyEntity применяет объект-сущность (справочник/документ) из пакета. Возвращает
+// true, если объект был записан (создан/обновлён/помечен на удаление) — только такие
+// изменения хаб ретранслирует спицам.
+func applyEntity(ctx context.Context, store *storage.DB, resolver EntityResolver, plan *metadata.ExchangePlan, thisNode, fromNode string, obj PackageObject, res *LoadResult, opts ApplyOptions) (bool, error) {
+	ent := resolver.GetEntity(obj.Type)
+	if ent == nil {
+		res.Skipped++ // сущность неизвестна приёмнику
+		return false, nil
+	}
+	id, err := uuid.Parse(obj.ID)
+	if err != nil {
+		res.Skipped++
+		return false, nil
+	}
+	// Встречная правка: приёмник менял тот же объект и ещё не отправил изменение
+	// источнику → конфликт, разрешаемый правилом плана.
+	local, hasLocal, err := store.GetExchangeChange(ctx, plan.Name, obj.Type, obj.ID, fromNode)
+	if err != nil {
+		return false, err
+	}
+	if hasLocal {
+		res.Conflicts++
+		win, err := resolveConflict(ctx, store, plan, thisNode, fromNode, ent, id, obj, local.ChangedAt, opts.Hook)
+		if err != nil {
+			return false, err
+		}
+		if !win {
+			res.Skipped++ // локальное изменение победило — не применяем
+			return false, nil
+		}
+	} else {
+		// Нет встречной правки — идемпотентность по версии.
+		localVer, exists := store.EntityVersionExists(ctx, ent.Name, id)
+		if exists && obj.Version <= localVer {
+			res.Skipped++
+			return false, nil
+		}
+	}
+	if err := applyObject(ctx, store, ent, id, obj); err != nil {
+		return false, err
+	}
+	if obj.Deletion {
+		res.Deleted++
+	} else {
+		res.Applied++
+	}
+	return true, nil
+}
+
 func applyObject(ctx context.Context, store *storage.DB, ent *metadata.Entity, id uuid.UUID, obj PackageObject) error {
 	if err := store.Upsert(ctx, ent.Name, id, obj.Fields, ent); err != nil {
 		return err

@@ -38,6 +38,15 @@ type ExchangePlan struct {
 	parsed []ContentEntry
 }
 
+// Роли узла в топологии обмена (план 86, фаза 2). Пусто у всех узлов — плоская
+// топология (каждый регистрирует изменения всем, прежнее поведение). Если есть
+// хотя бы один hub — звезда: спицы обмениваются только с хабом, хаб ретранслирует
+// изменения между спицами (аналог «распределённой ИБ» центр/периферия в 1С).
+const (
+	RoleHub   = "hub"
+	RoleSpoke = "spoke"
+)
+
 // ExchangeNode — узел (участник) плана обмена.
 type ExchangeNode struct {
 	Code     string `yaml:"code"`
@@ -47,6 +56,8 @@ type ExchangeNode struct {
 	// http://fil01:8080). Пусто — узел доступен только файловым обменом.
 	// Не секрет; поддерживает ${env:VAR} (раскрывается загрузчиком).
 	URL string `yaml:"url"`
+	// Role — роль в топологии: "" (плоская), hub или spoke. См. RoleHub/RoleSpoke.
+	Role string `yaml:"role"`
 }
 
 // ContentCategory — категория записи состава обмена: сущность (справочник/
@@ -94,6 +105,7 @@ func (p *ExchangePlan) Normalize() {
 	}
 	for i := range p.Nodes {
 		p.Nodes[i].Code = strings.TrimSpace(p.Nodes[i].Code)
+		p.Nodes[i].Role = strings.ToLower(strings.TrimSpace(p.Nodes[i].Role))
 	}
 	p.parsed = p.parsed[:0]
 	for _, c := range p.Content {
@@ -154,6 +166,74 @@ func (p *ExchangePlan) Node(code string) *ExchangeNode {
 		}
 	}
 	return nil
+}
+
+// HasHub сообщает, что план работает по топологии «звезда» (есть хотя бы один
+// узел с ролью hub). Иначе топология плоская (прежнее поведение).
+func (p *ExchangePlan) HasHub() bool {
+	for i := range p.Nodes {
+		if p.Nodes[i].Role == RoleHub {
+			return true
+		}
+	}
+	return false
+}
+
+// IsHub сообщает, что узел с этим кодом — хаб.
+func (p *ExchangePlan) IsHub(code string) bool {
+	n := p.Node(code)
+	return n != nil && n.Role == RoleHub
+}
+
+// RegistrationTargets возвращает коды узлов, которым узел thisNode должен
+// регистрировать свои изменения, с учётом топологии:
+//   - плоская (нет хабов): все узлы, кроме себя (прежнее поведение);
+//   - звезда, thisNode — хаб: все не-хабы (спицы);
+//   - звезда, thisNode — спица: только хабы.
+func (p *ExchangePlan) RegistrationTargets(thisNode string) []string {
+	var out []string
+	if !p.HasHub() {
+		for i := range p.Nodes {
+			if !strings.EqualFold(p.Nodes[i].Code, thisNode) {
+				out = append(out, p.Nodes[i].Code)
+			}
+		}
+		return out
+	}
+	if p.IsHub(thisNode) {
+		for i := range p.Nodes {
+			if strings.EqualFold(p.Nodes[i].Code, thisNode) || p.Nodes[i].Role == RoleHub {
+				continue
+			}
+			out = append(out, p.Nodes[i].Code)
+		}
+		return out
+	}
+	for i := range p.Nodes {
+		if p.Nodes[i].Role == RoleHub {
+			out = append(out, p.Nodes[i].Code)
+		}
+	}
+	return out
+}
+
+// TransitTargets возвращает спицы, которым хаб thisNode должен ретранслировать
+// изменение, принятое от узла fromNode (все не-хабы, кроме источника). Пусто,
+// если thisNode не хаб (спицы — листья, транзит не выполняют) — тогда обмен
+// работает как раньше, без ретрансляции.
+func (p *ExchangePlan) TransitTargets(thisNode, fromNode string) []string {
+	if !p.IsHub(thisNode) {
+		return nil
+	}
+	var out []string
+	for i := range p.Nodes {
+		n := &p.Nodes[i]
+		if strings.EqualFold(n.Code, thisNode) || n.Role == RoleHub || strings.EqualFold(n.Code, fromNode) {
+			continue
+		}
+		out = append(out, n.Code)
+	}
+	return out
 }
 
 // parseContentEntry разбирает запись состава: «Справочник.X»/«Документ.X»/«X»

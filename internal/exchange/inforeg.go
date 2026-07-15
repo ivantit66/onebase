@@ -14,7 +14,6 @@ package exchange
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"time"
 
 	"github.com/ivantit66/onebase/internal/metadata"
@@ -41,15 +40,12 @@ func RegisterInfoRegOnSave(ctx context.Context, store *storage.DB, plans []*meta
 		if thisNode == "" {
 			continue
 		}
-		for _, node := range plan.Nodes {
-			if strings.EqualFold(node.Code, thisNode) {
-				continue
-			}
+		for _, target := range plan.RegistrationTargets(thisNode) {
 			if err := store.RegisterExchangeChange(ctx, storage.ExchangeChange{
 				Plan:       plan.Name,
 				ObjectType: ir.Name,
 				ObjectID:   key,
-				NodeCode:   node.Code,
+				NodeCode:   target,
 				Kind:       storage.ExchangeKindInfoReg,
 				Version:    changedAt,
 				Deletion:   deletion,
@@ -80,12 +76,13 @@ func decodeInfoRegKey(key string) (map[string]any, error) {
 
 // applyInfoReg идемпотентно применяет запись регистра сведений из пакета.
 // Конфликт (встречная неотправленная правка источнику) разрешается правилом плана
-// (by_time/by_node_priority; hook к записи-без-структуры не применяется).
-func applyInfoReg(ctx context.Context, store *storage.DB, resolver EntityResolver, plan *metadata.ExchangePlan, thisNode, fromNode string, obj PackageObject, res *LoadResult) error {
+// (by_time/by_node_priority; hook к записи-без-структуры не применяется). Возвращает
+// true, если запись была применена/удалена (для транзитной ретрансляции хабом).
+func applyInfoReg(ctx context.Context, store *storage.DB, resolver EntityResolver, plan *metadata.ExchangePlan, thisNode, fromNode string, obj PackageObject, res *LoadResult) (bool, error) {
 	ir := resolver.GetInfoRegister(obj.Type)
 	if ir == nil || ir.Periodic {
 		res.Skipped++ // регистр неизвестен приёмнику или периодический (не поддержан)
-		return nil
+		return false, nil
 	}
 	dims := make(map[string]any, len(ir.Dimensions))
 	for _, df := range ir.Dimensions {
@@ -113,19 +110,19 @@ func applyInfoReg(ctx context.Context, store *storage.DB, resolver EntityResolve
 
 	local, hasLocal, err := store.GetExchangeChange(ctx, plan.Name, obj.Type, obj.ID, fromNode)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if hasLocal {
 		res.Conflicts++
 		if !resolveScalarConflict(plan, thisNode, fromNode, obj.ChangedAt, local.ChangedAt) {
 			res.Skipped++ // локальное изменение победило
-			return nil
+			return false, nil
 		}
-		return apply()
+		return true, apply()
 	}
 	if at, ok := store.ExchangeAppliedAt(ctx, plan.Name, obj.Type, obj.ID); ok && obj.ChangedAt <= at {
 		res.Skipped++
-		return nil
+		return false, nil
 	}
-	return apply()
+	return true, apply()
 }

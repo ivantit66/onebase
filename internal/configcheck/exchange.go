@@ -66,6 +66,7 @@ func CheckExchangePlans(proj *project.Project) []Issue {
 			add(plan.Name, "план обмена должен содержать минимум два узла (nodes)")
 		}
 		seenCode := map[string]bool{}
+		hubCount, spokeCount := 0, 0
 		for _, n := range plan.Nodes {
 			if strings.TrimSpace(n.Code) == "" {
 				add(plan.Name, "у узла не задан код (code)")
@@ -76,6 +77,21 @@ func CheckExchangePlans(proj *project.Project) []Issue {
 				add(plan.Name, fmt.Sprintf("код узла %q дублируется", n.Code))
 			}
 			seenCode[codeLow] = true
+			switch n.Role {
+			case "", metadata.RoleHub, metadata.RoleSpoke:
+			default:
+				add(plan.Name, fmt.Sprintf("узел %q: неизвестная роль %q (допустимо: hub, spoke или пусто)", n.Code, n.Role))
+			}
+			if n.Role == metadata.RoleHub {
+				hubCount++
+			}
+			if n.Role == metadata.RoleSpoke {
+				spokeCount++
+			}
+		}
+		// Топология «звезда»: спицам нужен хотя бы один хаб для маршрутизации.
+		if spokeCount > 0 && hubCount == 0 {
+			add(plan.Name, "в топологии есть узлы-спицы (spoke), но нет ни одного хаба (hub) — спицам некуда регистрировать изменения")
 		}
 
 		// Состав: непуст и ссылается на существующие сущности нужного вида.
