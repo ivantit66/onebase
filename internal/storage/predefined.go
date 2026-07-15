@@ -67,9 +67,9 @@ func (db *DB) SyncAllPredefined(ctx context.Context, entities []*metadata.Entity
 //     обеспечивает SyncAllPredefined.
 //
 // Алгоритм:
-//   1. Пре-аллоцировать UUID для каждого item (переиспользуя из БД при upsert).
-//   2. Топологическая сортировка по self-reference полям.
-//   3. INSERT в порядке зависимостей, заменяя имя на UUID для ref-полей.
+//  1. Пре-аллоцировать UUID для каждого item (переиспользуя из БД при upsert).
+//  2. Топологическая сортировка по self-reference полям.
+//  3. INSERT в порядке зависимостей, заменяя имя на UUID для ref-полей.
 //
 // При цикле в self-ref зависимостях возвращается ошибка.
 func (db *DB) SyncPredefined(ctx context.Context, e *metadata.Entity) error {
@@ -315,6 +315,47 @@ func (db *DB) FindCatalogByField(ctx context.Context, entity *metadata.Entity, f
 		return "", "", false, fmt.Errorf("find %s.%s scan: %w", entity.Name, fieldName, err)
 	}
 	return idStr, display, true, nil
+}
+
+// ListCatalogMatchesByField returns every matching row in deterministic order.
+// It is used when row-level access is active: callers must check each row
+// before deciding whether the result is absent, unique, or ambiguous. Returning
+// only LIMIT 1 or COUNT(*) would either hide a later visible row or disclose the
+// number of rows that the current user cannot read.
+func (db *DB) ListCatalogMatchesByField(ctx context.Context, entity *metadata.Entity, fieldName, value string) ([]string, []string, error) {
+	var field *metadata.Field
+	for i := range entity.Fields {
+		if strings.EqualFold(entity.Fields[i].Name, fieldName) {
+			field = &entity.Fields[i]
+			break
+		}
+	}
+	if field == nil {
+		return nil, nil, fmt.Errorf("entity %s has no field %q", entity.Name, fieldName)
+	}
+	col := metadata.ColumnName(*field)
+	table := metadata.TableName(entity.Name)
+	rows, err := db.Query(ctx,
+		fmt.Sprintf(`SELECT id, %s FROM %s WHERE %s = %s ORDER BY id`, col, table, col, db.dialect.Placeholder(1)),
+		value,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list matches %s.%s: %w", entity.Name, fieldName, err)
+	}
+	defer rows.Close()
+	var ids, displays []string
+	for rows.Next() {
+		var id, display string
+		if err := rows.Scan(&id, &display); err != nil {
+			return nil, nil, fmt.Errorf("list matches %s.%s scan: %w", entity.Name, fieldName, err)
+		}
+		ids = append(ids, id)
+		displays = append(displays, display)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("list matches %s.%s rows: %w", entity.Name, fieldName, err)
+	}
+	return ids, displays, nil
 }
 
 // MatchCatalogByField ищет записи справочника/документа по точному совпадению

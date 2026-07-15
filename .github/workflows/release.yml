@@ -38,7 +38,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.5'
+          go-version-file: '.go-version'
           cache: true
 
       - name: Compute version
@@ -64,7 +64,6 @@ jobs:
         env:
           CGO_ENABLED: 1
         run: |
-          go get github.com/webview/webview_go@latest
           go build -tags webview -ldflags="-s -w -H windowsgui -X github.com/ivantit66/onebase/internal/version.Build=${{ steps.ver.outputs.ver }}" -o onebase-gui.exe ./cmd/onebase
 
       - name: Package (Windows)
@@ -91,10 +90,23 @@ jobs:
           tar czf "${name}.tar.gz" "$name"
           echo "ASSET=${name}.tar.gz" >> $GITHUB_ENV
 
+      - name: Checksum (Windows)
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 $env:ASSET).Hash.ToLower()
+          "$hash  $env:ASSET" | Out-File -Encoding ascii "$env:ASSET.sha256"
+
+      - name: Checksum (Unix)
+        if: matrix.goos != 'windows'
+        run: sha256sum "$ASSET" > "$ASSET.sha256"
+
       - uses: actions/upload-artifact@v4
         with:
           name: onebase-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: ${{ env.ASSET }}
+          path: |
+            ${{ env.ASSET }}
+            ${{ env.ASSET }}.sha256
           retention-days: 7
 
   dev-release:

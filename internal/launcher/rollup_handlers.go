@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,6 +9,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+	"github.com/ivantit66/onebase/internal/exchange"
+	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/storage"
 )
 
@@ -279,6 +283,9 @@ func (h *handler) rollupExec(w http.ResponseWriter, r *http.Request, run bool) {
 		AccountRegisters: req.AccountRegisters,
 		InfoRegisters:    req.InfoRegisters,
 		DeleteDocuments:  req.DeleteDocuments,
+		BeforeDeleteDocument: func(ctx context.Context, entity *metadata.Entity, id uuid.UUID) error {
+			return exchange.RegisterOnDelete(ctx, db, proj.ExchangePlans, entity, id)
+		},
 	}
 	var rep storage.RollupReport
 	if run {

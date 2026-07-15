@@ -62,7 +62,9 @@ func (o *Object) GetRefUUID() string {
 // MomentTime — снимок «момента времени» для виртуальных таблиц регистров
 // ( Передаётся в .Остатки/.Обороты/.СрезПоследних как
 // первый аргумент и обрабатывается query-translator'ом:
-//   WHERE period < @Period OR (period = @Period AND recorder != @DocID)
+//
+//	WHERE period < @Period OR (period = @Period AND recorder != @DocID)
+//
 // то есть «всё что было ДО этой документной строки». При перепроведении
 // задним числом это даёт корректные остатки — текущий документ исключается
 // из своей же сводки.
@@ -116,7 +118,7 @@ func AsTime(v any) time.Time {
 			return *t
 		}
 	case string:
-		for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02T15:04", "2006-01-02 15:04:05", "2006-01-02"} {
+		for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05-07:00", "2006-01-02T15:04:05", "2006-01-02T15:04", "2006-01-02 15:04:05", "2006-01-02"} {
 			if parsed, err := time.ParseInLocation(layout, t, time.Local); err == nil {
 				return parsed
 			}

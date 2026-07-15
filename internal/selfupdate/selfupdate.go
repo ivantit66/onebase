@@ -9,6 +9,7 @@ import (
 	"archive/zip"
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -19,6 +20,8 @@ import (
 	"strings"
 	"time"
 )
+
+const MaxBinaryBytes = 512 << 20 // 512 MiB uncompressed
 
 // BinaryName возвращает ожидаемое имя бинаря onebase для текущей ОС.
 func BinaryName() string {
@@ -35,8 +38,15 @@ func StageBinary(fromPath, stageDir string) (string, error) {
 	if strings.EqualFold(filepath.Ext(fromPath), ".zip") {
 		return extractFromZip(fromPath, stageDir)
 	}
-	if _, err := os.Stat(fromPath); err != nil {
+	info, err := os.Stat(fromPath)
+	if err != nil {
 		return "", fmt.Errorf("selfupdate: файл обновления не найден: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("selfupdate: файл обновления не является обычным файлом")
+	}
+	if info.Size() > MaxBinaryBytes {
+		return "", fmt.Errorf("selfupdate: бинарь превышает лимит %d байт", MaxBinaryBytes)
 	}
 	return fromPath, nil
 }
@@ -49,9 +59,23 @@ func extractFromZip(zipPath, stageDir string) (string, error) {
 	defer zr.Close()
 
 	want := BinaryName()
+	var candidate *zip.File
 	for _, f := range zr.File {
 		if f.FileInfo().IsDir() || filepath.Base(f.Name) != want {
 			continue
+		}
+		if candidate != nil {
+			return "", fmt.Errorf("selfupdate: архив содержит несколько файлов %s", want)
+		}
+		candidate = f
+	}
+	if candidate != nil {
+		f := candidate
+		if !f.Mode().IsRegular() {
+			return "", fmt.Errorf("selfupdate: %s в архиве не является обычным файлом", want)
+		}
+		if f.UncompressedSize64 > MaxBinaryBytes {
+			return "", fmt.Errorf("selfupdate: бинарь в архиве превышает лимит %d байт", MaxBinaryBytes)
 		}
 		if err := os.MkdirAll(stageDir, 0o755); err != nil {
 			return "", err
@@ -62,8 +86,16 @@ func extractFromZip(zipPath, stageDir string) (string, error) {
 			return "", err
 		}
 		defer rc.Close()
-		if err := writeFile(rc, dst, 0o755); err != nil {
+		if err := writeFile(io.LimitReader(rc, MaxBinaryBytes+1), dst, 0o755); err != nil {
 			return "", err
+		}
+		info, err := os.Stat(dst)
+		if err != nil {
+			return "", err
+		}
+		if info.Size() > MaxBinaryBytes {
+			_ = os.Remove(dst)
+			return "", fmt.Errorf("selfupdate: бинарь в архиве превышает лимит %d байт", MaxBinaryBytes)
 		}
 		return dst, nil
 	}
@@ -72,6 +104,10 @@ func extractFromZip(zipPath, stageDir string) (string, error) {
 
 // VerifySHA256 проверяет, что sha256 файла совпадает с wantHex (регистр не важен).
 func VerifySHA256(path, wantHex string) error {
+	want, err := hex.DecodeString(strings.TrimSpace(wantHex))
+	if err != nil || len(want) != sha256.Size {
+		return fmt.Errorf("selfupdate: SHA256 должен содержать ровно 64 шестнадцатеричных символа")
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -81,9 +117,9 @@ func VerifySHA256(path, wantHex string) error {
 	if _, err := io.Copy(h, f); err != nil {
 		return err
 	}
-	got := hex.EncodeToString(h.Sum(nil))
-	if !strings.EqualFold(got, strings.TrimSpace(wantHex)) {
-		return fmt.Errorf("selfupdate: контрольная сумма не сошлась: ожидали %s, получили %s", wantHex, got)
+	got := h.Sum(nil)
+	if subtle.ConstantTimeCompare(got, want) != 1 {
+		return fmt.Errorf("selfupdate: контрольная сумма не сошлась: ожидали %s, получили %s", wantHex, hex.EncodeToString(got))
 	}
 	return nil
 }
@@ -95,20 +131,31 @@ func VerifySHA256(path, wantHex string) error {
 // путь к сохранённой копии.
 func SwapBinary(targetPath, newPath string) (string, error) {
 	backupPath := targetPath + ".old"
-	_ = os.Remove(backupPath) // остаток прошлого обновления, если был
-
-	if err := os.Rename(targetPath, backupPath); err != nil {
+	old, err := os.Open(targetPath)
+	if err != nil {
+		return "", fmt.Errorf("selfupdate: открыть старый бинарь: %w", err)
+	}
+	if err := writeFile(old, backupPath, 0o755); err != nil {
+		_ = old.Close()
 		return "", fmt.Errorf("selfupdate: сохранить старый бинарь: %w", err)
 	}
+	_ = old.Close()
 	in, err := os.Open(newPath)
 	if err != nil {
-		_ = os.Rename(backupPath, targetPath) // откат
 		return "", err
 	}
 	defer in.Close()
 	if err := writeFile(in, targetPath, 0o755); err != nil {
-		_ = os.Remove(targetPath)
-		_ = os.Rename(backupPath, targetPath) // откат
+		var restoreErr error
+		if backup, openErr := os.Open(backupPath); openErr == nil {
+			restoreErr = writeFile(backup, targetPath, 0o755)
+			_ = backup.Close()
+		} else {
+			restoreErr = openErr
+		}
+		if restoreErr != nil {
+			return "", fmt.Errorf("selfupdate: записать новый бинарь: %w; восстановить старый: %v", err, restoreErr)
+		}
 		return "", fmt.Errorf("selfupdate: записать новый бинарь: %w", err)
 	}
 	return backupPath, nil
@@ -121,45 +168,82 @@ func Rollback(targetPath, backupPath string) error {
 	if _, err := os.Stat(backupPath); err != nil {
 		return fmt.Errorf("selfupdate: резервный бинарь недоступен: %w", err)
 	}
-	// Плохой новый бинарь уводим в сторону (на Windows мгновенно удалить может не
-	// выйти, если файл ещё мапится), затем возвращаем старый на место.
-	failed := targetPath + ".failed"
-	_ = os.Remove(failed)
-	if err := os.Rename(targetPath, failed); err != nil {
-		_ = os.Remove(targetPath)
+	backup, err := os.Open(backupPath)
+	if err != nil {
+		return fmt.Errorf("selfupdate: открыть резервный бинарь: %w", err)
 	}
-	if err := os.Rename(backupPath, targetPath); err != nil {
+	defer backup.Close()
+	if err := writeFile(backup, targetPath, 0o755); err != nil {
 		return fmt.Errorf("selfupdate: восстановить старый бинарь: %w", err)
 	}
-	_ = os.Remove(failed)
+	_ = os.Remove(backupPath)
 	return nil
 }
 
 // writeFile записывает r в path с правами perm, атомарно перезаписывая содержимое.
 func writeFile(r io.Reader, path string, perm os.FileMode) error {
-	out, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, perm)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	out, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
+	tmp := out.Name()
+	committed := false
+	defer func() {
+		_ = out.Close()
+		if !committed {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if err := out.Chmod(perm); err != nil {
+		return err
+	}
 	if _, err := io.Copy(out, r); err != nil {
-		out.Close()
+		return err
+	}
+	if err := out.Sync(); err != nil {
 		return err
 	}
 	if err := out.Close(); err != nil {
 		return err
 	}
-	return os.Chmod(path, perm)
+	if err := os.Rename(tmp, path); err != nil {
+		if runtime.GOOS != "windows" {
+			return err
+		}
+		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+			return err
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			return err
+		}
+	}
+	committed = true
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
 
 // PollHealthz опрашивает url раз в interval, пока не получит HTTP 200 или пока не
 // истечёт timeout. Возвращает nil при первом 200, иначе — последнюю ошибку.
 func PollHealthz(ctx context.Context, url string, timeout, interval time.Duration) error {
+	return PollHealthzVersion(ctx, url, "", timeout, interval)
+}
+
+// PollHealthzVersion verifies that the responding process is the expected new
+// binary rather than an unrelated listener on the same port.
+func PollHealthzVersion(ctx context.Context, url, expectedVersion string, timeout, interval time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	client := &http.Client{Timeout: 5 * time.Second}
 	var lastErr error
 	for {
-		if lastErr = probeOnce(ctx, client, url); lastErr == nil {
+		if lastErr = probeOnce(ctx, client, url, expectedVersion); lastErr == nil {
 			return nil
 		}
 		select {
@@ -170,7 +254,7 @@ func PollHealthz(ctx context.Context, url string, timeout, interval time.Duratio
 	}
 }
 
-func probeOnce(ctx context.Context, client *http.Client, url string) error {
+func probeOnce(ctx context.Context, client *http.Client, url, expectedVersion string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -182,6 +266,9 @@ func probeOnce(ctx context.Context, client *http.Client, url string) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("%s вернул %d", url, resp.StatusCode)
+	}
+	if expectedVersion != "" && resp.Header.Get("X-OneBase-Version") != expectedVersion {
+		return fmt.Errorf("%s ответил версией %q, ожидалась %q", url, resp.Header.Get("X-OneBase-Version"), expectedVersion)
 	}
 	return nil
 }

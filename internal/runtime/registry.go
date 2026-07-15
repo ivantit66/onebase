@@ -46,8 +46,8 @@ type Registry struct {
 	httpServices    map[string]*httpservice.Service   // lowercase name → HTTP-сервис
 	pages           map[string]*page.Page             // lowercase name → страница (план 66)
 	exchangePlans   map[string]*metadata.ExchangePlan // lowercase name → план обмена (план 86)
-	extProcessors   map[string]*processor.Processor // внешние обработки (из БД), ключ — Name
-	subsystems      []*metadata.Subsystem           // sorted by Order
+	extProcessors   map[string]*processor.Processor   // внешние обработки (из БД), ключ — Name
+	subsystems      []*metadata.Subsystem             // sorted by Order
 	journals        map[string]*metadata.Journal
 	accountRegs     map[string]*metadata.AccountRegister
 	chartsOfAccount map[string]*metadata.ChartOfAccounts
@@ -92,6 +92,48 @@ func NewRegistry() *Registry {
 		chartsOfAccount: make(map[string]*metadata.ChartOfAccounts),
 		widgets:         make(map[string]*metadata.Widget),
 	}
+}
+
+// ReplaceProjectFrom atomically publishes all project-owned registry data from
+// src. External reports/forms/processors loaded from the database remain intact.
+// Readers therefore observe either the complete old project or the complete new
+// project, never an intermediate mixture assembled by multiple Load* calls.
+func (r *Registry) ReplaceProjectFrom(src *Registry) {
+	if src == nil || src == r {
+		return
+	}
+	src.mu.RLock()
+	defer src.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.entities = src.entities
+	r.entitySlug = src.entitySlug
+	r.registers = src.registers
+	r.inforegs = src.inforegs
+	r.enums = src.enums
+	r.constants = src.constants
+	r.reports = src.reports
+	r.printForms = src.printForms
+	r.dslPrintForms = src.dslPrintForms
+	r.layoutForms = src.layoutForms
+	r.procs = src.procs
+	r.serviceProcs = src.serviceProcs
+	r.pageProcs = src.pageProcs
+	r.managerProcs = src.managerProcs
+	r.moduleProcs = src.moduleProcs
+	r.moduleByName = src.moduleByName
+	r.processors = src.processors
+	r.httpServices = src.httpServices
+	r.pages = src.pages
+	r.exchangePlans = src.exchangePlans
+	r.subsystems = src.subsystems
+	r.journals = src.journals
+	r.accountRegs = src.accountRegs
+	r.chartsOfAccount = src.chartsOfAccount
+	r.widgets = src.widgets
+	r.widgetOrder = src.widgetOrder
+	r.homePage = src.homePage
+	r.basedOnIndex = src.basedOnIndex
 }
 
 // LoadWidgets registers dashboard widgets by name (case-insensitive).

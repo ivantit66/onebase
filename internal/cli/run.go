@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -118,6 +119,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	var proj *project.Project
 	var cfgRepo *configdb.Repo
+	var loadedConfigVersionID string
 	if configSource == "database" {
 		cfgRepo = configdb.New(db)
 		if err := cfgRepo.EnsureSchema(ctx); err != nil {
@@ -126,6 +128,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		if err := cfgRepo.MigrateContent(ctx); err != nil {
 			return fmt.Errorf("configdb migrate content: %w", err)
 		}
+		// Capture the version before loading. If deploy lands between this read
+		// and watcher startup, the watcher will still observe and apply it.
+		loadedConfigVersionID = latestConfigVersionID(ctx, cfgRepo)
 		proj, err = project.LoadFromDB(ctx, cfgRepo)
 	} else {
 		proj, err = project.Load(dir)
@@ -421,8 +426,18 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	//              появляется новая версия. Схему трогать не нужно — миграции
 	//              выполняет deploy ДО создания версии конфигурации.
 	if watchEnabled, _ := cmd.Flags().GetBool("watch"); watchEnabled {
+		var reloadMu sync.Mutex
+		var reloadProjects []*project.Project
+		defer func() {
+			for _, loaded := range reloadProjects {
+				loaded.Close()
+			}
+		}()
 		applyProject := func(newProj *project.Project) {
-			reg.Load(runtime.LoadOptions{
+			reloadMu.Lock()
+			defer reloadMu.Unlock()
+			next := runtime.NewRegistry()
+			next.Load(runtime.LoadOptions{
 				Entities:        newProj.Entities,
 				Programs:        newProj.Programs,
 				ManagerPrograms: newProj.ManagerPrograms,
@@ -435,22 +450,27 @@ func runServer(cmd *cobra.Command, _ []string) error {
 				Reports:         newProj.Reports,
 				PrintForms:      newProj.PrintForms,
 			})
-			reg.LoadDSLPrintForms(newProj.DSLPrintForms)
-			reg.LoadLayoutForms(newProj.LayoutForms)
-			reg.LoadModules(newProj.Modules)
-			reg.LoadProcessors(newProj.Processors)
-			reg.LoadHTTPServices(newProj.HTTPServices)
-			reg.LoadPages(newProj.Pages)
-			reg.LoadExchangePlans(newProj.ExchangePlans)
-			reg.LoadSubsystems(newProj.Subsystems)
-			reg.LoadJournals(newProj.Journals)
-			reg.LoadAccountRegisters(newProj.AccountRegisters, newProj.ChartsOfAccounts)
-			reg.LoadWidgets(newProj.Widgets)
-			reg.LoadHomePage(newProj.HomePage)
+			next.LoadDSLPrintForms(newProj.DSLPrintForms)
+			next.LoadLayoutForms(newProj.LayoutForms)
+			next.LoadModules(newProj.Modules)
+			next.LoadProcessors(newProj.Processors)
+			next.LoadHTTPServices(newProj.HTTPServices)
+			next.LoadPages(newProj.Pages)
+			next.LoadExchangePlans(newProj.ExchangePlans)
+			next.LoadSubsystems(newProj.Subsystems)
+			next.LoadJournals(newProj.Journals)
+			next.LoadAccountRegisters(newProj.AccountRegisters, newProj.ChartsOfAccounts)
+			next.LoadWidgets(newProj.Widgets)
+			next.LoadHomePage(newProj.HomePage)
+			reg.ReplaceProjectFrom(next)
+			// LoadFromDB may materialise form/layout resources in a temporary
+			// directory. Keep successful reload projects alive until shutdown.
+			reloadProjects = append(reloadProjects, newProj)
 		}
 
 		switch configSource {
 		case "file":
+			watchCtx, watchCancel := context.WithCancel(ctx)
 			reload := func() {
 				newProj, err := project.Load(dir)
 				if err != nil {
@@ -460,23 +480,37 @@ func runServer(cmd *cobra.Command, _ []string) error {
 				applyProject(newProj)
 				fmt.Fprintln(os.Stdout, "[watch] метаданные перезагружены")
 			}
-			if err := devserver.Watch(dir, reload); err != nil {
+			watchDone, err := devserver.WatchContext(watchCtx, dir, reload)
+			if err != nil {
+				watchCancel()
 				runLog.Warn("watch init failed", "err", err)
 			} else {
+				defer func() {
+					watchCancel()
+					<-watchDone
+				}()
 				fmt.Fprintf(os.Stdout, "[watch] отслеживаем %s — изменения .yaml/.os подхватятся без рестарта\n", dir)
 			}
 		case "database":
 			reloadCtx, reloadCancel := context.WithCancel(ctx)
-			defer reloadCancel()
-			go watchConfigVersions(reloadCtx, cfgRepo, configReloadInterval, func() {
-				newProj, err := project.LoadFromDB(reloadCtx, cfgRepo)
-				if err != nil {
-					runLog.Warn("db watch reload failed", "err", err)
-					return
-				}
-				applyProject(newProj)
-				fmt.Fprintln(os.Stdout, "[watch] конфигурация перезагружена из БД (новая версия)")
-			})
+			reloadDone := make(chan struct{})
+			go func() {
+				defer close(reloadDone)
+				watchConfigVersions(reloadCtx, cfgRepo, loadedConfigVersionID, configReloadInterval, func() error {
+					newProj, err := project.LoadFromDB(reloadCtx, cfgRepo)
+					if err != nil {
+						runLog.Warn("db watch reload failed", "err", err)
+						return err
+					}
+					applyProject(newProj)
+					fmt.Fprintln(os.Stdout, "[watch] конфигурация перезагружена из БД (новая версия)")
+					return nil
+				})
+			}()
+			defer func() {
+				reloadCancel()
+				<-reloadDone
+			}()
 			fmt.Fprintln(os.Stdout, "[watch] отслеживаем версии конфигурации в БД — deploy подхватится без рестарта")
 		}
 	}
@@ -524,8 +558,7 @@ func latestConfigVersionID(ctx context.Context, cfgRepo *configdb.Repo) string {
 // вызывает onChange при появлении новой версии (её создают `onebase deploy` и
 // rollback). Возвращается при отмене ctx. Схему БД не трогает — DDL-миграции
 // выполняет deploy ДО создания версии.
-func watchConfigVersions(ctx context.Context, cfgRepo *configdb.Repo, interval time.Duration, onChange func()) {
-	last := latestConfigVersionID(ctx, cfgRepo)
+func watchConfigVersions(ctx context.Context, cfgRepo *configdb.Repo, last string, interval time.Duration, onChange func() error) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -535,8 +568,9 @@ func watchConfigVersions(ctx context.Context, cfgRepo *configdb.Repo, interval t
 		case <-ticker.C:
 			cur := latestConfigVersionID(ctx, cfgRepo)
 			if cur != "" && cur != last {
-				last = cur
-				onChange()
+				if err := onChange(); err == nil {
+					last = cur
+				}
 			}
 		}
 	}

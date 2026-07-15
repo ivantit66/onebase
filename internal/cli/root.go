@@ -4,13 +4,15 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ivantit66/onebase/internal/version"
 	"github.com/spf13/cobra"
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "onebase",
-	Short: "onebase — metadata-driven business platform",
-	RunE:  runStart,
+	Use:     "onebase",
+	Short:   "onebase — metadata-driven business platform",
+	Version: version.String(),
+	RunE:    runStart,
 }
 
 func Execute() {

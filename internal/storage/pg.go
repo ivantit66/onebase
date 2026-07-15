@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -104,16 +105,17 @@ func (db *DB) Close() {
 // that only applies to ONE connection — other pool connections still enforce
 // FK constraints (including ON DELETE CASCADE), causing silent data loss
 // when import reorders tables and intermittent FK violation errors.
-func (db *DB) DisableFKForImport(ctx context.Context) (cleanup func(), err error) {
+func (db *DB) DisableFKForImport(ctx context.Context) (cleanup func() error, err error) {
 	if db.sqlDB != nil {
 		db.sqlDB.SetMaxOpenConns(1)
 		if _, err := db.sqlDB.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
 			db.sqlDB.SetMaxOpenConns(0)
-			return func() {}, err
+			return func() error { return nil }, err
 		}
-		return func() {
-			_, _ = db.sqlDB.ExecContext(context.Background(), "PRAGMA foreign_keys=ON")
+		return func() error {
+			_, err := db.sqlDB.ExecContext(context.Background(), "PRAGMA foreign_keys=ON")
 			db.sqlDB.SetMaxOpenConns(0)
+			return err
 		}, nil
 	}
 	// PostgreSQL: drop all FK constraints (DDL affects all pool connections).
@@ -131,30 +133,45 @@ func (db *DB) DisableFKForImport(ctx context.Context) (cleanup func(), err error
 		 JOIN pg_class t ON c.conrelid = t.oid
 		 WHERE c.contype='f' AND c.connamespace='public'::regnamespace`)
 	if err != nil {
-		return func() {}, nil
+		return func() error { return nil }, err
 	}
 	var fks []fkInfo
 	for rows.Next() {
 		var name, table, def string
-		if rows.Scan(&name, &table, &def) == nil {
-			fks = append(fks, fkInfo{table: table, name: name, def: def})
+		if err := rows.Scan(&name, &table, &def); err != nil {
+			rows.Close()
+			return func() error { return nil }, err
 		}
+		fks = append(fks, fkInfo{table: table, name: name, def: def})
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return func() error { return nil }, err
+	}
 
+	restore := func(items []fkInfo) error {
+		var errs []error
+		for _, fk := range items {
+			tq := `"` + strings.ReplaceAll(fk.table, `"`, `""`) + `"`
+			nq := `"` + strings.ReplaceAll(fk.name, `"`, `""`) + `"`
+			if _, err := db.pool.Exec(context.Background(),
+				"ALTER TABLE "+tq+" ADD CONSTRAINT "+nq+" "+fk.def+" NOT VALID"); err != nil {
+				errs = append(errs, fmt.Errorf("restore FK %s.%s: %w", fk.table, fk.name, err))
+			}
+		}
+		return errors.Join(errs...)
+	}
+	var dropped []fkInfo
 	for _, fk := range fks {
 		tq := `"` + strings.ReplaceAll(fk.table, `"`, `""`) + `"`
 		nq := `"` + strings.ReplaceAll(fk.name, `"`, `""`) + `"`
-		_, _ = db.pool.Exec(ctx, "ALTER TABLE "+tq+" DROP CONSTRAINT "+nq)
-	}
-	return func() {
-		for _, fk := range fks {
-			tq := `"` + strings.ReplaceAll(fk.table, `"`, `""`) + `"`
-			nq := `"` + strings.ReplaceAll(fk.name, `"`, `""`) + `"`
-			_, _ = db.pool.Exec(context.Background(),
-				"ALTER TABLE "+tq+" ADD CONSTRAINT "+nq+" "+fk.def+" NOT VALID")
+		if _, err := db.pool.Exec(ctx, "ALTER TABLE "+tq+" DROP CONSTRAINT "+nq); err != nil {
+			return func() error { return nil }, errors.Join(
+				fmt.Errorf("drop FK %s.%s: %w", fk.table, fk.name, err), restore(dropped))
 		}
-	}, nil
+		dropped = append(dropped, fk)
+	}
+	return func() error { return restore(dropped) }, nil
 }
 
 // EnsureDatabase creates the PostgreSQL database named in dsn if it does not

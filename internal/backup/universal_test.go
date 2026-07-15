@@ -513,6 +513,13 @@ func TestAttachmentsExportRestore(t *testing.T) {
 	tmpDir := t.TempDir()
 	extractZip(buf.Bytes(), tmpDir)
 	attSrc := filepath.Join(tmpDir, "attachments")
+	existing := filepath.Join(dstAttDir, "Реализация", "abc123-uuid")
+	if err := os.MkdirAll(filepath.Dir(existing), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(existing, []byte("old content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(attSrc); err == nil {
 		n, err := restoreAttachments(attSrc, dstAttDir)
 		if err != nil {
@@ -973,5 +980,26 @@ func TestMigrateSchema_CreatesAccountsTable(t *testing.T) {
 	}
 	if n != 2 {
 		t.Errorf("_accounts rows for plan Хозрасчётный: got %d, want 2", n)
+	}
+}
+
+func TestImportConfigRejectsSymlinkedDestinationParent(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "catalogs")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "catalogs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "catalogs", "item.yaml"), []byte("name: Item\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := importConfig(context.Background(), nil, "file", root, src); err == nil {
+		t.Fatal("expected symlinked destination parent to be rejected")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "item.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("import escaped through destination symlink: %v", err)
 	}
 }

@@ -518,18 +518,21 @@ func (s *Server) constantsSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	for _, c := range consts {
-		val := submitted[c.Name]
-		var v any
-		if val == "" {
-			v = nil
-		} else {
-			v = val
+	if err := s.store.WithTx(r.Context(), func(ctx context.Context) error {
+		for _, c := range consts {
+			val := submitted[c.Name]
+			var v any
+			if val != "" {
+				v = val
+			}
+			if err := s.store.SetConstant(ctx, c.Name, v); err != nil {
+				return err
+			}
 		}
-		if err := s.store.SetConstant(r.Context(), c.Name, v); err != nil {
-			http.Error(w, s.errText(r, err), 500)
-			return
-		}
+		return nil
+	}); err != nil {
+		http.Error(w, s.errText(r, err), 500)
+		return
 	}
 	http.Redirect(w, r, "/ui/constants?saved=1", http.StatusSeeOther)
 }

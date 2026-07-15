@@ -75,7 +75,8 @@ func safeArchivePath(dir, name string) (string, error) {
 	clean := filepath.FromSlash(norm)
 	// Абсолютные пути в записях архива недопустимы: ни «/etc/passwd»,
 	// ни «C:\Windows\...» (иначе — запись вне каталога распаковки).
-	if filepath.IsAbs(clean) || strings.HasPrefix(norm, "/") {
+	if filepath.IsAbs(clean) || strings.HasPrefix(norm, "/") ||
+		(len(norm) >= 2 && ((norm[0] >= 'A' && norm[0] <= 'Z') || (norm[0] >= 'a' && norm[0] <= 'z')) && norm[1] == ':') {
 		return "", i18nerr.Errorf("недопустимое имя записи архива: %s", name)
 	}
 	outPath := filepath.Join(dir, clean)
@@ -85,6 +86,91 @@ func safeArchivePath(dir, name string) (string, error) {
 		return "", i18nerr.Errorf("недопустимое имя записи архива: %s", name)
 	}
 	return outPath, nil
+}
+
+const (
+	maxArchiveEntries        = 100_000
+	maxConfigArchiveExpanded = 1 << 30  // 1 GiB
+	maxFullArchiveExpanded   = 32 << 30 // 32 GiB
+	maxFormArchiveExpanded   = 256 << 20
+	maxFullArchiveUpload     = int64(64<<30) + (64 << 20)
+	maxConfigArchiveUpload   = int64(maxConfigArchiveExpanded) + (64 << 20)
+	maxFormArchiveUpload     = int64(64<<20) + (2 << 20)
+)
+
+// validateArchiveEntries validates the complete archive before the first file
+// is written. This prevents a malformed entry near the end of an archive from
+// turning an import into a silently partial restore.
+func validateArchiveEntries(dir string, files []*zip.File, maxExpanded uint64) error {
+	if len(files) > maxArchiveEntries {
+		return i18nerr.Errorf("слишком много записей в архиве: %d", len(files))
+	}
+	seen := make(map[string]struct{}, len(files))
+	var expanded uint64
+	for _, f := range files {
+		outPath, err := safeArchivePath(dir, f.Name)
+		if err != nil {
+			return err
+		}
+		key := strings.ToLower(filepath.Clean(outPath))
+		if _, ok := seen[key]; ok {
+			return i18nerr.Errorf("повторяющаяся запись в архиве: %s", f.Name)
+		}
+		seen[key] = struct{}{}
+
+		mode := f.Mode()
+		if mode&os.ModeType != 0 && !mode.IsDir() {
+			return i18nerr.Errorf("недопустимый тип записи архива: %s", f.Name)
+		}
+		if f.UncompressedSize64 > maxExpanded-expanded {
+			return i18nerr.New("распакованный архив превышает допустимый размер")
+		}
+		expanded += f.UncompressedSize64
+	}
+	return nil
+}
+
+func extractValidatedArchive(dir string, files []*zip.File) error {
+	for _, f := range files {
+		outPath, err := safeArchivePath(dir, f.Name)
+		if err != nil {
+			return err // normally caught by validateArchiveEntries; keep fail-closed
+		}
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(outPath, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+			return err
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		out, err := os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			rc.Close()
+			return err
+		}
+		n, copyErr := io.Copy(out, rc)
+		closeErr := out.Close()
+		rcErr := rc.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if rcErr != nil {
+			return rcErr
+		}
+		if uint64(n) != f.UncompressedSize64 {
+			return i18nerr.Errorf("неполная запись архива: %s", f.Name)
+		}
+	}
+	return nil
 }
 
 func (h *handler) loadBackupDirSetting(b *Base) string {
@@ -492,6 +578,7 @@ func (h *handler) backupFullImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lang := resolveLang(r)
+	r.Body = http.MaxBytesReader(w, r.Body, maxFullArchiveUpload)
 	file, _, err := r.FormFile("obz_file")
 	if err != nil {
 		data := h.loadCfgData(r.Context(), b, "backup")
@@ -501,15 +588,20 @@ func (h *handler) backupFullImport(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	dtData, err := io.ReadAll(file)
+	archiveSize, err := file.Seek(0, io.SeekEnd)
 	if err != nil {
 		data := h.loadCfgData(r.Context(), b, "backup")
 		data.Error = tr(lang, "Ошибка чтения файла") + ": " + err.Error()
 		renderCfg(w, r, data)
 		return
 	}
-
-	reader, err := zip.NewReader(bytes.NewReader(dtData), int64(len(dtData)))
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		data := h.loadCfgData(r.Context(), b, "backup")
+		data.Error = tr(lang, "Ошибка чтения файла") + ": " + err.Error()
+		renderCfg(w, r, data)
+		return
+	}
+	reader, err := zip.NewReader(file, archiveSize)
 	if err != nil {
 		data := h.loadCfgData(r.Context(), b, "backup")
 		data.Error = tr(lang, "Неверный формат файла .obz") + ": " + err.Error()
@@ -525,23 +617,45 @@ func (h *handler) backupFullImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer os.RemoveAll(tmpDir)
+	if err := validateArchiveEntries(tmpDir, reader.File, maxFullArchiveExpanded); err != nil {
+		data := h.loadCfgData(r.Context(), b, "backup")
+		data.Error = tr(lang, "Неверный формат файла .obz") + ": " + err.Error()
+		renderCfg(w, r, data)
+		return
+	}
 
 	// Pre-scan META.txt for format and db_type.
 	archiveFormat := ""
 	archiveDBType := ""
 	for _, af := range reader.File {
 		if af.Name == "META.txt" {
-			rc, merr := af.Open()
-			if merr == nil {
-				metaBytes, _ := io.ReadAll(rc)
-				rc.Close()
-				for _, line := range strings.Split(string(metaBytes), "\n") {
-					if strings.HasPrefix(line, "db_type=") {
-						archiveDBType = strings.TrimSpace(strings.TrimPrefix(line, "db_type="))
-					}
-					if strings.HasPrefix(line, "format=") {
-						archiveFormat = strings.TrimSpace(strings.TrimPrefix(line, "format="))
-					}
+			rc, metaErr := af.Open()
+			if metaErr != nil {
+				data := h.loadCfgData(r.Context(), b, "backup")
+				data.Error = tr(lang, "Неверный формат файла .obz") + ": " + metaErr.Error()
+				renderCfg(w, r, data)
+				return
+			}
+			metaBytes, readErr := io.ReadAll(io.LimitReader(rc, (1<<20)+1))
+			closeErr := rc.Close()
+			if readErr != nil || closeErr != nil || len(metaBytes) > 1<<20 {
+				if readErr == nil {
+					readErr = closeErr
+				}
+				if readErr == nil {
+					readErr = fmt.Errorf("META.txt превышает лимит 1 MiB")
+				}
+				data := h.loadCfgData(r.Context(), b, "backup")
+				data.Error = tr(lang, "Неверный формат файла .obz") + ": " + readErr.Error()
+				renderCfg(w, r, data)
+				return
+			}
+			for _, line := range strings.Split(string(metaBytes), "\n") {
+				if strings.HasPrefix(line, "db_type=") {
+					archiveDBType = strings.TrimSpace(strings.TrimPrefix(line, "db_type="))
+				}
+				if strings.HasPrefix(line, "format=") {
+					archiveFormat = strings.TrimSpace(strings.TrimPrefix(line, "format="))
 				}
 			}
 			break
@@ -550,13 +664,22 @@ func (h *handler) backupFullImport(w http.ResponseWriter, r *http.Request) {
 
 	// Universal format: cross-engine restore.
 	if archiveFormat == "universal" {
+		wasRunning := h.runner.IsRunning(b.ID)
+		stopped := false
 		db, cerr := OpenDB(r.Context(), b)
 		if cerr != nil {
 			// For SQLite: if the file exists but is not a valid database (new/empty/corrupt),
-			// delete it so SQLite creates a fresh file — full restore will repopulate everything.
+			// preserve it, then let SQLite create a fresh file for the restore.
 			if b.DBType == "sqlite" && b.DBPath != "" &&
 				strings.Contains(cerr.Error(), "file is not a database") {
-				if os.Remove(b.DBPath) == nil {
+				if wasRunning {
+					h.runner.Stop(b.ID)
+					waitPortFree(b.Port, 3*time.Second)
+					stopped = true
+				}
+				oldPath := b.DBPath + ".old"
+				_ = os.Remove(oldPath)
+				if os.Rename(b.DBPath, oldPath) == nil {
 					db, cerr = OpenDB(r.Context(), b)
 				}
 			}
@@ -568,9 +691,7 @@ func (h *handler) backupFullImport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer db.Close()
-
-		wasRunning := h.runner.IsRunning(b.ID)
-		if wasRunning {
+		if wasRunning && !stopped {
 			h.runner.Stop(b.ID)
 			waitPortFree(b.Port, 3*time.Second)
 		}
@@ -585,7 +706,7 @@ func (h *handler) backupFullImport(w http.ResponseWriter, r *http.Request) {
 			r.Context(), db,
 			configDest, cfgFileDir,
 			db.FilesDir(),
-			bytes.NewReader(dtData), int64(len(dtData)),
+			file, archiveSize,
 		)
 
 		if importErr == nil {
@@ -612,29 +733,15 @@ func (h *handler) backupFullImport(w http.ResponseWriter, r *http.Request) {
 	var dumpFile string
 	var configDir string
 
-	for _, f := range reader.File {
-		outPath, err := safeArchivePath(tmpDir, f.Name)
-		if err != nil {
-			continue // zip-slip: запись с выходом за пределы tmpDir — пропускаем
-		}
-		if f.FileInfo().IsDir() {
-			os.MkdirAll(outPath, 0o755)
-			continue
-		}
-		os.MkdirAll(filepath.Dir(outPath), 0o755)
-		rc, err := f.Open()
-		if err != nil {
-			continue
-		}
-		outFile, err := os.Create(outPath)
-		if err != nil {
-			rc.Close()
-			continue
-		}
-		io.Copy(outFile, rc)
-		outFile.Close()
-		rc.Close()
+	if err := extractValidatedArchive(tmpDir, reader.File); err != nil {
+		data := h.loadCfgData(r.Context(), b, "backup")
+		data.Error = tr(lang, "Ошибка восстановления") + ": " + err.Error()
+		renderCfg(w, r, data)
+		return
+	}
 
+	for _, f := range reader.File {
+		outPath, _ := safeArchivePath(tmpDir, f.Name) // archive was validated above
 		switch f.Name {
 		case "database.sql.gz":
 			dumpFile = outPath

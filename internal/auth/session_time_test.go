@@ -40,6 +40,12 @@ func TestParseSessionTime(t *testing.T) {
 		}
 	})
 
+	t.Run("SQLite UTC with offset", func(t *testing.T) {
+		if got := parseSessionTime("2026-05-22 03:16:13+00:00"); got.IsZero() {
+			t.Error("SQLite UTC datetime не распарсился")
+		}
+	})
+
 	t.Run("[]byte", func(t *testing.T) {
 		if got := parseSessionTime([]byte("2026-05-22T03:16:13Z")); got.IsZero() {
 			t.Error("[]byte не распарсился")

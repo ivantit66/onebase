@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/metadata"
@@ -267,6 +268,9 @@ func TestRegisterTotals_NoDimensions(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertTotalsMatch(ctx, t, db, reg, "без измерений: приход")
+	if rows, err := db.GetBalances(ctx, reg.Name, reg, RegFilter{}); err != nil || len(rows) != 1 {
+		t.Fatalf("GetBalances без измерений: rows=%v err=%v", rows, err)
+	}
 
 	if err := db.WriteMovements(ctx, reg.Name, doc, rec, nil, reg, nil); err != nil {
 		t.Fatal(err)
@@ -314,4 +318,75 @@ func TestRecalcRegisterTotals(t *testing.T) {
 		t.Fatalf("RecalcRegisterTotals: %v", err)
 	}
 	assertTotalsMatch(ctx, t, db, reg, "после полного пересчёта")
+}
+
+func TestRegisterTotals_RebuildAfterDisabledWrites(t *testing.T) {
+	ctx := context.Background()
+	enabled := totalsTestReg()
+	db := setupTotalsDB(ctx, t, enabled)
+	defer db.Close()
+
+	if err := db.WriteMovements(ctx, enabled.Name, "Док", uuid.New(),
+		[]map[string]any{mv("Приход", "Товар1", "СкладА", 5, 50)}, enabled, nil); err != nil {
+		t.Fatal(err)
+	}
+	disabled := totalsTestReg()
+	disabled.Totals.Enabled = false
+	if err := db.MigrateRegisters(ctx, []*metadata.Register{disabled}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.WriteMovements(ctx, disabled.Name, "Док", uuid.New(),
+		[]map[string]any{mv("Приход", "Товар1", "СкладА", 3, 30)}, disabled, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MigrateRegisters(ctx, []*metadata.Register{enabled}); err != nil {
+		t.Fatal(err)
+	}
+	assertTotalsMatch(ctx, t, db, enabled, "re-enabled")
+}
+
+func TestRegisterTotals_RebuildAfterSchemaChange(t *testing.T) {
+	ctx := context.Background()
+	reg := totalsTestReg()
+	db := setupTotalsDB(ctx, t, reg)
+	defer db.Close()
+	if err := db.WriteMovements(ctx, reg.Name, "Док", uuid.New(),
+		[]map[string]any{mv("Приход", "Товар1", "СкладА", 5, 50)}, reg, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	changed := totalsTestReg()
+	changed.Dimensions = append(changed.Dimensions, metadata.Field{Name: "Партия", Type: metadata.FieldTypeString})
+	changed.Resources = append(changed.Resources, metadata.Field{Name: "Вес", Type: metadata.FieldTypeNumber})
+	if err := db.MigrateRegisters(ctx, []*metadata.Register{changed}); err != nil {
+		t.Fatalf("schema migration/rebuild: %v", err)
+	}
+	row := mv("Приход", "Товар2", "СкладБ", 2, 20)
+	row["Партия"] = "P1"
+	row["Вес"] = 7
+	if err := db.WriteMovements(ctx, changed.Name, "Док", uuid.New(), []map[string]any{row}, changed, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertTotalsMatch(ctx, t, db, changed, "schema changed")
+}
+
+func TestRegisterTotals_SQLiteUsesUTCMonth(t *testing.T) {
+	ctx := context.Background()
+	reg := totalsTestReg()
+	db := setupTotalsDB(ctx, t, reg)
+	defer db.Close()
+
+	moscow := time.FixedZone("UTC+3", 3*60*60)
+	period := time.Date(2026, 3, 1, 0, 30, 0, 0, moscow) // 2026-02-28 21:30 UTC
+	if err := db.WriteMovements(ctx, reg.Name, "Док", uuid.New(),
+		[]map[string]any{mv("Приход", "Товар1", "СкладА", 1, 10)}, reg, &period); err != nil {
+		t.Fatal(err)
+	}
+	var month string
+	if err := db.QueryRow(ctx, "SELECT "+totalsMonthCol+" FROM "+metadata.RegisterTotalsTableName(reg.Name)).Scan(&month); err != nil {
+		t.Fatal(err)
+	}
+	if month != "2026-02" {
+		t.Fatalf("UTC month bucket=%q, want 2026-02", month)
+	}
 }

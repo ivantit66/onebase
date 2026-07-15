@@ -2,6 +2,8 @@ module github.com/ivantit66/onebase
 
 go 1.25.0
 
+toolchain go1.26.5
+
 require (
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/go-chi/chi/v5 v5.1.0

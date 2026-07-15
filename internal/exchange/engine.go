@@ -8,6 +8,7 @@ package exchange
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -16,6 +17,23 @@ import (
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/storage"
 )
+
+// validatePairPlan deliberately limits the phase-1 protocol to a pair of
+// nodes. A scalar object version cannot make concurrent edits converge through
+// a third node; accepting larger topologies would silently corrupt replicas.
+func validatePairPlan(plan *metadata.ExchangePlan) error {
+	if plan == nil {
+		return fmt.Errorf("exchange: plan is nil")
+	}
+	if len(plan.Nodes) != 2 {
+		return fmt.Errorf("exchange: план %q должен содержать ровно два узла; многоузловой транзит этим форматом не поддерживается", plan.Name)
+	}
+	if strings.TrimSpace(plan.Nodes[0].Code) == "" || strings.TrimSpace(plan.Nodes[1].Code) == "" ||
+		strings.EqualFold(plan.Nodes[0].Code, plan.Nodes[1].Code) {
+		return fmt.Errorf("exchange: план %q содержит пустые или повторяющиеся коды узлов", plan.Name)
+	}
+	return nil
+}
 
 // RegisterOnSave регистрирует изменение объекта во всех планах обмена, чей
 // состав включает его сущность. Для каждого такого плана строка очереди
@@ -27,6 +45,18 @@ import (
 // и путь пометки на удаление), поэтому ошибки возвращаются наверх: сбой
 // регистрации должен откатывать запись, а не молча терять изменение из обмена.
 func RegisterOnSave(ctx context.Context, store *storage.DB, plans []*metadata.ExchangePlan, entity *metadata.Entity, id uuid.UUID, deletion bool) error {
+	return registerChange(ctx, store, plans, entity, id, deletion, false)
+}
+
+// RegisterOnDelete records a physical delete before the row disappears. It
+// reserves the next object version so a peer that already has the current
+// version applies the tombstone instead of treating it as an idempotent replay.
+// The caller must execute this and storage.Delete in the same transaction.
+func RegisterOnDelete(ctx context.Context, store *storage.DB, plans []*metadata.ExchangePlan, entity *metadata.Entity, id uuid.UUID) error {
+	return registerChange(ctx, store, plans, entity, id, true, true)
+}
+
+func registerChange(ctx context.Context, store *storage.DB, plans []*metadata.ExchangePlan, entity *metadata.Entity, id uuid.UUID, deletion, nextVersion bool) error {
 	if store == nil || entity == nil || len(plans) == 0 {
 		return nil
 	}
@@ -40,6 +70,9 @@ func RegisterOnSave(ctx context.Context, store *storage.DB, plans []*metadata.Ex
 		if !plan.Includes(entity) {
 			continue
 		}
+		if err := validatePairPlan(plan); err != nil {
+			return err
+		}
 		thisNode, err := store.GetExchangeThisNode(ctx, plan.Name)
 		if err != nil {
 			return err
@@ -51,6 +84,9 @@ func RegisterOnSave(ctx context.Context, store *storage.DB, plans []*metadata.Ex
 			version, err = store.EntityVersion(ctx, entity.Name, id)
 			if err != nil {
 				return err
+			}
+			if nextVersion {
+				version++
 			}
 			haveVersion = true
 		}

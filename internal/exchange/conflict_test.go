@@ -49,7 +49,7 @@ func incomingPkg(id uuid.UUID, version, changedAt int64) []byte {
 		Format: exchange.FormatV1, Plan: "Обмен", FromNode: "CENTER", ToNode: "FIL01", MessageNo: 1,
 		Objects: []exchange.PackageObject{{
 			Type: "товар", ID: strings.ToUpper(id.String()), Version: version, ChangedAt: changedAt,
-			Fields: map[string]any{"Наименование": "изЦентра", "Цена": "999", "Активен": false},
+			Fields: map[string]any{"Наименование": "изЦентра", "Цена": "999", "Дата": nil, "Активен": false},
 		}},
 	}
 	data, _ := json.Marshal(pkg)
@@ -98,11 +98,30 @@ func TestConflictByTime(t *testing.T) {
 	}
 }
 
+func TestConflictByTimeEqualTimestampUsesStableNodeTieBreaker(t *testing.T) {
+	b, ctx, ent, id := setupConflict(t)
+	lr, err := exchange.ApplyPackage(ctx, b, fakeResolver{"Товар": ent},
+		planC("by_time", 0, 0), incomingPkg(id, 2, 1000), exchange.ApplyOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// fil01 sorts after center, so both peers make the same choice: fil01 wins.
+	if lr.Conflicts != 1 || lr.Skipped != 1 {
+		t.Fatalf("ожидали детерминированный выбор локальной версии: %+v", lr)
+	}
+	if got := name(t, b, ctx, ent, id); got != "локальное" {
+		t.Fatalf("при равном времени должен победить fil01, got %q", got)
+	}
+}
+
 func TestAcknowledgedChangeIsNotConflict(t *testing.T) {
 	b, ctx, ent, id := setupConflict(t)
 	pending, err := b.PendingExchangeChanges(ctx, "Обмен", "center")
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("pending: %+v, %v", pending, err)
+	}
+	if n, err := b.NextExchangeMessageNo(ctx, "Обмен", "center"); err != nil || n != 1 {
+		t.Fatalf("next message: %d, %v", n, err)
 	}
 	if err := b.MarkExchangeChangesSent(ctx, pending, 1); err != nil {
 		t.Fatal(err)
@@ -113,7 +132,7 @@ func TestAcknowledgedChangeIsNotConflict(t *testing.T) {
 		MessageNo: 2, AckNo: 1,
 		Objects: []exchange.PackageObject{{
 			Type: "Товар", ID: id.String(), Version: 2, ChangedAt: 2000,
-			Fields: map[string]any{"Наименование": "после подтверждения", "Цена": "2"},
+			Fields: map[string]any{"Наименование": "после подтверждения", "Цена": "2", "Дата": nil, "Активен": false},
 		}},
 	}
 	data, _ := json.Marshal(pkg)

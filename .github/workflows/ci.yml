@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.5'
+          go-version-file: '.go-version'
           cache: true
 
       - name: Check for UTF-8 BOM in .go files
@@ -88,13 +88,42 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.5'
+          go-version-file: '.go-version'
           cache: true
       # Набор линтеров — в .golangci.yml (план 56): стартуем с того, что
       # проходит сейчас, ужесточаем по мере чистки.
       - uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          version: v2.11.4
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: onebase
+          POSTGRES_PASSWORD: onebase
+          POSTGRES_DB: onebase_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U onebase -d onebase_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://onebase:onebase@127.0.0.1:5432/onebase_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+          cache: true
+      - name: PostgreSQL integration tests
+        run: |
+          go test -tags integration ./internal/storage
+          go test -tags integration ./internal/configdb
 
   vuln:
     # Сканирование известных уязвимостей в зависимостях и stdlib. govulncheck
@@ -111,11 +140,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.5'
+          go-version-file: '.go-version'
           cache: true
       - name: govulncheck
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
           govulncheck ./...
 
   bench:
@@ -131,11 +160,11 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.5'
+          go-version-file: '.go-version'
           cache: true
 
       - name: Install benchstat
-        run: go install golang.org/x/perf/cmd/benchstat@latest
+        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260709024250-82a0b07e230d
 
       - name: Benchmark (PR)
         run: |

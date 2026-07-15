@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ivantit66/onebase/internal/storage"
@@ -63,5 +64,71 @@ func TestDumpRestoreSQLite(t *testing.T) {
 	_ = db.QueryRow(ctx, "SELECT name FROM t").Scan(&name)
 	if name != "alpha" {
 		t.Fatalf("after restore: name = %q, want alpha", name)
+	}
+	db.Close()
+
+	// Previous live image is retained for operator rollback.
+	oldDB, err := storage.ConnectSQLite(ctx, dbPath+".old")
+	if err != nil {
+		t.Fatalf("open .old: %v", err)
+	}
+	defer oldDB.Close()
+	if err := oldDB.QueryRow(ctx, "SELECT count(*) FROM t").Scan(&n); err != nil || n != 2 {
+		t.Fatalf("old database count=%d err=%v, want 2", n, err)
+	}
+}
+
+func TestRestoreSQLiteRejectsSameFileWithoutTruncating(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "same.db")
+	db, err := storage.ConnectSQLite(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = db.Exec(ctx, "CREATE TABLE t (v TEXT)")
+	_, _ = db.Exec(ctx, "INSERT INTO t VALUES ('kept')")
+	db.Close()
+
+	err = RestoreSQLite(ctx, path, path)
+	if err == nil || !strings.Contains(err.Error(), "same file") {
+		t.Fatalf("expected same-file rejection, got %v", err)
+	}
+	db, err = storage.ConnectSQLite(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var got string
+	if err := db.QueryRow(ctx, "SELECT v FROM t").Scan(&got); err != nil || got != "kept" {
+		t.Fatalf("target changed after rejection: value=%q err=%v", got, err)
+	}
+}
+
+func TestRestoreSQLiteRejectsCorruptBackupAndPreservesTarget(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "live.db")
+	bad := filepath.Join(dir, "bad.db")
+	db, err := storage.ConnectSQLite(ctx, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = db.Exec(ctx, "CREATE TABLE t (v TEXT)")
+	_, _ = db.Exec(ctx, "INSERT INTO t VALUES ('live')")
+	db.Close()
+	if err := os.WriteFile(bad, []byte("not sqlite"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RestoreSQLite(ctx, target, bad); err == nil {
+		t.Fatal("corrupt backup must be rejected")
+	}
+	db, err = storage.ConnectSQLite(ctx, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var got string
+	if err := db.QueryRow(ctx, "SELECT v FROM t").Scan(&got); err != nil || got != "live" {
+		t.Fatalf("live target changed: value=%q err=%v", got, err)
 	}
 }

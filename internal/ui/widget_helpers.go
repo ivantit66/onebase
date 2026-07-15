@@ -60,6 +60,7 @@ func widgetCell(row map[string]any, field, format string) string {
 		if s, ok := v.(string); ok && len(s) >= 10 {
 			for _, layout := range []string{
 				time.RFC3339, time.RFC3339Nano,
+				"2006-01-02 15:04:05-07:00",
 				"2006-01-02 15:04:05 -0700 MST",
 				"2006-01-02 15:04:05.999999999 -0700 MST",
 				"2006-01-02T15:04:05", "2006-01-02 15:04:05",
@@ -244,7 +245,7 @@ func fmtReportCell(v any) string {
 	case string:
 		if len(t) >= 10 {
 			for _, layout := range []string{
-				time.RFC3339, "2006-01-02T15:04:05", "2006-01-02 15:04:05", "2006-01-02",
+				time.RFC3339, "2006-01-02 15:04:05-07:00", "2006-01-02T15:04:05", "2006-01-02 15:04:05", "2006-01-02",
 			} {
 				if pt, err := time.Parse(layout, t); err == nil {
 					h, m, sec := pt.Clock()

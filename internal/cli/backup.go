@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/spf13/cobra"
 	"github.com/ivantit66/onebase/internal/backup"
 	"github.com/ivantit66/onebase/internal/storage"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -70,6 +70,7 @@ var (
 	restoreDB     string
 	restoreSQLite string
 	restoreFile   string
+	restoreForce  bool
 )
 
 var restoreCmd = &cobra.Command{
@@ -84,6 +85,7 @@ func init() {
 	restoreCmd.Flags().StringVar(&restoreDB, "db", "", "PostgreSQL connection string")
 	restoreCmd.Flags().StringVar(&restoreSQLite, "sqlite", "", "path to the SQLite database file to restore into")
 	restoreCmd.Flags().StringVar(&restoreFile, "file", "", "path to the backup file (required)")
+	restoreCmd.Flags().BoolVar(&restoreForce, "force", false, "confirm that the target service is stopped and allow destructive SQLite restore")
 	_ = restoreCmd.MarkFlagRequired("file")
 }
 
@@ -93,6 +95,9 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(os.Stdout, "Восстановление из %s ...\n", restoreFile)
 	if restoreSQLite != "" {
+		if !restoreForce {
+			return fmt.Errorf("SQLite restore требует остановленного сервиса; повторите с --force после его остановки")
+		}
 		// Файл БД перезаписывается целиком — сервис базы должен быть остановлен.
 		if err := backup.RestoreSQLite(cmd.Context(), restoreSQLite, restoreFile); err != nil {
 			return err

@@ -17,6 +17,7 @@ import (
 	"github.com/ivantit66/onebase/internal/scheduler"
 	"github.com/ivantit66/onebase/internal/storage"
 	"github.com/ivantit66/onebase/internal/ui"
+	"github.com/ivantit66/onebase/internal/version"
 	"github.com/ivantit66/onebase/internal/websec"
 )
 
@@ -163,6 +164,7 @@ func New(reg *runtime.Registry, store *storage.DB, interp *interpreter.Interpret
 // В отличие от liveness-/health (всегда 200), проверяет реальную доступность БД.
 func healthzHandler(store *storage.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("X-OneBase-Version", version.String())
 		ctx, cancel := context.WithTimeout(req.Context(), 2*time.Second)
 		defer cancel()
 		if err := store.Ping(ctx); err != nil {

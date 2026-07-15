@@ -6,9 +6,11 @@ package exchange
 // дублей и не наращивает ревизии.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -20,6 +22,12 @@ import (
 
 // FormatV1 — значение поля Format в пакете первой версии.
 const FormatV1 = "onebase-exchange/1"
+
+const (
+	// MaxPackageBytes is shared by file and HTTP transports.
+	MaxPackageBytes   = 64 << 20
+	MaxPackageObjects = 10_000
+)
 
 // EntityResolver отдаёт метаданные сущности по имени. Реализуется
 // runtime.Registry (метод GetEntity), но объявлен здесь, чтобы пакет обмена не
@@ -50,6 +58,7 @@ type PackageObject struct {
 	ID         string                      `json:"id"`
 	Version    int64                       `json:"version"`
 	Deletion   bool                        `json:"deletion,omitempty"`
+	Tombstone  bool                        `json:"tombstone,omitempty"`
 	ChangedAt  int64                       `json:"changed_at"`
 	Fields     map[string]any              `json:"fields,omitempty"`
 	TableParts map[string][]map[string]any `json:"table_parts,omitempty"`
@@ -67,8 +76,8 @@ type LoadResult struct {
 // присваивает ему следующий номер сообщения и помечает вошедшие строки очереди
 // как выгруженные. Всё — в одной транзакции.
 func BuildPackage(ctx context.Context, store *storage.DB, resolver EntityResolver, plan *metadata.ExchangePlan, toNode string) ([]byte, error) {
-	if plan == nil {
-		return nil, fmt.Errorf("exchange: plan is nil")
+	if err := validatePairPlan(plan); err != nil {
+		return nil, err
 	}
 	toNodeDef := plan.Node(toNode)
 	if toNodeDef == nil {
@@ -93,6 +102,9 @@ func BuildPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 		if err != nil {
 			return err
 		}
+		if len(changes) > MaxPackageObjects {
+			changes = changes[:MaxPackageObjects]
+		}
 		msgNo, err := store.NextExchangeMessageNo(ctx, plan.Name, toNode)
 		if err != nil {
 			return err
@@ -108,22 +120,31 @@ func BuildPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 		for _, ch := range changes {
 			ent := resolver.GetEntity(ch.ObjectType)
 			if ent == nil {
-				continue // сущность убрана из конфигурации — пропускаем
+				return fmt.Errorf("exchange: сущность очереди %q отсутствует в конфигурации; пакет не сформирован", ch.ObjectType)
 			}
 			id, err := uuid.Parse(ch.ObjectID)
 			if err != nil {
-				continue
+				return fmt.Errorf("exchange: неверный id %q в очереди: %w", ch.ObjectID, err)
 			}
-			row, err := store.GetByID(ctx, ent.Name, id, ent)
+			version, exists, err := store.EntityVersionExists(ctx, ent.Name, id)
 			if err != nil {
-				continue // объект недоступен (например, физически удалён) — пропускаем
+				return err
+			}
+			if !exists && !ch.Deletion {
+				return fmt.Errorf("exchange: объект очереди %s/%s физически удалён без tombstone", ent.Name, id)
 			}
 			// Между чтением очереди и объекта могла завершиться новая запись.
 			// Не смешиваем её поля со старой версией пакета: новая строка очереди
 			// останется sent_no=0 и попадёт в следующий пакет.
-			version, err := store.EntityVersion(ctx, ent.Name, id)
-			if err != nil || version != ch.Version {
+			if exists && version != ch.Version {
 				continue
+			}
+			var row map[string]any
+			if exists {
+				row, err = store.GetByID(ctx, ent.Name, id, ent)
+				if err != nil {
+					return fmt.Errorf("exchange: объект очереди %s/%s недоступен: %w", ent.Name, id, err)
+				}
 			}
 			obj := PackageObject{
 				Type:      ch.ObjectType,
@@ -133,10 +154,18 @@ func BuildPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 				ChangedAt: ch.ChangedAt,
 				Fields:    canonicalHeader(ent, row),
 			}
+			if !exists {
+				obj.Tombstone = true
+				obj.Fields = emptyCanonicalHeader(ent)
+			}
 			if len(ent.TableParts) > 0 {
 				obj.TableParts = make(map[string][]map[string]any, len(ent.TableParts))
 			}
 			for _, tp := range ent.TableParts {
+				if obj.Tombstone {
+					obj.TableParts[tp.Name] = []map[string]any{}
+					continue
+				}
 				rows, err := store.GetTablePartRows(ctx, ent.Name, tp.Name, id, tp)
 				if err != nil {
 					return err
@@ -154,7 +183,13 @@ func BuildPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 			return err
 		}
 		out, err = json.MarshalIndent(pkg, "", "  ")
-		return err
+		if err != nil {
+			return err
+		}
+		if len(out) > MaxPackageBytes {
+			return fmt.Errorf("exchange: сформированный пакет превышает лимит %d байт; уменьшите размер объекта", MaxPackageBytes)
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -164,14 +199,118 @@ func BuildPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 
 // ParsePackage разбирает и валидирует конверт пакета.
 func ParsePackage(data []byte) (*Package, error) {
+	if len(data) > MaxPackageBytes {
+		return nil, fmt.Errorf("exchange: пакет превышает лимит %d байт", MaxPackageBytes)
+	}
 	var pkg Package
-	if err := json.Unmarshal(data, &pkg); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&pkg); err != nil {
 		return nil, fmt.Errorf("exchange: разбор пакета: %w", err)
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("exchange: после конверта обнаружены лишние JSON-данные")
+		}
+		return nil, fmt.Errorf("exchange: разбор хвоста пакета: %w", err)
 	}
 	if pkg.Format != FormatV1 {
 		return nil, fmt.Errorf("exchange: неизвестный формат пакета %q (ожидался %q)", pkg.Format, FormatV1)
 	}
+	if strings.TrimSpace(pkg.Plan) == "" || strings.TrimSpace(pkg.FromNode) == "" || strings.TrimSpace(pkg.ToNode) == "" {
+		return nil, fmt.Errorf("exchange: plan, from_node и to_node обязательны")
+	}
+	if pkg.MessageNo <= 0 || pkg.AckNo < 0 {
+		return nil, fmt.Errorf("exchange: неверные счётчики message_no=%d ack_no=%d", pkg.MessageNo, pkg.AckNo)
+	}
+	if len(pkg.Objects) > MaxPackageObjects {
+		return nil, fmt.Errorf("exchange: объектов в пакете %d, лимит %d", len(pkg.Objects), MaxPackageObjects)
+	}
+	seen := make(map[string]struct{}, len(pkg.Objects))
+	for i := range pkg.Objects {
+		obj := &pkg.Objects[i]
+		obj.Type = strings.TrimSpace(obj.Type)
+		if obj.Type == "" || obj.Version <= 0 || obj.ChangedAt <= 0 {
+			return nil, fmt.Errorf("exchange: объект %d имеет неверные type/version/changed_at", i)
+		}
+		if obj.Tombstone && !obj.Deletion {
+			return nil, fmt.Errorf("exchange: tombstone объекта %d должен иметь deletion=true", i)
+		}
+		id, err := uuid.Parse(obj.ID)
+		if err != nil {
+			return nil, fmt.Errorf("exchange: объект %d: неверный id: %w", i, err)
+		}
+		obj.ID = id.String()
+		key := strings.ToLower(obj.Type) + "/" + obj.ID
+		if _, ok := seen[key]; ok {
+			return nil, fmt.Errorf("exchange: объект %s продублирован в пакете", key)
+		}
+		seen[key] = struct{}{}
+	}
 	return &pkg, nil
+}
+
+func validateObjectShape(ent *metadata.Entity, obj PackageObject) error {
+	wantFields := make(map[string]struct{}, len(ent.Fields)+2)
+	for _, f := range ent.Fields {
+		wantFields[strings.ToLower(f.Name)] = struct{}{}
+	}
+	if ent.Hierarchical {
+		wantFields["parent_id"] = struct{}{}
+		wantFields["is_folder"] = struct{}{}
+	}
+	if len(obj.Fields) != len(wantFields) {
+		return fmt.Errorf("exchange: объект %s/%s содержит неполную или несовместимую шапку", ent.Name, obj.ID)
+	}
+	for name := range obj.Fields {
+		if _, ok := wantFields[strings.ToLower(name)]; !ok {
+			return fmt.Errorf("exchange: объект %s/%s содержит неизвестное поле %q", ent.Name, obj.ID, name)
+		}
+	}
+	if len(obj.TableParts) != len(ent.TableParts) {
+		return fmt.Errorf("exchange: объект %s/%s содержит неполный набор табличных частей", ent.Name, obj.ID)
+	}
+	parts := make(map[string]metadata.TablePart, len(ent.TableParts))
+	for _, tp := range ent.TableParts {
+		parts[strings.ToLower(tp.Name)] = tp
+	}
+	for name, rows := range obj.TableParts {
+		tp, ok := parts[strings.ToLower(name)]
+		if !ok {
+			return fmt.Errorf("exchange: объект %s/%s содержит неизвестную табличную часть %q", ent.Name, obj.ID, name)
+		}
+		want := make(map[string]struct{}, len(tp.Fields))
+		for _, f := range tp.Fields {
+			want[strings.ToLower(f.Name)] = struct{}{}
+		}
+		for rowNo, row := range rows {
+			if len(row) != len(want) {
+				return fmt.Errorf("exchange: %s/%s.%s[%d] имеет несовместимый набор полей", ent.Name, obj.ID, tp.Name, rowNo)
+			}
+			for field := range row {
+				if _, ok := want[strings.ToLower(field)]; !ok {
+					return fmt.Errorf("exchange: %s/%s.%s[%d] содержит неизвестное поле %q", ent.Name, obj.ID, tp.Name, rowNo, field)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validatePackageObjects(pkg *Package, resolver EntityResolver, plan *metadata.ExchangePlan) error {
+	for _, obj := range pkg.Objects {
+		ent := resolver.GetEntity(obj.Type)
+		if ent == nil {
+			return fmt.Errorf("exchange: сущность %q неизвестна приёмнику; пакет отклонён без подтверждения", obj.Type)
+		}
+		if !plan.Includes(ent) {
+			return fmt.Errorf("exchange: сущность %q не входит в состав плана %q", obj.Type, plan.Name)
+		}
+		if err := validateObjectShape(ent, obj); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ApplyPackage идемпотентно загружает пакет в план plan. Для каждого объекта:
@@ -191,8 +330,14 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 	if plan == nil {
 		return LoadResult{}, fmt.Errorf("exchange: план %q не найден на приёмнике", pkg.Plan)
 	}
+	if err := validatePairPlan(plan); err != nil {
+		return LoadResult{}, err
+	}
 	if !strings.EqualFold(pkg.Plan, plan.Name) {
 		return LoadResult{}, fmt.Errorf("exchange: пакет плана %q загружается в план %q", pkg.Plan, plan.Name)
+	}
+	if err := validatePackageObjects(pkg, resolver, plan); err != nil {
+		return LoadResult{}, err
 	}
 	var res LoadResult
 	err = store.WithTx(ctx, func(ctx context.Context) error {
@@ -216,6 +361,13 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 		if strings.EqualFold(fromNode, thisNode) {
 			return fmt.Errorf("exchange: пакет не может быть отправлен текущим узлом %q самому себе", thisNode)
 		}
+		peer, err := store.GetExchangePeer(ctx, plan.Name, fromNode)
+		if err != nil {
+			return err
+		}
+		if pkg.AckNo > peer.SentNo {
+			return fmt.Errorf("exchange: ack_no=%d больше последнего отправленного сообщения %d узлу %q", pkg.AckNo, peer.SentNo, fromNode)
+		}
 		// Сначала применяем подтверждение. Подтверждённая отправителем строка
 		// очереди уже не является встречной правкой и не должна участвовать в
 		// разрешении конфликта (особенно при by_node_priority).
@@ -224,20 +376,13 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 				return err
 			}
 		}
+		if pkg.MessageNo <= peer.RecvNo {
+			res.Skipped = len(pkg.Objects)
+			return nil
+		}
 		for _, obj := range pkg.Objects {
 			ent := resolver.GetEntity(obj.Type)
-			if ent == nil {
-				res.Skipped++ // сущность неизвестна приёмнику
-				continue
-			}
-			if !plan.Includes(ent) {
-				return fmt.Errorf("exchange: сущность %q не входит в состав плана %q", obj.Type, plan.Name)
-			}
-			id, err := uuid.Parse(obj.ID)
-			if err != nil {
-				res.Skipped++
-				continue
-			}
+			id, _ := uuid.Parse(obj.ID) // ParsePackage already canonicalised it.
 			// Встречная правка: приёмник менял тот же объект и ещё не отправил
 			// изменение источнику → конфликт, разрешаемый правилом плана.
 			objectID := id.String()
@@ -269,7 +414,10 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 				continue
 			}
 			// Нет встречной правки — идемпотентность по версии.
-			localVer, exists := store.EntityVersionExists(ctx, ent.Name, id)
+			localVer, exists, err := store.EntityVersionExists(ctx, ent.Name, id)
+			if err != nil {
+				return err
+			}
 			if exists && obj.Version <= localVer {
 				res.Skipped++
 				continue
@@ -299,11 +447,20 @@ func ApplyPackage(ctx context.Context, store *storage.DB, resolver EntityResolve
 // путь коэрции значений, что и обычное сохранение), затем принудительно ставит
 // системные колонки (точная версия/пометка/непроведён), затем табличные части.
 func applyObject(ctx context.Context, store *storage.DB, ent *metadata.Entity, id uuid.UUID, obj PackageObject) error {
-	if err := store.Upsert(ctx, ent.Name, id, obj.Fields, ent); err != nil {
+	_, exists, err := store.EntityVersionExists(ctx, ent.Name, id)
+	if err != nil {
 		return err
+	}
+	if !obj.Tombstone || !exists {
+		if err := store.Upsert(ctx, ent.Name, id, obj.Fields, ent); err != nil {
+			return err
+		}
 	}
 	if err := store.SetExchangeObjectState(ctx, ent, id, obj.Version, obj.Deletion); err != nil {
 		return err
+	}
+	if obj.Tombstone {
+		return nil
 	}
 	for _, tp := range ent.TableParts {
 		rows, ok := obj.TableParts[tp.Name]
@@ -323,6 +480,18 @@ func canonicalHeader(ent *metadata.Entity, row map[string]any) map[string]any {
 	if ent.Hierarchical {
 		out["parent_id"] = canonicalScalar(metadata.Field{}, row["parent_id"])
 		out["is_folder"] = toBool(row["is_folder"])
+	}
+	return out
+}
+
+func emptyCanonicalHeader(ent *metadata.Entity) map[string]any {
+	out := make(map[string]any, len(ent.Fields)+2)
+	for _, f := range ent.Fields {
+		out[f.Name] = nil
+	}
+	if ent.Hierarchical {
+		out["parent_id"] = nil
+		out["is_folder"] = false
 	}
 	return out
 }

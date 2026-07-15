@@ -22,9 +22,18 @@ import (
 
 // maxPackageBytes — потолок на размер принимаемого/скачиваемого пакета (защита
 // от OOM и «бесконечного» ответа).
-const maxPackageBytes = 64 << 20 // 64 MiB
-
 var transportClient = &http.Client{Timeout: 60 * time.Second}
+
+func readLimited(r io.Reader) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, MaxPackageBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > MaxPackageBytes {
+		return nil, fmt.Errorf("ответ превышает лимит %d байт", MaxPackageBytes)
+	}
+	return b, nil
+}
 
 // endpoint строит адрес эндпоинта обмена: <base>/exchange/<план>/<op>.
 func endpoint(baseURL, plan, op string) string {
@@ -33,6 +42,9 @@ func endpoint(baseURL, plan, op string) string {
 
 // PushPackage доставляет пакет на узел (POST .../push) и возвращает итог загрузки.
 func PushPackage(ctx context.Context, baseURL, plan, token string, data []byte) (LoadResult, error) {
+	if len(data) > MaxPackageBytes {
+		return LoadResult{}, fmt.Errorf("push на %s: пакет превышает лимит %d байт", baseURL, MaxPackageBytes)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint(baseURL, plan, "push"), bytes.NewReader(data))
 	if err != nil {
 		return LoadResult{}, err
@@ -44,7 +56,10 @@ func PushPackage(ctx context.Context, baseURL, plan, token string, data []byte) 
 		return LoadResult{}, fmt.Errorf("push на %s: %w", baseURL, err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxPackageBytes))
+	body, readErr := readLimited(resp.Body)
+	if readErr != nil {
+		return LoadResult{}, fmt.Errorf("push на %s: %w", baseURL, readErr)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return LoadResult{}, fmt.Errorf("push на %s: %s: %s", baseURL, resp.Status, strings.TrimSpace(string(body)))
 	}
@@ -68,7 +83,10 @@ func PullPackage(ctx context.Context, baseURL, plan, token, toNode string) ([]by
 		return nil, fmt.Errorf("pull с %s: %w", baseURL, err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxPackageBytes))
+	body, readErr := readLimited(resp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("pull с %s: %w", baseURL, readErr)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("pull с %s: %s: %s", baseURL, resp.Status, strings.TrimSpace(string(body)))
 	}

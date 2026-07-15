@@ -977,6 +977,7 @@ func (s *Server) formEdit(w http.ResponseWriter, r *http.Request) {
 				parsed := false
 				for _, layout := range []string{
 					time.RFC3339, time.RFC3339Nano,
+					"2006-01-02 15:04:05-07:00",
 					"2006-01-02 15:04:05 -0700 MST",
 					"2006-01-02 15:04:05.999999999 -0700 MST",
 					"2006-01-02T15:04:05", "2006-01-02 15:04:05",
@@ -1451,7 +1452,9 @@ func (s *Server) deleteRecord(w http.ResponseWriter, r *http.Request) {
 
 	// Снятие пометки на удаление (mark=0) — без возврата проведения.
 	if markParam == "0" {
-		if err := s.store.MarkForDeletion(r.Context(), entity.Name, id, false); err != nil {
+		if err := s.store.WithTx(r.Context(), func(ctx context.Context) error {
+			return s.markForDeletion(ctx, entity, id, false)
+		}); err != nil {
 			http.Error(w, s.errText(r, err), 500)
 			return
 		}
@@ -1491,6 +1494,9 @@ func (s *Server) deleteRecord(w http.ResponseWriter, r *http.Request) {
 			if err := s.clearMovements(ctx, entity.Name, id); err != nil {
 				return err
 			}
+		}
+		if err := exchange.RegisterOnDelete(ctx, s.store, s.reg.ExchangePlans(), entity, id); err != nil {
+			return err
 		}
 		return s.store.Delete(ctx, entity.Name, id)
 	}); err != nil {
@@ -1551,6 +1557,9 @@ func (s *Server) deleteMarkedAll(w http.ResponseWriter, r *http.Request) {
 					}
 					for _, tp := range entity.TableParts {
 						s.store.Exec(ctx, "DELETE FROM "+metadata.TablePartTableName(entity.Name, tp.Name)+" WHERE parent_id = "+s.store.Dialect().Placeholder(1), id)
+					}
+					if err := exchange.RegisterOnDelete(ctx, s.store, s.reg.ExchangePlans(), entity, id); err != nil {
+						return err
 					}
 					return s.store.Delete(ctx, entity.Name, id)
 				}); err != nil {
@@ -1633,6 +1642,9 @@ func (s *Server) deleteMarked(w http.ResponseWriter, r *http.Request) {
 				if err := s.clearMovements(ctx, entity.Name, id); err != nil {
 					return err
 				}
+			}
+			if err := exchange.RegisterOnDelete(ctx, s.store, s.reg.ExchangePlans(), entity, id); err != nil {
+				return err
 			}
 			return s.store.Delete(ctx, entity.Name, id)
 		}); err != nil {

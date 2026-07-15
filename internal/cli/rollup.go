@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/ivantit66/onebase/internal/exchange"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/project"
 	"github.com/ivantit66/onebase/internal/storage"
@@ -106,6 +108,9 @@ func runRollup(cmd *cobra.Command, _ []string) error {
 		AccountRegisters: accNames,
 		InfoRegisters:    infoNames,
 		DeleteDocuments:  !keepDocs,
+		BeforeDeleteDocument: func(ctx context.Context, entity *metadata.Entity, id uuid.UUID) error {
+			return exchange.RegisterOnDelete(ctx, db, proj.ExchangePlans, entity, id)
+		},
 	}
 
 	prev, err := db.RollupPreview(ctx, proj.Registers, proj.Entities, proj.AccountRegisters, proj.InfoRegisters, opts)

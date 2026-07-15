@@ -706,7 +706,8 @@ func (h *handler) configuratorFormsImport1C(w http.ResponseWriter, r *http.Reque
 		http.NotFound(w, r)
 		return
 	}
-	if err := r.ParseMultipartForm(32 << 20); err != nil { // 32MB
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormArchiveUpload)
+	if err := r.ParseMultipartForm(32 << 20); err != nil { // 32MB in memory; the rest spills to a bounded temp file
 		http.Error(w, err.Error(), 400)
 		return
 	}
@@ -790,9 +791,12 @@ func extractImportSource(r *http.Request, tmpDir string) (string, string, string
 	// Вариант 1: одиночный ZIP в поле "zip"
 	if zipFile, _, err := r.FormFile("zip"); err == nil {
 		defer zipFile.Close()
-		data, err := io.ReadAll(zipFile)
+		data, err := io.ReadAll(io.LimitReader(zipFile, (64<<20)+1))
 		if err != nil {
 			return "", "", "", err
+		}
+		if len(data) > 64<<20 {
+			return "", "", "", fmt.Errorf("ZIP формы превышает лимит 64 MiB")
 		}
 		if err := unzipBytes(data, tmpDir); err != nil {
 			return "", "", "", err
@@ -853,36 +857,10 @@ func unzipBytes(data []byte, dst string) error {
 	if err != nil {
 		return err
 	}
-	for _, f := range zr.File {
-		fp := filepath.Join(dst, f.Name)
-		// защита от path traversal
-		if !strings.HasPrefix(fp, filepath.Clean(dst)+string(os.PathSeparator)) {
-			continue
-		}
-		if f.FileInfo().IsDir() {
-			os.MkdirAll(fp, 0o755)
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(fp), 0o755); err != nil {
-			return err
-		}
-		rc, err := f.Open()
-		if err != nil {
-			return err
-		}
-		out, err := os.Create(fp)
-		if err != nil {
-			rc.Close()
-			return err
-		}
-		_, err = io.Copy(out, rc)
-		rc.Close()
-		out.Close()
-		if err != nil {
-			return err
-		}
+	if err := validateArchiveEntries(dst, zr.File, maxFormArchiveExpanded); err != nil {
+		return err
 	}
-	return nil
+	return extractValidatedArchive(dst, zr.File)
 }
 
 // bytesReaderAt — adapter byte slice → io.ReaderAt для zip.NewReader.

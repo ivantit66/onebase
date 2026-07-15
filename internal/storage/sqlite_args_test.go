@@ -7,18 +7,18 @@ import (
 	"time"
 )
 
-// normalizeSQLiteArgs должен приводить time.Time к strftime-совместимой строке
-// (по стенным часам, без перевода в UTC) и не трогать прочие значения.
+// normalizeSQLiteArgs должен приводить time.Time к UTC-строке,
+// которую понимают strftime/date SQLite, и не трогать прочие значения.
 func TestNormalizeSQLiteArgs(t *testing.T) {
 	loc := time.FixedZone("MSK", 3*60*60)
 	tm := time.Date(2026, 1, 3, 0, 0, 0, 0, loc)
 
 	got := normalizeSQLiteArgs([]any{tm, &tm, "строка", 42, nil, (*time.Time)(nil)})
-	if got[0] != "2026-01-03 00:00:00" {
-		t.Errorf("time.Time: got %v, want 2026-01-03 00:00:00", got[0])
+	if got[0] != "2026-01-02 21:00:00+00:00" {
+		t.Errorf("time.Time: got %v, want 2026-01-02 21:00:00+00:00", got[0])
 	}
-	if got[1] != "2026-01-03 00:00:00" {
-		t.Errorf("*time.Time: got %v, want 2026-01-03 00:00:00", got[1])
+	if got[1] != "2026-01-02 21:00:00+00:00" {
+		t.Errorf("*time.Time: got %v, want 2026-01-02 21:00:00+00:00", got[1])
 	}
 	if got[2] != "строка" || got[3] != 42 || got[4] != nil {
 		t.Errorf("прочие значения изменены: %v", got)

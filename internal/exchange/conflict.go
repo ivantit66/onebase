@@ -9,6 +9,7 @@ package exchange
 
 import (
 	"context"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -36,10 +37,13 @@ func resolveConflict(ctx context.Context, store *storage.DB, plan *metadata.Exch
 	case metadata.ConflictByNodePriority:
 		from, to := plan.Node(fromNode), plan.Node(thisNode)
 		if from != nil && to != nil {
-			return from.Priority > to.Priority, nil
+			if from.Priority != to.Priority {
+				return from.Priority > to.Priority, nil
+			}
+			return nodeWinsTie(fromNode, thisNode), nil
 		}
 		// Узлы не описаны — деградируем к сравнению по времени.
-		return incoming.ChangedAt > localChangedAt, nil
+		return winsByTime(incoming.ChangedAt, localChangedAt, fromNode, thisNode), nil
 	case metadata.ConflictByHook:
 		if hook != nil {
 			local, err := readLocalObject(ctx, store, ent, id)
@@ -49,10 +53,23 @@ func resolveConflict(ctx context.Context, store *storage.DB, plan *metadata.Exch
 			return hook.ResolveConflict(ctx, plan, ent, local, &incoming)
 		}
 		// Хук не подключён — деградируем к by_time (загрузка не должна падать).
-		return incoming.ChangedAt > localChangedAt, nil
+		return winsByTime(incoming.ChangedAt, localChangedAt, fromNode, thisNode), nil
 	default: // by_time и всё неизвестное
-		return incoming.ChangedAt > localChangedAt, nil
+		return winsByTime(incoming.ChangedAt, localChangedAt, fromNode, thisNode), nil
 	}
+}
+
+// winsByTime uses the node code as a stable tie-breaker. Without it, two nodes
+// changed in the same millisecond would each keep their local value forever.
+func winsByTime(incomingAt, localAt int64, fromNode, thisNode string) bool {
+	if incomingAt != localAt {
+		return incomingAt > localAt
+	}
+	return nodeWinsTie(fromNode, thisNode)
+}
+
+func nodeWinsTie(candidate, current string) bool {
+	return strings.Compare(strings.ToLower(candidate), strings.ToLower(current)) > 0
 }
 
 // readLocalObject собирает локальную версию объекта как PackageObject для
@@ -62,7 +79,10 @@ func readLocalObject(ctx context.Context, store *storage.DB, ent *metadata.Entit
 	if err != nil {
 		return nil, err
 	}
-	version, _ := store.EntityVersionExists(ctx, ent.Name, id)
+	version, _, err := store.EntityVersionExists(ctx, ent.Name, id)
+	if err != nil {
+		return nil, err
+	}
 	obj := &PackageObject{
 		Type:    ent.Name,
 		ID:      id.String(),

@@ -85,6 +85,7 @@ func (h *handler) configImportZip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxConfigArchiveUpload)
 	file, _, err := r.FormFile("config_zip")
 	if err != nil {
 		data := h.loadCfgData(r.Context(), b, "backup")
@@ -94,15 +95,20 @@ func (h *handler) configImportZip(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	zipData, err := io.ReadAll(file)
+	size, err := file.Seek(0, io.SeekEnd)
 	if err != nil {
 		data := h.loadCfgData(r.Context(), b, "backup")
-		data.Error = "Read error: " + err.Error()
+		data.Error = "ZIP size error: " + err.Error()
 		renderCfg(w, r, data)
 		return
 	}
-
-	reader, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		data := h.loadCfgData(r.Context(), b, "backup")
+		data.Error = "ZIP seek error: " + err.Error()
+		renderCfg(w, r, data)
+		return
+	}
+	reader, err := zip.NewReader(file, size)
 	if err != nil {
 		data := h.loadCfgData(r.Context(), b, "backup")
 		data.Error = "ZIP error: " + err.Error()
@@ -120,28 +126,17 @@ func (h *handler) configImportZip(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	for _, f := range reader.File {
-		outPath, err := safeArchivePath(tmpDir, f.Name)
-		if err != nil {
-			continue // zip-slip: запись с выходом за пределы tmpDir — пропускаем
-		}
-		if f.FileInfo().IsDir() {
-			os.MkdirAll(outPath, 0o755)
-			continue
-		}
-		rc, err := f.Open()
-		if err != nil {
-			continue
-		}
-		os.MkdirAll(filepath.Dir(outPath), 0o755)
-		outFile, err := os.Create(outPath)
-		if err != nil {
-			rc.Close()
-			continue
-		}
-		io.Copy(outFile, rc)
-		outFile.Close()
-		rc.Close()
+	if err := validateArchiveEntries(tmpDir, reader.File, maxConfigArchiveExpanded); err != nil {
+		data := h.loadCfgData(r.Context(), b, "backup")
+		data.Error = "ZIP error: " + err.Error()
+		renderCfg(w, r, data)
+		return
+	}
+	if err := extractValidatedArchive(tmpDir, reader.File); err != nil {
+		data := h.loadCfgData(r.Context(), b, "backup")
+		data.Error = "Extract error: " + err.Error()
+		renderCfg(w, r, data)
+		return
 	}
 
 	// Import into database

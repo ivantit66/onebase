@@ -632,7 +632,10 @@ func exportSafeSettings(ctx context.Context, db *storage.DB, zw *zip.Writer) (in
 func exportAttachments(attachmentsDir string, zw *zip.Writer) (int, error) {
 	count := 0
 	err := filepath.WalkDir(attachmentsDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
 			return nil
 		}
 		rel, _ := filepath.Rel(attachmentsDir, path)
@@ -643,10 +646,16 @@ func exportAttachments(attachmentsDir string, zw *zip.Writer) (int, error) {
 		}
 		f, err := os.Open(path)
 		if err != nil {
-			return nil
+			return err
 		}
-		defer f.Close()
-		io.Copy(fw, f)
+		_, copyErr := io.Copy(fw, f)
+		closeErr := f.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
 		count++
 		return nil
 	})
@@ -686,6 +695,9 @@ func ImportUniversal(
 	zr, err := zip.NewReader(r, size)
 	if err != nil {
 		return nil, fmt.Errorf("import: open zip: %w", err)
+	}
+	if err := validateUniversalArchive(zr); err != nil {
+		return nil, err
 	}
 
 	// --- 1. Read and validate META.txt ----------------------------------------
@@ -745,37 +757,66 @@ func ImportUniversal(
 	if err != nil {
 		return report, fmt.Errorf("import: disable FK: %w", err)
 	}
-	defer fkCleanup()
-
-	// Import data/ tables (application tables).
-	dataDir := filepath.Join(tmpDir, "data")
-	if _, err := os.Stat(dataDir); err == nil {
-		if err := importDir(ctx, db, dataDir, report, nil); err != nil {
-			return report, fmt.Errorf("import data: %w", err)
+	fkDisabled := true
+	defer func() {
+		if fkDisabled {
+			_ = fkCleanup()
 		}
+	}()
+
+	// Application/system tables, safe settings and safety switches are one
+	// database transaction. A malformed row can no longer leave half of the
+	// tables cleared and half restored.
+	if importErr := db.WithTxIfNeeded(ctx, func(txCtx context.Context) error {
+		dataDir := filepath.Join(tmpDir, "data")
+		if _, err := os.Stat(dataDir); err == nil {
+			if err := importDir(txCtx, db, dataDir, report, nil); err != nil {
+				return fmt.Errorf("import data: %w", err)
+			}
+		}
+
+		sysDir := filepath.Join(tmpDir, "system")
+		if _, err := os.Stat(sysDir); err == nil {
+			if err := importDir(txCtx, db, sysDir, report, nil); err != nil {
+				return fmt.Errorf("import system: %w", err)
+			}
+		}
+
+		settingsFile := filepath.Join(tmpDir, "settings", "safe.jsonl")
+		if _, err := os.Stat(settingsFile); err == nil {
+			n, err := importSafeSettings(txCtx, db, settingsFile)
+			if err != nil {
+				return fmt.Errorf("import settings: %w", err)
+			}
+			if n > 0 {
+				report.Tables["_settings"] = n
+			}
+		}
+
+		// Restored copies must not silently contact production systems or run OS
+		// commands. These switches commit atomically with the imported data.
+		if err := db.SaveNetworkEnabled(txCtx, false); err != nil {
+			return fmt.Errorf("import: сброс предохранителя сети: %w", err)
+		}
+		if err := db.SaveExecEnabled(txCtx, false); err != nil {
+			return fmt.Errorf("import: сброс переключателя команд ОС: %w", err)
+		}
+		return nil
+	}); importErr != nil {
+		cleanupErr := fkCleanup()
+		fkDisabled = false
+		if cleanupErr != nil {
+			return report, errors.Join(importErr, fmt.Errorf("import: restore FK constraints: %w", cleanupErr))
+		}
+		return report, importErr
 	}
-
-	// Import system/ tables.
-	sysDir := filepath.Join(tmpDir, "system")
-	if _, err := os.Stat(sysDir); err == nil {
-		if err := importDir(ctx, db, sysDir, report, nil); err != nil {
-			return report, fmt.Errorf("import system: %w", err)
-		}
+	if err := fkCleanup(); err != nil {
+		return report, fmt.Errorf("import: restore FK constraints: %w", err)
 	}
+	fkDisabled = false
 
-	// --- 6. Merge safe settings -----------------------------------------------
-	settingsFile := filepath.Join(tmpDir, "settings", "safe.jsonl")
-	if _, err := os.Stat(settingsFile); err == nil {
-		n, err := importSafeSettings(ctx, db, settingsFile)
-		if err != nil {
-			return report, fmt.Errorf("import settings: %w", err)
-		}
-		if n > 0 {
-			report.Tables["_settings"] = n
-		}
-	}
-
-	// --- 7. Restore attachment files ------------------------------------------
+	// Attachment files are copied only after the database transaction commits;
+	// every individual destination is published atomically.
 	attachSrc := filepath.Join(tmpDir, "attachments")
 	if _, err := os.Stat(attachSrc); err == nil {
 		n, err := restoreAttachments(attachSrc, attachmentsDir)
@@ -785,24 +826,45 @@ func ImportUniversal(
 		report.Files = n
 	}
 
-	// --- 8. Глушим предохранитель сети (план 62) ------------------------------
-	// Безопасные _settings импортируются merge/upsert-ом; net.enabled туда не
-	// входит, но восстановленная копия в любом случае не должна
-	// молча слать вебхуки/письма/HTTP в боевые системы — сбрасываем флаг в
-	// выкл (аналог блокировки регламентных заданий при старте копии в 1С).
-	// Владелец осознанно включит сеть в конфигураторе.
-	if err := db.SaveNetworkEnabled(ctx, false); err != nil {
-		return report, fmt.Errorf("import: сброс предохранителя сети: %w", err)
-	}
-
-	// --- 9. Глушим выполнение команд ОС (план 67) -----------------------------
-	// По той же причине, что и сеть: exec.enabled мог приехать «вкл» из
-	// оригинала, а запуск команд на чужой машине ещё опаснее. Сбрасываем в выкл.
-	if err := db.SaveExecEnabled(ctx, false); err != nil {
-		return report, fmt.Errorf("import: сброс переключателя команд ОС: %w", err)
-	}
-
 	return report, nil
+}
+
+const (
+	maxUniversalArchiveEntries  = 100_000
+	maxUniversalArchiveExpanded = uint64(64 << 30)
+	maxUniversalMetaBytes       = int64(1 << 20)
+)
+
+func validateUniversalArchive(zr *zip.Reader) error {
+	if len(zr.File) > maxUniversalArchiveEntries {
+		return fmt.Errorf("import: слишком много записей в архиве: %d", len(zr.File))
+	}
+	seen := make(map[string]struct{}, len(zr.File))
+	var expanded uint64
+	for _, f := range zr.File {
+		name := strings.ReplaceAll(f.Name, `\`, "/")
+		clean := filepath.Clean(filepath.FromSlash(name))
+		if name == "" || strings.ContainsRune(name, 0) || filepath.IsAbs(clean) ||
+			strings.HasPrefix(name, "/") ||
+			(len(name) >= 2 && ((name[0] >= 'A' && name[0] <= 'Z') || (name[0] >= 'a' && name[0] <= 'z')) && name[1] == ':') ||
+			clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("недопустимый путь в архиве: %s", f.Name)
+		}
+		key := strings.ToLower(clean)
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("повторяющаяся запись в архиве: %s", f.Name)
+		}
+		seen[key] = struct{}{}
+		mode := f.Mode()
+		if mode&os.ModeType != 0 && !mode.IsDir() {
+			return fmt.Errorf("недопустимый тип записи архива: %s", f.Name)
+		}
+		if f.UncompressedSize64 > maxUniversalArchiveExpanded-expanded {
+			return fmt.Errorf("распакованный архив превышает допустимый размер")
+		}
+		expanded += f.UncompressedSize64
+	}
+	return nil
 }
 
 func importSafeSettings(ctx context.Context, db *storage.DB, filePath string) (int, error) {
@@ -866,8 +928,17 @@ func readMeta(zr *zip.Reader) (map[string]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		data, _ := io.ReadAll(rc)
-		rc.Close()
+		data, readErr := io.ReadAll(io.LimitReader(rc, maxUniversalMetaBytes+1))
+		closeErr := rc.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		if int64(len(data)) > maxUniversalMetaBytes {
+			return nil, fmt.Errorf("META.txt превышает допустимый размер")
+		}
 
 		m := make(map[string]string)
 		for _, line := range strings.Split(string(data), "\n") {
@@ -887,13 +958,20 @@ func extractFile(f *zip.File, outPath string) error {
 		return err
 	}
 	defer rc.Close()
-	out, err := os.Create(outPath)
+	out, err := os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	_, err = io.Copy(out, rc)
-	return err
+	n, err := io.Copy(out, rc)
+	if err != nil {
+		_ = out.Close()
+		return err
+	}
+	if uint64(n) != f.UncompressedSize64 {
+		_ = out.Close()
+		return fmt.Errorf("неполная запись архива: %s", f.Name)
+	}
+	return out.Close()
 }
 
 // importConfig imports config files into the database or filesystem.
@@ -903,11 +981,21 @@ func importConfig(ctx context.Context, db *storage.DB, configDest, cfgFileDir, c
 		return repo.ImportFromDir(ctx, configDir)
 	}
 	// File destination: copy YAML files to cfgFileDir.
+	if err := os.MkdirAll(cfgFileDir, 0o755); err != nil {
+		return err
+	}
+	root, err := filepath.EvalSymlinks(cfgFileDir)
+	if err != nil {
+		return err
+	}
 	return filepath.WalkDir(configDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil
+			return err
 		}
-		rel, _ := filepath.Rel(configDir, path)
+		rel, err := filepath.Rel(configDir, path)
+		if err != nil {
+			return err
+		}
 		// Defensive: older archives may have bundled the project's .git tree.
 		// Skip it so restore does not try to overwrite read-only git objects.
 		if skipConfigPath(filepath.ToSlash(rel)) {
@@ -919,16 +1007,80 @@ func importConfig(ctx context.Context, db *storage.DB, configDest, cfgFileDir, c
 		if d.IsDir() {
 			return nil
 		}
-		dst := filepath.Join(cfgFileDir, rel)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
-		}
-		content, err := os.ReadFile(path)
+		dst, err := safeConfigDestination(root, rel)
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(dst, content, 0o644)
+		return copyFilePublished(ctx, path, dst, 0o644)
 	})
+}
+
+func safeConfigDestination(root, rel string) (string, error) {
+	rel = filepath.Clean(rel)
+	if rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("import config: unsafe destination %q", rel)
+	}
+	current := root
+	parts := strings.Split(filepath.Dir(rel), string(filepath.Separator))
+	for _, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		next := filepath.Join(current, part)
+		info, err := os.Lstat(next)
+		if os.IsNotExist(err) {
+			if err := os.Mkdir(next, 0o755); err != nil {
+				return "", err
+			}
+			current = next
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return "", fmt.Errorf("import config: destination component is not a real directory: %s", next)
+		}
+		current = next
+	}
+	return filepath.Join(current, filepath.Base(rel)), nil
+}
+
+func copyFilePublished(ctx context.Context, srcPath, dst string, perm os.FileMode) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".onebase-config-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	committed := false
+	defer func() {
+		_ = tmp.Close()
+		if !committed {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if err := tmp.Chmod(perm); err != nil {
+		return err
+	}
+	if _, err := io.Copy(tmp, contextReader{ctx: ctx, r: src}); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := publishRestoredFile(tmpName, dst); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 // migrateSchema creates all required tables in the target database by loading
@@ -1345,7 +1497,10 @@ func restoreAttachments(srcDir, dstDir string) (int, error) {
 	}
 	count := 0
 	err := filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
 			return nil
 		}
 		rel, _ := filepath.Rel(srcDir, path)
@@ -1356,17 +1511,79 @@ func restoreAttachments(srcDir, dstDir string) (int, error) {
 		}
 		src, err := os.Open(path)
 		if err != nil {
-			return nil
+			return err
 		}
-		defer src.Close()
-		out, err := os.Create(dst)
+		tmp, err := os.CreateTemp(filepath.Dir(dst), ".onebase-restore-*")
 		if err != nil {
-			return nil
+			src.Close()
+			return err
 		}
-		defer out.Close()
-		io.Copy(out, src)
+		tmpName := tmp.Name()
+		defer os.Remove(tmpName)
+		if err := tmp.Chmod(0o600); err != nil {
+			tmp.Close()
+			src.Close()
+			return err
+		}
+		_, copyErr := io.Copy(tmp, src)
+		syncErr := tmp.Sync()
+		closeErr := tmp.Close()
+		srcErr := src.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if syncErr != nil {
+			return syncErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if srcErr != nil {
+			return srcErr
+		}
+		if err := publishRestoredFile(tmpName, dst); err != nil {
+			return err
+		}
 		count++
 		return nil
 	})
 	return count, err
+}
+
+func publishRestoredFile(tmpName, dst string) error {
+	if err := os.Rename(tmpName, dst); err == nil {
+		syncParentDir(dst)
+		return nil
+	} else if _, statErr := os.Stat(dst); statErr != nil {
+		return err
+	}
+	// Windows cannot rename over an existing file. Move the old file aside
+	// first, and restore it if publishing the new one fails.
+	backup, err := os.CreateTemp(filepath.Dir(dst), ".onebase-previous-*")
+	if err != nil {
+		return err
+	}
+	backupName := backup.Name()
+	if err := backup.Close(); err != nil {
+		_ = os.Remove(backupName)
+		return err
+	}
+	_ = os.Remove(backupName)
+	if err := os.Rename(dst, backupName); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, dst); err != nil {
+		restoreErr := os.Rename(backupName, dst)
+		return errors.Join(err, restoreErr)
+	}
+	_ = os.Remove(backupName)
+	syncParentDir(dst)
+	return nil
+}
+
+func syncParentDir(path string) {
+	if dir, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
 }

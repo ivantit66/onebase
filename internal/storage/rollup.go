@@ -42,6 +42,10 @@ type RollupOptions struct {
 	// включается только явным перечислением регистров. Непериодические
 	// пропускаются.
 	InfoRegisters []string
+	// BeforeDeleteDocument runs inside the rollup transaction immediately before
+	// each physical delete. Hosts use it to register exchange tombstones without
+	// creating a storage → exchange package cycle.
+	BeforeDeleteDocument func(context.Context, *metadata.Entity, uuid.UUID) error
 }
 
 // RollupRegReport — итог свёртки по одному регистру.
@@ -380,7 +384,7 @@ func (db *DB) Rollup(ctx context.Context, regs []*metadata.Register, ents []*met
 		}
 
 		// Документы: удалить или снять проведение.
-		deleted, err := db.applyRollupDocPolicy(ctx, ents, cutoff, opts.DeleteDocuments)
+		deleted, err := db.applyRollupDocPolicy(ctx, ents, cutoff, opts.DeleteDocuments, opts.BeforeDeleteDocument)
 		if err != nil {
 			return err
 		}
@@ -528,7 +532,7 @@ func (db *DB) deferFKChecks(ctx context.Context) error {
 // applyRollupDocPolicy удаляет (или снимает проведение) документы с датой < cutoff.
 // Возвращает число удалённых документов (0 при keep-режиме). Дата документа —
 // первое поле типа date; сущности без даты пропускаются.
-func (db *DB) applyRollupDocPolicy(ctx context.Context, ents []*metadata.Entity, cutoff time.Time, del bool) (int, error) {
+func (db *DB) applyRollupDocPolicy(ctx context.Context, ents []*metadata.Entity, cutoff time.Time, del bool, beforeDelete func(context.Context, *metadata.Entity, uuid.UUID) error) (int, error) {
 	d := db.dialect
 	deleted := 0
 	for _, e := range ents {
@@ -559,6 +563,11 @@ func (db *DB) applyRollupDocPolicy(ctx context.Context, ents []*metadata.Entity,
 			}
 			rows.Close()
 			for _, id := range ids {
+				if beforeDelete != nil {
+					if err := beforeDelete(ctx, e, id); err != nil {
+						return deleted, fmt.Errorf("свёртка: регистрация удаления %s %s: %w", e.Name, id, err)
+					}
+				}
 				if err := db.Delete(ctx, e.Name, id); err != nil {
 					return deleted, fmt.Errorf("свёртка: удаление %s %s: %w", e.Name, id, err)
 				}
@@ -1153,7 +1162,7 @@ func parseTimeValue(v any) (time.Time, bool) {
 	case time.Time:
 		return x, true
 	case string:
-		for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006-01-02"} {
+		for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05-07:00", "2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006-01-02"} {
 			if t, err := time.Parse(layout, strings.TrimSpace(x)); err == nil {
 				return t, true
 			}
