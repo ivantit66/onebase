@@ -62,3 +62,14 @@ func TestJournalFormatGuide_InSystemPrompt(t *testing.T) {
 		}
 	}
 }
+
+// TestSubsystemFormatGuide_InSystemPrompt — схема подсистемы (contents/home_page
+// + предупреждение «все имена должны существовать») должна быть в промпте, чтобы
+// модель не угадывала ключи и создавала подсистему последней.
+func TestSubsystemFormatGuide_InSystemPrompt(t *testing.T) {
+	for _, sub := range []string{"subsystems/<Имя>.yaml", "contents:", "home_page:", "создавай ПОСЛЕДНЕЙ"} {
+		if !strings.Contains(aiGenerateSystem, sub) {
+			t.Errorf("в aiGenerateSystem нет %q — модель снова будет угадывать схему подсистемы", sub)
+		}
+	}
+}
