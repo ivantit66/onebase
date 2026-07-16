@@ -1376,7 +1376,9 @@ func (tr *translator) genBalancesAndTurnoversFromTotals(reg *metadata.Register, 
 	dims := dimCols(reg.Dimensions)
 
 	// Аргументы в порядке появления плейсхолдеров в SQL.
-	tr.args = append(tr.args, start.Format("2006-01"))
+	// Ключи итогов и границы месяцев хранятся в UTC. Без нормализации момент
+	// около начала месяца с ненулевым offset мог выбрать соседний месяц итогов.
+	tr.args = append(tr.args, start.UTC().Format("2006-01"))
 	mkPH := d.Placeholder(len(tr.args))
 	tr.args = append(tr.args, monthStartOf(start))
 	msPH := d.Placeholder(len(tr.args))
@@ -1561,7 +1563,11 @@ func (tr *translator) genBalancesAndTurnovers(reg *metadata.Register, args [][]t
 		!(len(args) > 2 && len(args[2]) > 0) && len(args) >= 2 {
 		if start, ok1 := tr.firstArgDate(args[0]); ok1 {
 			if end, ok2 := tr.firstArgDate(args[1]); ok2 {
-				return tr.genBalancesAndTurnoversFromTotals(reg, start, end), alias, nil
+				// Обратный диапазон оставляем обычному пути: его историческая
+				// семантика ограничения строк period <= end отличается от UNION.
+				if !start.After(end) {
+					return tr.genBalancesAndTurnoversFromTotals(reg, start, end), alias, nil
+				}
 			}
 		}
 	}

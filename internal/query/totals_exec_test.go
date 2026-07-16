@@ -408,6 +408,49 @@ func TestBalancesTurnoversTotals_MatchesGolden(t *testing.T) {
 	}
 }
 
+func TestBalancesTurnoversTotals_MonthKeyUsesUTC(t *testing.T) {
+	start := time.Date(2026, 2, 1, 0, 30, 0, 0, time.FixedZone("UTC+3", 3*60*60))
+	end := start.Add(time.Hour)
+	reg := &metadata.Register{
+		Name:       "ОИ",
+		Dimensions: []metadata.Field{{Name: "Товар", Type: metadata.FieldTypeString}},
+		Resources:  []metadata.Field{{Name: "Кол", Type: metadata.FieldTypeNumber}},
+		Totals:     metadata.RegisterTotals{Enabled: true},
+	}
+	r, err := query.Compile(
+		"ВЫБРАТЬ Товар ИЗ РегистрНакопления.ОИ.ОстаткиИОбороты(&Н, &К)",
+		query.CompileOpts{Registers: []*metadata.Register{reg}, Params: map[string]any{"Н": start, "К": end}, Dialect: storage.SQLiteDialect{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := start.UTC().Format("2006-01")
+	if got := r.Args[0]; got != want {
+		t.Fatalf("month key = %v, want UTC month %q", got, want)
+	}
+}
+
+func TestBalancesTurnoversTotals_ReversedRangeFallsBack(t *testing.T) {
+	reg := &metadata.Register{
+		Name:       "ОИ",
+		Dimensions: []metadata.Field{{Name: "Товар", Type: metadata.FieldTypeString}},
+		Resources:  []metadata.Field{{Name: "Кол", Type: metadata.FieldTypeNumber}},
+		Totals:     metadata.RegisterTotals{Enabled: true},
+	}
+	start := time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC)
+	end := start.Add(-time.Hour)
+	r, err := query.Compile(
+		"ВЫБРАТЬ Товар ИЗ РегистрНакопления.ОИ.ОстаткиИОбороты(&Н, &К)",
+		query.CompileOpts{Registers: []*metadata.Register{reg}, Params: map[string]any{"Н": start, "К": end}, Dialect: storage.SQLiteDialect{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(r.SQL, metadata.RegisterTotalsTableName(reg.Name)) {
+		t.Fatalf("reversed range must use the compatibility path, SQL: %s", r.SQL)
+	}
+}
+
 // Регистр с атрибутами не использует итоги (их таблица атрибуты не хранит):
 // Остатки() идёт обычным путём даже при totals.enabled — этап 1.
 func TestBalancesTotals_AttributesFallBack(t *testing.T) {
