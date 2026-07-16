@@ -57,3 +57,49 @@ func TestShowObject_AllDirs(t *testing.T) {
 		t.Errorf("showObject(НетТакого) должен вернуть «не найден», а вернул: %q", got)
 	}
 }
+
+// TestExampleForType — инструмент «пример_объекта» отдаёт корректные эталоны для
+// самых промахоопасных типов и false для неизвестного.
+func TestExampleForType(t *testing.T) {
+	cases := map[string]string{
+		"форма":      "form:\n  name: ФормаОбъекта",              // обёртка form:, не верхний уровень
+		"проведение": "Движения.ОстаткиТоваров.Добавить()",        // верный API движений
+		"отчёт":      "query: |",                                  // отчёт = params + query
+		"виджет":     "type: kpi",                                 // виджет с обязательным type
+		"план счетов": "kind: active",                             // счета
+		"журнал":     "documents: [РеализацияТоваров",             // journals
+	}
+	for kind, needle := range cases {
+		ex, ok := exampleForType(kind)
+		if !ok {
+			t.Errorf("exampleForType(%q) = false, ожидался пример", kind)
+			continue
+		}
+		if !strings.Contains(ex, needle) {
+			t.Errorf("пример для %q не содержит %q:\n%s", kind, needle, ex)
+		}
+	}
+	// Синонимы и регистр.
+	if _, ok := exampleForType("  ФОРМА  "); !ok {
+		t.Error("exampleForType не нормализует регистр/пробелы")
+	}
+	if _, ok := exampleForType("выдуманныйтип"); ok {
+		t.Error("exampleForType для неизвестного типа должен вернуть false")
+	}
+}
+
+// TestExampleObjectTool_Wired — инструмент «пример_объекта» подключён к генератору.
+func TestExampleObjectTool_Wired(t *testing.T) {
+	g := &genSession{overlay: t.TempDir(), changed: map[string]bool{}}
+	tools, _ := g.tools()
+	var found bool
+	for _, tl := range tools {
+		if tl.Name == "пример_объекта" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("инструмент «пример_объекта» не зарегистрирован в g.tools()")
+	}
+}
