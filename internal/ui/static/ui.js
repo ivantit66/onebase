@@ -1004,12 +1004,79 @@ obReady(function () {
     }
     btn.addEventListener('click', open);
     document.getElementById('ob-ai-close').addEventListener('click', close);
+    // mdToHtml — безопасный мини-рендер Markdown для ответов ассистента. Сначала
+    // экранируем HTML (ответ модели недоверенный → любой <тег> становится
+    // текстом), затем разворачиваем ограниченный набор разметки: таблицы GFM,
+    // заголовки, списки, код, ссылки (только http/https/относительные),
+    // жирный/курсив. Сырой HTML из ответа наружу не попадает.
+    function mdToHtml(src) {
+      src = String(src == null ? '' : src);
+      function esc(s) {
+        return s.replace(/[&<>"]/g, function (c) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+        });
+      }
+      function inline(s) {
+        var codes = [];
+        s = s.replace(/`([^`]+)`/g, function (_, c) { codes.push(c); return '\u0000' + (codes.length - 1) + '\u0000'; });
+        s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (_, t, u) {
+          return /^(https?:\/\/|\/)/i.test(u) ? '<a href="' + u + '" target="_blank" rel="noopener">' + t + '</a>' : t;
+        });
+        s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/__([^_]+)__/g, '<strong>$1</strong>');
+        s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+        s = s.replace(/\u0000(\d+)\u0000/g, function (_, i) { return '<code>' + codes[+i] + '</code>'; });
+        return s;
+      }
+      function cells(l) { return l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(function (c) { return c.trim(); }); }
+      function isSep(l) { return /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(l || ''); }
+      var lines = esc(src).replace(/\r\n?/g, '\n').split('\n');
+      var out = [], i = 0;
+      while (i < lines.length) {
+        var line = lines[i];
+        if (/^```/.test(line)) {
+          var buf = []; i++;
+          while (i < lines.length && !/^```/.test(lines[i])) { buf.push(lines[i]); i++; }
+          i++;
+          out.push('<pre><code>' + buf.join('\n') + '</code></pre>');
+          continue;
+        }
+        if (line.indexOf('|') >= 0 && isSep(lines[i + 1])) {
+          var head = cells(line); i += 2; var body = '';
+          while (i < lines.length && lines[i].indexOf('|') >= 0 && lines[i].trim() !== '') {
+            var r = cells(lines[i]), tds = '';
+            for (var k = 0; k < head.length; k++) tds += '<td>' + inline(r[k] || '') + '</td>';
+            body += '<tr>' + tds + '</tr>'; i++;
+          }
+          var ths = ''; for (var h = 0; h < head.length; h++) ths += '<th>' + inline(head[h]) + '</th>';
+          out.push('<table><thead><tr>' + ths + '</tr></thead><tbody>' + body + '</tbody></table>');
+          continue;
+        }
+        var hm = /^(#{1,6})\s+(.*)$/.exec(line);
+        if (hm) { out.push('<h' + hm[1].length + '>' + inline(hm[2]) + '</h' + hm[1].length + '>'); i++; continue; }
+        if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
+          var ol = /^\s*\d+\.\s+/.test(line), lis = '';
+          while (i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
+            lis += '<li>' + inline(lines[i].replace(/^\s*([-*+]|\d+\.)\s+/, '')) + '</li>'; i++;
+          }
+          out.push(ol ? '<ol>' + lis + '</ol>' : '<ul>' + lis + '</ul>');
+          continue;
+        }
+        if (line.trim() === '') { i++; continue; }
+        var para = [];
+        while (i < lines.length && lines[i].trim() !== '' && !/^(```|#{1,6}\s|\s*([-*+]|\d+\.)\s)/.test(lines[i]) && !(lines[i].indexOf('|') >= 0 && isSep(lines[i + 1]))) {
+          para.push(lines[i]); i++;
+        }
+        out.push('<p>' + inline(para.join('<br>')) + '</p>');
+      }
+      return out.join('');
+    }
     function addMsg(role, text) {
       var h = log.querySelector('.hint');
       if (h) h.remove();
       var d = document.createElement('div');
       d.className = 'm ' + (role === 'user' ? 'u' : role === 'error' ? 'err' : 'a');
-      d.textContent = text;
+      if (role === 'assistant') d.innerHTML = mdToHtml(text);
+      else d.textContent = text;
       log.appendChild(d);
       log.scrollTop = log.scrollHeight;
       return d;
@@ -1027,7 +1094,7 @@ obReady(function () {
         .then(function (r) { return r.json(); })
         .then(function (d) {
           if (d && d.ok) {
-            pend.textContent = d.text;
+            pend.innerHTML = mdToHtml(d.text);
             history.push({ role: 'assistant', content: d.text });
           } else {
             history.pop();

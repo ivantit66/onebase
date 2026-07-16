@@ -27,6 +27,7 @@ var applyableSubdirs = map[string]bool{
 	"accountregs": true,
 	"reports":     true,
 	"widgets":     true,
+	"journals":    true,
 	"processors":  true,
 	"pages":       true,
 	"subsystems":  true,
