@@ -2,6 +2,7 @@ package query_test
 
 import (
 	"context"
+	"math"
 	"math/rand"
 	"path/filepath"
 	"strings"
@@ -275,6 +276,178 @@ func TestBalancesTotals_MomentRandomized(t *testing.T) {
 				t.Errorf("момент %d (%s) %s: итоги=%v на лету=%v", i, mt.period.Format("2006-01-02"), k, fast[k], v)
 			}
 		}
+	}
+}
+
+// ОстаткиИОбороты(&Начало, &Конец) через итоги сверяется с эталоном, вычисленным
+// в Go напрямую из движений (на лету с датами-параметрами на SQLite ломается
+// переиспользованием плейсхолдера — отдельный предсуществующий баг). Проверяем
+// все колонки: начальный (period<start), приход/расход (в [start,end]),
+// конечный (period<=end).
+func TestBalancesTurnoversTotals_MatchesGolden(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.ConnectSQLite(ctx, filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	reg := &metadata.Register{
+		Name:       "ОИ",
+		Dimensions: []metadata.Field{{Name: "Товар", Type: metadata.FieldTypeString}},
+		Resources:  []metadata.Field{{Name: "Кол", Type: metadata.FieldTypeNumber}},
+		Totals:     metadata.RegisterTotals{Enabled: true},
+	}
+	if err := db.MigrateRegisters(ctx, []*metadata.Register{reg}); err != nil {
+		t.Fatal(err)
+	}
+	type mvRec struct {
+		nom, vid string
+		period   time.Time
+		qty      float64
+	}
+	var all []mvRec
+	rng := rand.New(rand.NewSource(11))
+	noms := []string{"A", "B", "C"}
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 40; i++ {
+		p := base.AddDate(0, 0, rng.Intn(180))
+		vid := "Приход"
+		if rng.Intn(2) == 0 {
+			vid = "Расход"
+		}
+		nom := noms[rng.Intn(len(noms))]
+		qty := float64(1 + rng.Intn(10))
+		all = append(all, mvRec{nom, vid, p, qty})
+		pp := p
+		if err := db.WriteMovements(ctx, reg.Name, "Д", uuid.New(),
+			[]map[string]any{{"ВидДвижения": vid, "Товар": nom, "Кол": qty}}, reg, &pp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Эталон в Go: начальный/приход/расход/конечный по каждому товару.
+	golden := func(start, end time.Time) map[string][4]float64 {
+		out := map[string][4]float64{}
+		for _, m := range all {
+			signed := m.qty
+			if m.vid == "Расход" {
+				signed = -m.qty
+			}
+			v := out[m.nom]
+			if m.period.Before(start) {
+				v[0] += signed // начальный
+			}
+			if !m.period.Before(start) && !m.period.After(end) {
+				if m.vid == "Приход" {
+					v[1] += m.qty // приход
+				} else {
+					v[2] += m.qty // расход
+				}
+			}
+			if !m.period.After(end) {
+				v[3] += signed // конечный
+			}
+			out[m.nom] = v
+		}
+		// строка включается, если есть движение с period <= end (как on-the-fly)
+		for nom, v := range out {
+			has := false
+			for _, m := range all {
+				if m.nom == nom && !m.period.After(end) {
+					has = true
+					break
+				}
+			}
+			if !has {
+				delete(out, nom)
+			}
+			_ = v
+		}
+		return out
+	}
+	for i := 0; i < 25; i++ {
+		s := base.AddDate(0, 0, rng.Intn(150))
+		e := s.AddDate(0, 0, 1+rng.Intn(90))
+		r, err := query.Compile(
+			"ВЫБРАТЬ Товар, Колначальный, Колприход, Колрасход, Колконечный ИЗ РегистрНакопления.ОИ.ОстаткиИОбороты(&Н, &К)",
+			query.CompileOpts{Registers: []*metadata.Register{reg}, Params: map[string]any{"Н": s, "К": e}, Dialect: storage.SQLiteDialect{}})
+		if err != nil {
+			t.Fatalf("compile: %v", err)
+		}
+		if !strings.Contains(r.SQL, metadata.RegisterTotalsTableName(reg.Name)) {
+			t.Fatalf("ОстаткиИОбороты должен читать %s, SQL: %s", metadata.RegisterTotalsTableName(reg.Name), r.SQL)
+		}
+		rows, err := db.Query(ctx, r.SQL, r.Args...)
+		if err != nil {
+			t.Fatalf("exec: %v\nSQL: %s", err, r.SQL)
+		}
+		got := map[string][4]float64{}
+		for rows.Next() {
+			var n string
+			var a, b, c, dd float64
+			if err := rows.Scan(&n, &a, &b, &c, &dd); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			got[n] = [4]float64{a, b, c, dd}
+		}
+		rows.Close()
+		want := golden(s, e)
+		if len(got) != len(want) {
+			t.Fatalf("период %d [%s..%s]: строк итоги=%d эталон=%d\nfast=%v\ngold=%v",
+				i, s.Format("01-02"), e.Format("01-02"), len(got), len(want), got, want)
+		}
+		for k, w := range want {
+			g := got[k]
+			for j := 0; j < 4; j++ {
+				if math.Abs(g[j]-w[j]) > 1e-9 {
+					t.Errorf("период %d [%s..%s] %s поле %d: итоги=%v эталон=%v",
+						i, s.Format("01-02"), e.Format("01-02"), k, j, g[j], w[j])
+				}
+			}
+		}
+	}
+}
+
+func TestBalancesTurnoversTotals_MonthKeyUsesUTC(t *testing.T) {
+	start := time.Date(2026, 2, 1, 0, 30, 0, 0, time.FixedZone("UTC+3", 3*60*60))
+	end := start.Add(time.Hour)
+	reg := &metadata.Register{
+		Name:       "ОИ",
+		Dimensions: []metadata.Field{{Name: "Товар", Type: metadata.FieldTypeString}},
+		Resources:  []metadata.Field{{Name: "Кол", Type: metadata.FieldTypeNumber}},
+		Totals:     metadata.RegisterTotals{Enabled: true},
+	}
+	r, err := query.Compile(
+		"ВЫБРАТЬ Товар ИЗ РегистрНакопления.ОИ.ОстаткиИОбороты(&Н, &К)",
+		query.CompileOpts{Registers: []*metadata.Register{reg}, Params: map[string]any{"Н": start, "К": end}, Dialect: storage.SQLiteDialect{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := start.UTC().Format("2006-01")
+	if got := r.Args[0]; got != want {
+		t.Fatalf("month key = %v, want UTC month %q", got, want)
+	}
+}
+
+func TestBalancesTurnoversTotals_ReversedRangeFallsBack(t *testing.T) {
+	reg := &metadata.Register{
+		Name:       "ОИ",
+		Dimensions: []metadata.Field{{Name: "Товар", Type: metadata.FieldTypeString}},
+		Resources:  []metadata.Field{{Name: "Кол", Type: metadata.FieldTypeNumber}},
+		Totals:     metadata.RegisterTotals{Enabled: true},
+	}
+	start := time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC)
+	end := start.Add(-time.Hour)
+	r, err := query.Compile(
+		"ВЫБРАТЬ Товар ИЗ РегистрНакопления.ОИ.ОстаткиИОбороты(&Н, &К)",
+		query.CompileOpts{Registers: []*metadata.Register{reg}, Params: map[string]any{"Н": start, "К": end}, Dialect: storage.SQLiteDialect{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(r.SQL, metadata.RegisterTotalsTableName(reg.Name)) {
+		t.Fatalf("reversed range must use the compatibility path, SQL: %s", r.SQL)
 	}
 }
 
