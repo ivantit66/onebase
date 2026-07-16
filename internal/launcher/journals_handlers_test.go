@@ -23,9 +23,10 @@ func TestConfigurator_RendersJournalEditor(t *testing.T) {
 		Lang: "ru",
 		Tab:  "tree",
 		Journals: []cfgJournal{{
-			Name:  "РасписаниеДокладов",
-			Title: "Расписание докладов",
-			YAML:  "name: РасписаниеДокладов\ntitle: Расписание докладов\ndocuments: [Доклад]\n",
+			Name:    "РасписаниеДокладов",
+			Title:   "Расписание докладов",
+			YAML:    "name: РасписаниеДокладов\ntitle: Расписание докладов\ndocuments: [Доклад]\n",
+			RelPath: "journals/РасписаниеДокладов.yaml",
 		}},
 	}
 	var buf bytes.Buffer
@@ -41,6 +42,8 @@ func TestConfigurator_RendersJournalEditor(t *testing.T) {
 		`/bases/test-base/configurator/journal"`,
 		`/bases/test-base/configurator/journal-delete"`,
 		`name="journal_name" value="РасписаниеДокладов"`,
+		`name="journal_path" value="journals/РасписаниеДокладов.yaml"`,
+		`<code>journals/РасписаниеДокладов.yaml</code>`,
 		`id="ta-journal-РасписаниеДокладов" name="source"`,
 		"documents: [Доклад]", // сырой YAML в редакторе
 		`/ui/journal/РасписаниеДокладов`,
@@ -72,6 +75,19 @@ func TestJournalRelPath(t *testing.T) {
 	if got := journalYAMLRelPath("РасписаниеДокладов"); got != "journals/расписаниедокладов.yaml" {
 		t.Errorf("journalYAMLRelPath = %q", got)
 	}
+	if got, ok := journalYAMLRelPathFromForm("РасписаниеДокладов", "journals/РасписаниеДокладов.yaml"); !ok || got != "journals/РасписаниеДокладов.yaml" {
+		t.Errorf("mixed-case path = %q, %v", got, ok)
+	}
+	for _, bad := range []string{
+		"../journals/РасписаниеДокладов.yaml",
+		"journals/nested/РасписаниеДокладов.yaml",
+		"documents/РасписаниеДокладов.yaml",
+		"journals/РасписаниеДокладов.yml",
+	} {
+		if got, ok := journalYAMLRelPathFromForm("РасписаниеДокладов", bad); ok {
+			t.Errorf("небезопасный путь %q принят как %q", bad, got)
+		}
+	}
 }
 
 // readJournalSources читает journals/*.yaml и ключует по «name:».
@@ -82,15 +98,19 @@ func TestReadJournalSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := "name: РасписаниеДокладов\ntitle: Расписание\ndocuments: [Доклад]\n"
-	os.WriteFile(filepath.Join(jDir, "расписаниедокладов.yaml"), []byte(body), 0o644)
+	os.WriteFile(filepath.Join(jDir, "РасписаниеДокладов.yaml"), []byte(body), 0o644)
 	os.WriteFile(filepath.Join(jDir, "readme.txt"), []byte("не yaml"), 0o644)
 
 	got := readJournalSources(dir)
 	if len(got) != 1 {
 		t.Fatalf("ожидался 1 журнал, получено %d: %v", len(got), got)
 	}
-	if got["РасписаниеДокладов"] != body {
-		t.Errorf("source по ключу 'РасписаниеДокладов' не найден/не совпал: %q", got["РасписаниеДокладов"])
+	source := got["РасписаниеДокладов"]
+	if source.YAML != body {
+		t.Errorf("source по ключу 'РасписаниеДокладов' не найден/не совпал: %q", source.YAML)
+	}
+	if source.RelPath != "journals/РасписаниеДокладов.yaml" {
+		t.Errorf("исходный регистр пути потерян: %q", source.RelPath)
 	}
 }
 
@@ -129,6 +149,7 @@ func TestConfiguratorJournal_NewSaveDelete_FileMode(t *testing.T) {
 	edited := "name: РасписаниеДокладов\ntitle: Расписание докладов\ndocuments: [Доклад]\ncolumns:\n  - {field: Дата, label: Дата, format: date}\n"
 	post("journal", h.configuratorSaveJournal, url.Values{
 		"journal_name": {"РасписаниеДокладов"},
+		"journal_path": {"journals/расписаниедокладов.yaml"},
 		"source":       {edited},
 	})
 	saved, err := os.ReadFile(yamlPath)
@@ -142,6 +163,7 @@ func TestConfiguratorJournal_NewSaveDelete_FileMode(t *testing.T) {
 	// 2b. Битый YAML не должен затирать файл.
 	post("journal", h.configuratorSaveJournal, url.Values{
 		"journal_name": {"РасписаниеДокладов"},
+		"journal_path": {"journals/расписаниедокладов.yaml"},
 		"source":       {"name: [не закрытый список\n"},
 	})
 	after, _ := os.ReadFile(yamlPath)
@@ -150,9 +172,70 @@ func TestConfiguratorJournal_NewSaveDelete_FileMode(t *testing.T) {
 	}
 
 	// 3. Удаление — файл исчезает.
-	post("journal-delete", h.configuratorDeleteJournal, url.Values{"journal_name": {"РасписаниеДокладов"}})
+	post("journal-delete", h.configuratorDeleteJournal, url.Values{
+		"journal_name": {"РасписаниеДокладов"},
+		"journal_path": {"journals/расписаниедокладов.yaml"},
+	})
 	if _, err := os.Stat(yamlPath); !os.IsNotExist(err) {
 		t.Errorf("journals/расписаниедокладов.yaml не удалён (err=%v)", err)
+	}
+}
+
+// Редактор сохраняет и удаляет существующий mixed-case файл по его точному
+// пути, даже если YAML name не совпадает с именем файла. Регресс: раньше оба
+// действия вычисляли lower(name), создавая дубликат и оставляя оригинал.
+func TestConfiguratorJournal_PreservesOriginalMixedCasePath(t *testing.T) {
+	s := newTestStore(t)
+	dir := t.TempDir()
+	b := &Base{Name: "Тест", ConfigSource: "file", Path: dir}
+	if err := s.Add(b); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	h := &handler{store: s, runner: NewRunner()}
+
+	jDir := filepath.Join(dir, "journals")
+	if err := os.MkdirAll(jDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	originalPath := filepath.Join(jDir, "Кассовые.yaml")
+	if err := os.WriteFile(originalPath, []byte("name: КассовыеДокументы\ntitle: Кассовые\ndocuments: []\ncolumns: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	post := func(route string, fn http.HandlerFunc, form url.Values) {
+		t.Helper()
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("id", b.ID)
+		req := httptest.NewRequest(http.MethodPost, "/bases/"+b.ID+"/configurator/"+route,
+			strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+		fn(httptest.NewRecorder(), req)
+	}
+
+	edited := "name: КассовыеДокументы\ntitle: Кассовые документы\ndocuments: []\ncolumns: []\n"
+	form := url.Values{
+		"journal_name": {"КассовыеДокументы"},
+		"journal_path": {"journals/Кассовые.yaml"},
+		"source":       {edited},
+	}
+	post("journal", h.configuratorSaveJournal, form)
+
+	saved, err := os.ReadFile(originalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(saved) != edited {
+		t.Errorf("исходный mixed-case файл не обновлён:\n%s", saved)
+	}
+	duplicatePath := filepath.Join(jDir, "кассовыедокументы.yaml")
+	if _, err := os.Stat(duplicatePath); !os.IsNotExist(err) {
+		t.Errorf("создан lower-дубликат %s (err=%v)", duplicatePath, err)
+	}
+
+	post("journal-delete", h.configuratorDeleteJournal, form)
+	if _, err := os.Stat(originalPath); !os.IsNotExist(err) {
+		t.Errorf("исходный mixed-case файл не удалён (err=%v)", err)
 	}
 }
 

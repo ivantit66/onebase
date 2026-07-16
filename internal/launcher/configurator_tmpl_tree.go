@@ -1295,7 +1295,8 @@ const cfgTabTree = `{{define "tab-tree"}}
     <div class="panel-kind">{{t $.Lang "Журнал документов"}} · <code>/ui/journal/{{.Name}}</code></div>
     <form method="POST" action="/bases/{{$.Base.ID}}/configurator/journal">
       <input type="hidden" name="journal_name" value="{{.Name}}">
-      <details open><summary class="section-hd" style="cursor:pointer;margin-top:8px">{{t $.Lang "YAML-описание"}} (<code>journals/{{.Name}}.yaml</code>) <span class="edit-hint">({{t $.Lang "кликните для редактирования"}})</span></summary>
+      <input type="hidden" name="journal_path" value="{{.RelPath}}">
+      <details open><summary class="section-hd" style="cursor:pointer;margin-top:8px">{{t $.Lang "YAML-описание"}} (<code>{{.RelPath}}</code>) <span class="edit-hint">({{t $.Lang "кликните для редактирования"}})</span></summary>
       <div class="code-wrap">
         <pre class="os-code" id="pre-journal-{{.Name}}" onclick="startEdit('journal-{{.Name}}')">{{.YAML}}</pre>
         <textarea class="os-edit" id="ta-journal-{{.Name}}" name="source"
@@ -1310,6 +1311,7 @@ const cfgTabTree = `{{define "tab-tree"}}
     </form>
     <form method="POST" action="/bases/{{$.Base.ID}}/configurator/journal-delete" style="margin-top:8px" onsubmit="return confirm('Удалить журнал {{.Name}}?')">
       <input type="hidden" name="journal_name" value="{{.Name}}">
+      <input type="hidden" name="journal_path" value="{{.RelPath}}">
       <button type="submit" style="background:none;border:1px solid #d8dde8;color:#c00;padding:4px 10px;font-size:11px;border-radius:3px;cursor:pointer">{{t $.Lang "Удалить журнал"}}</button>
     </form>
   </div>

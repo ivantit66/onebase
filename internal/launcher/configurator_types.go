@@ -349,9 +349,10 @@ type cfgPage struct {
 // конфигуратора. Журнал — чисто декларативный YAML без модуля .os, поэтому
 // редактор показывает сырой YAML (как виджет); Name/Title нужны дереву.
 type cfgJournal struct {
-	Name  string
-	Title string
-	YAML  string
+	Name    string
+	Title   string
+	YAML    string
+	RelPath string // точный journals/*.yaml с исходным регистром имени файла
 }
 
 type cfgPrintForm struct {

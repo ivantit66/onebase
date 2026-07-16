@@ -383,14 +383,24 @@ func (h *handler) loadCfgData(ctx context.Context, b *Base, tab string, lang ...
 	// proj.Journals уже отсортирован по имени (journal.LoadDir).
 	journalSources := readJournalSources(proj.Dir)
 	for _, j := range proj.Journals {
-		yamlText, ok := journalSources[j.Name]
+		source, ok := journalSources[j.Name]
 		if !ok {
-			yamlText = journalSources[strings.ToLower(j.Name)]
+			for sourceName, candidate := range journalSources {
+				if strings.EqualFold(sourceName, j.Name) {
+					source = candidate
+					ok = true
+					break
+				}
+			}
+		}
+		if !ok {
+			source.RelPath = journalYAMLRelPath(j.Name)
 		}
 		data.Journals = append(data.Journals, cfgJournal{
-			Name:  j.Name,
-			Title: j.Title,
-			YAML:  yamlText,
+			Name:    j.Name,
+			Title:   j.Title,
+			YAML:    source.YAML,
+			RelPath: source.RelPath,
 		})
 	}
 
@@ -850,8 +860,13 @@ func readPageSources(dir string) map[string]string {
 // readJournalSources читает journals/*.yaml из экспортированного каталога проекта
 // и раскладывает сырой YAML по имени журнала (ключ «name:», иначе имя файла) —
 // чтобы редактор показывал исходный текст без повторного marshal.
-func readJournalSources(dir string) map[string]string {
-	result := make(map[string]string)
+type journalSource struct {
+	YAML    string
+	RelPath string
+}
+
+func readJournalSources(dir string) map[string]journalSource {
+	result := make(map[string]journalSource)
 	entries, err := os.ReadDir(filepath.Join(dir, "journals"))
 	if err != nil {
 		return result
@@ -872,7 +887,10 @@ func readJournalSources(dir string) map[string]string {
 		if yaml.Unmarshal(raw, &no) == nil && no.Name != "" {
 			key = no.Name
 		}
-		result[key] = string(raw)
+		result[key] = journalSource{
+			YAML:    string(raw),
+			RelPath: "journals/" + e.Name(),
+		}
 	}
 	return result
 }
