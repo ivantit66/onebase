@@ -379,6 +379,31 @@ func (h *handler) loadCfgData(ctx context.Context, b *Base, tab string, lang ...
 		})
 	}
 
+	// Journals (журналы документов): сырой YAML journals/*.yaml для редактора.
+	// proj.Journals уже отсортирован по имени (journal.LoadDir).
+	journalSources := readJournalSources(proj.Dir)
+	for _, j := range proj.Journals {
+		source, ok := journalSources[j.Name]
+		if !ok {
+			for sourceName, candidate := range journalSources {
+				if strings.EqualFold(sourceName, j.Name) {
+					source = candidate
+					ok = true
+					break
+				}
+			}
+		}
+		if !ok {
+			source.RelPath = journalYAMLRelPath(j.Name)
+		}
+		data.Journals = append(data.Journals, cfgJournal{
+			Name:    j.Name,
+			Title:   j.Title,
+			YAML:    source.YAML,
+			RelPath: source.RelPath,
+		})
+	}
+
 	// Subsystems
 	for _, sub := range proj.Subsystems {
 		var rows [][]string
@@ -828,6 +853,44 @@ func readPageSources(dir string) map[string]string {
 		}
 		base := strings.ToLower(strings.TrimSuffix(e.Name(), ".page.os"))
 		result[base] = string(raw)
+	}
+	return result
+}
+
+// readJournalSources читает journals/*.yaml из экспортированного каталога проекта
+// и раскладывает сырой YAML по имени журнала (ключ «name:», иначе имя файла) —
+// чтобы редактор показывал исходный текст без повторного marshal.
+type journalSource struct {
+	YAML    string
+	RelPath string
+}
+
+func readJournalSources(dir string) map[string]journalSource {
+	result := make(map[string]journalSource)
+	entries, err := os.ReadDir(filepath.Join(dir, "journals"))
+	if err != nil {
+		return result
+	}
+	type nameOnly struct {
+		Name string `yaml:"name"`
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".yaml") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, "journals", e.Name()))
+		if err != nil {
+			continue
+		}
+		var no nameOnly
+		key := strings.TrimSuffix(e.Name(), ".yaml")
+		if yaml.Unmarshal(raw, &no) == nil && no.Name != "" {
+			key = no.Name
+		}
+		result[key] = journalSource{
+			YAML:    string(raw),
+			RelPath: "journals/" + e.Name(),
+		}
 	}
 	return result
 }

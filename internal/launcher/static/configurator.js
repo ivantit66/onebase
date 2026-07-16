@@ -1,5 +1,5 @@
 // ── New object form ────────────────────────────────────────────
-var _cfgNewTitles = {catalog:'Новый справочник', document:'Новый документ', register:'Новый регистр', inforeg:'Новый регистр сведений', accountreg:'Новый регистр бухгалтерии', enum:'Новое перечисление', subsystem:'Новая подсистема', widget:'Новый виджет', module:'Новый общий модуль', processor:'Новая обработка', page:'Новая страница'};
+var _cfgNewTitles = {catalog:'Новый справочник', document:'Новый документ', register:'Новый регистр', inforeg:'Новый регистр сведений', accountreg:'Новый регистр бухгалтерии', enum:'Новое перечисление', subsystem:'Новая подсистема', widget:'Новый виджет', module:'Новый общий модуль', processor:'Новая обработка', page:'Новая страница', journal:'Новый журнал'};
 function cfgNewObj(kind) {
   if (kind === 'printform') { cfgNewPrintFormShow(); return; }
   // Вставляем форму сразу после кликнутой группы (+ кнопка)

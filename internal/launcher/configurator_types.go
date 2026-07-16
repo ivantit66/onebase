@@ -345,6 +345,16 @@ type cfgPage struct {
 	Source string // raw .page.os
 }
 
+// cfgJournal — проекция журнала документов (journals/<имя>.yaml) для
+// конфигуратора. Журнал — чисто декларативный YAML без модуля .os, поэтому
+// редактор показывает сырой YAML (как виджет); Name/Title нужны дереву.
+type cfgJournal struct {
+	Name    string
+	Title   string
+	YAML    string
+	RelPath string // точный journals/*.yaml с исходным регистром имени файла
+}
+
 type cfgPrintForm struct {
 	Name     string
 	Document string
@@ -450,6 +460,7 @@ type configuratorData struct {
 	Modules          []cfgModule
 	Processors       []cfgProcessor
 	Pages            []cfgPage
+	Journals         []cfgJournal
 	PrintForms       []cfgPrintForm
 	DSLPrintForms    []cfgDSLPrintForm
 	// План 37, этап 4: управляемые формы.

@@ -98,6 +98,7 @@ func treeNodeID(kind, name string) string {
 		"widget":     "wdg-",
 		"processor":  "proc-",
 		"page":       "page-",
+		"journal":    "journal-",
 		"module":     "mod-",
 	}[kind]
 	if prefix == "" {
@@ -128,6 +129,14 @@ func newObjectContent(kind, name string) (subdir, content string) {
 		return "processors", "name: " + name + "\ntitle: " + name + "\nparams: []\n"
 	case "page":
 		return "pages", "name: " + name + "\ntitle: " + name + "\n"
+	case "journal":
+		// Пустой, но проходящий check каркас журнала (документы/колонки
+		// заполняет автор). Пример формата — в комментарии.
+		return "journals", "name: " + name + "\ntitle: " + name + "\ndocuments: []\ncolumns: []\n" +
+			"# Пример: documents: [Заказ]\n" +
+			"# columns: [{field: Дата, label: Дата, format: date}, {field: Сумма, label: Сумма}]\n" +
+			"# filters: [{field: Дата, label: Дата, type: date_range}]\n" +
+			"# conditional: [{when: 'Статус = \"Проведён\"', field: Статус, style: {color: \"#0b6e2d\", bold: true}}]\n"
 	case "module":
 		// Общий модуль — файл src/<имя>.module.os со стартовой экспортной
 		// процедурой (расширение файла проставляется в configuratorNewObject).
