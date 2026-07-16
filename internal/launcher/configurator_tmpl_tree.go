@@ -155,6 +155,14 @@ const cfgTabTree = `{{define "tab-tree"}}
   {{end}}
   </details>
 
+  <details class="cfg-tree" data-group="journals"><summary class="cfg-group cfg-group-hd"><span class="tree-toggle">▸</span><span>{{t $.Lang "Журналы"}}</span><span class="cfg-add-btn" onclick="event.stopPropagation();cfgNewObj('journal')" title="{{t $.Lang "Добавить журнал"}}">+</span></summary>
+  {{range .Journals}}
+  <div class="cfg-item" data-id="journal-{{.Name}}" onclick="selItem(this)">
+    <span class="ic">📔</span>{{if .Title}}{{.Title}}{{else}}{{.Name}}{{end}}
+  </div>
+  {{end}}
+  </details>
+
   <div id="cfg-new-form" class="cfg-new-form" style="display:none">
     <div id="cfg-new-title" style="font-size:11px;font-weight:700;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.3px"></div>
     <form method="POST" action="/bases/{{$.Base.ID}}/configurator/new">
@@ -1155,6 +1163,16 @@ const cfgTabTree = `{{define "tab-tree"}}
       {{end}}
       {{end}}
 
+      {{if $.Journals}}
+      <div style="margin-top:8px"><span style="font-size:11px;font-weight:700;color:#555">{{t $.Lang "Журналы"}}</span></div>
+      {{range $j := $.Journals}}
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 0;cursor:pointer">
+        <input type="checkbox" name="journals" value="{{$j.Name}}" {{range $sub.Contents.Journals}}{{if eq . $j.Name}}checked{{end}}{{end}}>
+        {{if $j.Title}}{{$j.Title}}{{else}}{{$j.Name}}{{end}}
+      </label>
+      {{end}}
+      {{end}}
+
       <div class="section-hd" style="margin-top:14px">{{t $.Lang "Рабочий стол подсистемы"}}</div>
       {{if $.Widgets}}
       <div class="fg" style="margin:6px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -1266,6 +1284,33 @@ const cfgTabTree = `{{define "tab-tree"}}
     <form method="POST" action="/bases/{{$.Base.ID}}/configurator/page-delete" style="margin-top:8px" onsubmit="return confirm('Удалить страницу {{.Name}}?')">
       <input type="hidden" name="page_name" value="{{.Name}}">
       <button type="submit" style="background:none;border:1px solid #d8dde8;color:#c00;padding:4px 10px;font-size:11px;border-radius:3px;cursor:pointer">{{t $.Lang "Удалить страницу"}}</button>
+    </form>
+  </div>
+  {{end}}
+
+  {{/* Журналы документов (декларативный YAML journals/*.yaml, raw-редактор) */}}
+  {{range .Journals}}
+  <div class="cfg-panel" id="journal-{{.Name}}">
+    <div class="panel-title">📔 {{if .Title}}{{.Title}}{{else}}{{.Name}}{{end}}</div>
+    <div class="panel-kind">{{t $.Lang "Журнал документов"}} · <code>/ui/journal/{{.Name}}</code></div>
+    <form method="POST" action="/bases/{{$.Base.ID}}/configurator/journal">
+      <input type="hidden" name="journal_name" value="{{.Name}}">
+      <details open><summary class="section-hd" style="cursor:pointer;margin-top:8px">{{t $.Lang "YAML-описание"}} (<code>journals/{{.Name}}.yaml</code>) <span class="edit-hint">({{t $.Lang "кликните для редактирования"}})</span></summary>
+      <div class="code-wrap">
+        <pre class="os-code" id="pre-journal-{{.Name}}" onclick="startEdit('journal-{{.Name}}')">{{.YAML}}</pre>
+        <textarea class="os-edit" id="ta-journal-{{.Name}}" name="source"
+                  style="display:none"
+                  onblur="endEdit('journal-{{.Name}}')">{{.YAML}}</textarea>
+      </div>
+      </details>
+      <div class="module-save-row">
+        <button class="btn-save" type="submit">{{t $.Lang "Сохранить"}}</button>
+        {{if and $.FieldsSaved (eq $.FieldsSavedEntity .Name)}}<span class="save-ok">{{t $.Lang "✓ Сохранено"}}</span>{{end}}
+      </div>
+    </form>
+    <form method="POST" action="/bases/{{$.Base.ID}}/configurator/journal-delete" style="margin-top:8px" onsubmit="return confirm('Удалить журнал {{.Name}}?')">
+      <input type="hidden" name="journal_name" value="{{.Name}}">
+      <button type="submit" style="background:none;border:1px solid #d8dde8;color:#c00;padding:4px 10px;font-size:11px;border-radius:3px;cursor:pointer">{{t $.Lang "Удалить журнал"}}</button>
     </form>
   </div>
   {{end}}

@@ -50,6 +50,7 @@ var categoryNodePrefix = map[string]string{
 	"Отчёты":               "rep-",
 	"Обработки":            "proc-",
 	"Страницы":             "page-",
+	"Журналы":              "journal-",
 	"Подсистемы":           "sub-",
 	"Виджеты":              "wdg-",
 }
@@ -64,7 +65,7 @@ type fileTreeCategory struct {
 var fileTreeCatOrder = []string{
 	"Справочники", "Документы", "Перечисления",
 	"Регистры накопления", "Регистры сведений", "Регистры бухгалтерии",
-	"Отчёты", "Обработки", "Страницы", "Подсистемы", "Виджеты",
+	"Отчёты", "Обработки", "Страницы", "Журналы", "Подсистемы", "Виджеты",
 	"Конфигурация", "Прочее",
 }
 
@@ -79,6 +80,7 @@ var folderCategory = map[string]string{
 	"reports":     "Отчёты",
 	"processors":  "Обработки",
 	"pages":       "Страницы",
+	"journals":    "Журналы",
 	"subsystems":  "Подсистемы",
 	"widgets":     "Виджеты",
 }
@@ -129,6 +131,9 @@ func buildObjectIndex(proj *project.Project) map[string]objMeta {
 	}
 	for _, p := range proj.Pages {
 		put(p.Name, "Страницы")
+	}
+	for _, j := range proj.Journals {
+		put(j.Name, "Журналы")
 	}
 	for _, e := range proj.Enums {
 		put(e.Name, "Перечисления")

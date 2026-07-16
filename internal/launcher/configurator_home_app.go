@@ -122,6 +122,7 @@ func (h *handler) configuratorSaveSubsystem(w http.ResponseWriter, r *http.Reque
 		Reports    []string `yaml:"reports,omitempty"`
 		Processors []string `yaml:"processors,omitempty"`
 		Journals   []string `yaml:"journals,omitempty"`
+		Pages      []string `yaml:"pages,omitempty"`
 	}
 	type yamlHomePage struct {
 		Title   string                    `yaml:"title,omitempty"`
@@ -154,10 +155,15 @@ func (h *handler) configuratorSaveSubsystem(w http.ResponseWriter, r *http.Reque
 	ys.Contents.InfoRegs = r.Form["inforegs"]
 	ys.Contents.Reports = r.Form["reports"]
 	ys.Contents.Processors = r.Form["processors"]
+	ys.Contents.Journals = r.Form["journals"]
 
 	// Сохраняем переводы (titles) и метаданные рабочего стола из уже
 	// существующего файла, чтобы перезапись не теряла данные, которых нет в форме.
 	if existing, lerr := metadata.LoadSubsystemFile(targetFile); lerr == nil && existing != nil {
+		// Страницы в «Составе подсистемы» пока не показываются галочками —
+		// переносим их из существующего файла, чтобы сохранение подсистемы не
+		// затирало contents.pages (журналы и остальные категории берутся из формы).
+		ys.Contents.Pages = existing.Contents.Pages
 		if formHasMapField(r, "titles") {
 			ys.Titles = parseMapForm(r, "titles")
 		} else {
