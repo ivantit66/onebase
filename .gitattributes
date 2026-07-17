@@ -20,3 +20,15 @@ internal/sheet/fonts/*.ttf binary
 # (рендер sheet.HTML даёт \n). Без -text Windows autocrlf конвертирует в CRLF
 # при checkout и бит-в-бит сравнение в тестах падает.
 internal/dsl/interpreter/testdata/golden/*.html -text
+
+# Первопартийные go:embed-ассеты — принудительно LF в рабочей копии: их
+# содержимое вкомпилируется в бинарь (детерминизм сборки на всех платформах,
+# стабильные content-хэши immutable-кэша /static) и сверяется инвариант-
+# тестами с точными "\n"-строками. Без eol=lf Windows-чекаут (autocrlf=true)
+# давал CRLF → другой бинарь и красный TestTabShellSingleSSEAndEventForwarding.
+internal/ui/static/*.js text eol=lf
+internal/launcher/static/*.js text eol=lf
+internal/launcher/static/*.css text eol=lf
+internal/ui/pwa/sw.js text eol=lf
+internal/ui/pwa/offline.html text eol=lf
+internal/ui/pwa/manifest.webmanifest text eol=lf

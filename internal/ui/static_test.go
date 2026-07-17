@@ -135,7 +135,10 @@ func TestToggleNextSingleHandler(t *testing.T) {
 // При этом документированный контракт onebase:<имя> сохраняется: оболочка
 // ретранслирует событие во фреймы, а те проверяют source и origin отправителя.
 func TestTabShellSingleSSEAndEventForwarding(t *testing.T) {
-	src := string(uiJS)
+	// go:embed вкомпилирует worktree-содержимое: в клоне без свежего чекаута
+	// (до .gitattributes eol=lf) ui.js может лежать с CRLF — нормализуем, чтобы
+	// проверки точных "\n"-строк не зависели от EOL чекаута.
+	src := strings.ReplaceAll(string(uiJS), "\r\n", "\n")
 	// SSE /ui/events подключается только в верхнем окне, не во фрейме оболочки.
 	if !strings.Contains(src, "if (!window.__obEmbedded) {") {
 		t.Error("ui.js должен подключать SSE /ui/events только вне вкладочного фрейма (гейт window.__obEmbedded)")
