@@ -4,11 +4,37 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestRunnerRecordExitDoesNotClobberReplacement(t *testing.T) {
+	r := NewRunner()
+	oldCmd := &exec.Cmd{}
+	newCmd := &exec.Cmd{}
+	r.procs["base"] = &managedProc{cmd: newCmd}
+
+	// Поздний Wait старого процесса после Restart не должен удалить уже
+	// запущенную замену и пометить её завершившейся.
+	r.recordExit("base", oldCmd)
+	if got := r.procs["base"]; got == nil || got.cmd != newCmd {
+		t.Fatal("завершение старого процесса удалило новый процесс")
+	}
+	if r.exits["base"] {
+		t.Fatal("завершение старого процесса пометило новый как упавший")
+	}
+
+	r.recordExit("base", newCmd)
+	if _, ok := r.procs["base"]; ok {
+		t.Fatal("завершившийся текущий процесс остался в procs")
+	}
+	if !r.exits["base"] {
+		t.Fatal("завершение текущего процесса не зафиксировано")
+	}
+}
 
 // waitReadyFreePort возвращает свободный локальный порт (и сразу освобождает его).
 func waitReadyFreePort(t *testing.T) int {

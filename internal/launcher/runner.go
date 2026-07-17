@@ -137,13 +137,26 @@ func (r *Runner) Start(base *Base) error {
 	go func() {
 		cmd.Wait()
 		logFile.Close()
-		r.mu.Lock()
-		delete(r.procs, base.ID)
-		r.exits[base.ID] = true
-		r.mu.Unlock()
+		r.recordExit(base.ID, cmd)
 	}()
 
 	return nil
+}
+
+// recordExit снимает с учёта только тот процесс, завершение которого мы
+// наблюдали. После быстрого Restart старый cmd может завершиться уже после
+// запуска нового процесса с тем же baseID; без проверки он удалил бы новый
+// процесс из procs и WaitReady ошибочно счёл бы его упавшим.
+func (r *Runner) recordExit(baseID string, cmd *exec.Cmd) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if current, ok := r.procs[baseID]; ok {
+		if current.cmd != cmd {
+			return
+		}
+		delete(r.procs, baseID)
+	}
+	r.exits[baseID] = true
 }
 
 func (r *Runner) Stop(baseID string) error {
@@ -373,7 +386,7 @@ func (r *Runner) WaitReady(base *Base, timeout time.Duration) error {
 		if tracked && !r.IsRunning(base.ID) {
 			logPath, _ := baseLogPath(base.ID)
 			if tail := tailFile(logPath, logTailLines); tail != "" {
-				return i18nerr.Errorf("процесс базы завершился при запуске — причина в конце лога (%s):\n\n%s", logPath, tail)
+				return i18nerr.Errorf("процесс базы завершился при запуске — причина в конце лога (%s): %s", logPath, "\n\n"+tail)
 			}
 			return i18nerr.Errorf("процесс базы завершился при запуске — подробности в логе: %s", logPath)
 		}
