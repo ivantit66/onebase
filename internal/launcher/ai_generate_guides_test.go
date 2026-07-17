@@ -14,8 +14,8 @@ func TestFormatGuides_InSystemPrompt(t *testing.T) {
 	cases := map[string][]string{
 		"управляемая форма": {"forms/<сущность-в-нижнем-регистре>/<Форма>.form.yaml", "ПОД ключом form:", "data_path", "АВТОГЕНЕРИРУЕТСЯ"},
 		"проведение":        {"src/<Документ>.posting.os", "Движения.<Регистр>.Добавить()", "РегистрыНакопления.X.СоздатьДвижение() (такого API нет)", "this.<Имя>"},
-		"прочие объекты":    {"reports/<Имя>.yaml", "type: kpi|list|chart|actions|recent", "accounts/<Имя>.yaml", "subconto", "permissions:", "root_url", "schedule:"},
-		"пути файлов":       {"Пути файлов", "ПЛОСКО в src/", "forms/<сущность-в-нижнем-регистре>/<Форма>.form.yaml"},
+		"прочие объекты":    {"reports/<Имя>.yaml", "type: kpi|list|chart|actions|recent", "accounts/<Имя>.yaml", "subconto", "permissions:", "root_url", "schedule:", "processors/<Имя>.yaml", "constants:", "printforms/<Имя>.layout.yaml"},
+		"пути файлов":       {"Пути файлов", "ПЛОСКО в src/", "forms/<сущность-в-нижнем-регистре>/<Форма>.form.yaml", ".proc.os", "printforms/<имя>.layout.yaml"},
 	}
 	for name, needles := range cases {
 		for _, n := range needles {
@@ -68,6 +68,9 @@ func TestExampleForType(t *testing.T) {
 		"виджет":     "type: kpi",                                 // виджет с обязательным type
 		"план счетов": "kind: active",                             // счета
 		"журнал":     "documents: [РеализацияТоваров",             // journals
+		"обработка":  ".proc.os",                                  // код отдельным модулем
+		"константы":  "constants:",                                // список, не по-объектно
+		"печатная форма": "binding:",                              // areas + binding/repeat
 	}
 	for kind, needle := range cases {
 		ex, ok := exampleForType(kind)

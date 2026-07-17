@@ -164,6 +164,70 @@ filters:
   - {field: Контрагент, label: Контрагент, type: reference:Контрагент}
 `
 
+const exProcessor = `name: ПересчётЦен
+title: Пересчёт цен
+# Код — отдельный файл src/пересчётцен.proc.os (нижний регистр, пробелы → «_»):
+#   Процедура Выполнить()
+#       Сообщить("Пересчёт цен выполнен");
+#   КонецПроцедуры
+`
+
+const exConstants = `constants:
+  - {name: ОсновнойСклад, type: reference:Склад, label: Основной склад}
+  - {name: КонтролироватьОстатки, type: bool, default: true, label: Контролировать остатки}
+  - {name: НазваниеОрганизации, type: string, label: Название организации}
+`
+
+const exPrintform = `# printforms/счётнаоплату.layout.yaml — имя формы берётся из имени файла
+name: СчётНаОплату
+document: РеализацияТоваров
+columns:
+  - {width: 40px}
+  - {}
+  - {}
+  - {}
+areas:
+  - name: Заголовок
+    rows:
+      - cells:
+          - {text: "Счёт № {{Номер}} от {{Дата | date}}", bold: true, align: center, colspan: 4}
+  - name: Шапка
+    rows:
+      - cells:
+          - {text: "Покупатель: {{Контрагент.Наименование}}", colspan: 4}
+  - name: ШапкаТаблицы
+    rows:
+      - cells:
+          - {text: "№", bold: true, border: all}
+          - {text: Наименование, bold: true, border: all}
+          - {text: Кол-во, bold: true, align: right, border: all}
+          - {text: Сумма, bold: true, align: right, border: all}
+  - name: Строка
+    rows:
+      - cells:
+          - {parameter: Кол0, border: all}
+          - {parameter: Кол1, border: all}
+          - {parameter: Кол2, align: right, border: all}
+          - {parameter: Кол3, align: right, border: all}
+  - name: Итоги
+    rows:
+      - cells:
+          - {}
+          - {}
+          - {}
+          - {text: "Итого: {{Итог.Товары.Сумма | number:2}}", bold: true, align: right, border: all}
+binding:
+  sequence: [Заголовок, Шапка, ШапкаТаблицы, Строка, Итоги]
+  repeat:
+    - area: Строка
+      source: Товары
+      parameters:
+        Кол0: "@row"
+        Кол1: Номенклатура.Наименование
+        Кол2: Количество
+        Кол3: Сумма | number:2
+`
+
 const exSubsystem = `name: Продажи
 title: Продажи
 icon: shopping-cart
@@ -237,7 +301,7 @@ func exampleForType(kind string) (string, bool) {
 		return exAccountReg, true
 	case "роль", "role":
 		return exRole, true
-	case "http-сервис", "сервис", "service":
+	case "http-сервис", "http service", "сервис", "service":
 		return exService, true
 	case "регламентное задание", "задание", "scheduled", "job":
 		return exScheduled, true
@@ -247,6 +311,12 @@ func exampleForType(kind string) (string, bool) {
 		return exJournal, true
 	case "подсистема", "subsystem":
 		return exSubsystem, true
+	case "обработка", "processor":
+		return exProcessor, true
+	case "константы", "константа", "constants":
+		return exConstants, true
+	case "печатная форма", "печатнаяформа", "printform":
+		return exPrintform, true
 	case "форма", "управляемая форма", "form":
 		return exForm, true
 	case "проведение", "обработкапроведения", "posting":
@@ -262,6 +332,7 @@ func exampleTypeNames() []string {
 		"справочник", "документ", "регистр", "регистр сведений", "перечисление",
 		"отчёт", "виджет", "план счетов", "регистр бухгалтерии", "роль", "сервис",
 		"задание", "страница", "журнал", "подсистема", "форма", "проведение",
+		"обработка", "константы", "печатная форма",
 	}
 	sort.Strings(names)
 	return names

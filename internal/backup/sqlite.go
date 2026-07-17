@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ivantit66/onebase/internal/storage"
@@ -114,7 +115,14 @@ func validateSQLiteBackup(ctx context.Context, path string) error {
 	if readErr != nil || !bytes.Equal(header, []byte(sqliteHeader)) {
 		return fmt.Errorf("sqlite restore: файл не является SQLite database")
 	}
-	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(path), RawQuery: "mode=ro&immutable=1"}).String()
+	// Windows-путь «C:\…» после ToSlash не начинается с «/»: url.URL печатает
+	// его как file://C:/… — диск попадает в authority и SQLite отвергает URI
+	// («invalid uri authority: C:»). Корректная форма — file:///C:/… .
+	p := filepath.ToSlash(path)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	dsn := (&url.URL{Scheme: "file", Path: p, RawQuery: "mode=ro&immutable=1"}).String()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return fmt.Errorf("sqlite restore: открыть подготовленную копию: %w", err)

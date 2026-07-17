@@ -34,6 +34,8 @@ var applyableSubdirs = map[string]bool{
 	"roles":       true,
 	"services":    true,
 	"scheduled":   true,
+	"constants":   true,
+	"printforms":  true,
 	"forms":       true,
 	"src":         true,
 }
