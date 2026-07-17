@@ -95,8 +95,12 @@ func kindSubdir(kind string) (string, bool) {
 		return "roles", true
 	case "http-сервис", "http service", "сервис", "service":
 		return "services", true
-	case "регламентное задание", "scheduled", "job":
+	case "регламентное задание", "задание", "scheduled", "job":
 		return "scheduled", true
+	case "константы", "константа", "constants":
+		return "constants", true
+	case "печатная форма", "печатнаяформа", "printform":
+		return "printforms", true
 	default:
 		return "", false
 	}
@@ -143,6 +147,11 @@ func (g *genSession) createObject(kind, name, yamlText string) error {
 	fname, err := safeFileName(name)
 	if err != nil {
 		return err
+	}
+	if subdir == "printforms" {
+		// Печатная форма живёт в <имя>.layout.yaml — имя формы загрузчик берёт
+		// из имени файла (printform.LoadDir).
+		fname = strings.TrimSuffix(fname, ".yaml") + ".layout.yaml"
 	}
 	rel := subdir + "/" + fname
 	full, err := safeGeneratedFullPath(g.overlay, rel)
@@ -635,7 +644,7 @@ func (g *genSession) tools() ([]llm.Tool, llm.ToolExecutor) {
 		},
 		{
 			Name:        "пример_объекта",
-			Description: "Показать эталонный пример формата для типа объекта: справочник|документ|регистр|регистр сведений|перечисление|отчёт|виджет|план счетов|регистр бухгалтерии|роль|сервис|задание|страница|журнал|подсистема|форма|проведение. Копируй формат из примера, не угадывай.",
+			Description: "Показать эталонный пример формата для типа объекта: справочник|документ|регистр|регистр сведений|перечисление|отчёт|виджет|план счетов|регистр бухгалтерии|роль|сервис|задание|страница|журнал|подсистема|форма|проведение|обработка|константы|печатная форма. Копируй формат из примера, не угадывай.",
 			Schema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"тип": map[string]any{"type": "string"}},
@@ -807,19 +816,23 @@ const otherFormatGuides = `Схемы прочих объектов (по одн
 - Роль (roles/<Имя>.yaml): name, description, permissions: {catalogs: {Имя: [read,write]}, documents: {Имя: [read,write,post,unpost]}, registers: {Имя: [read]}, reports: {Имя: [run]}}.
 - HTTP-сервис (services/<Имя>.yaml): name, root_url, auth: none|basic|session, templates: [{template: /путь, methods: {GET: ИмяПроцедуры}}] + обработчики в src/<Сервис>.service.os.
 - Регламентное задание (scheduled/<Имя>.yaml): name, schedule: "*/5 * * * *" (cron), processor: <ИмяОбработки>, params: {...}, enabled: true, on_error: continue|stop, timeout: 60.
-- Страница (pages/<Имя>.yaml): name, title, icon; обработчик в src/<Страница>.page.os (Процедура ПриФормировании(Страница, Параметры) Экспорт).`
+- Страница (pages/<Имя>.yaml): name, title, icon; обработчик в src/<Страница>.page.os (Процедура ПриФормировании(Страница, Параметры) Экспорт).
+- Обработка (processors/<Имя>.yaml): name, title; код — src/<имя>.proc.os (нижний регистр, пробелы → «_»), точка входа Процедура Выполнить().
+- Константы (constants/<файл>.yaml): constants: [{name, type: string|number|date|bool|enum:<Имя>|reference:<Справочник>, label, default, required}] — список в одном файле (обычно constants/константы.yaml).
+- Печатная форма (printforms/<Имя>.layout.yaml): name, document: <Документ>, columns, areas (rows/cells: text «{{Поле}}»/«{{Поле | date}}» или parameter), binding: {sequence: [...], repeat: [{area, source: <ТабЧасть>, parameters: {...}}]}. Точный формат — «пример_объекта» тип «печатная форма».`
 
 // pathConventionsGuide — куда класть файлы: генератор жжёт раунды на неверных
 // путях (forms в корне, вложенный src и т.п.).
 const pathConventionsGuide = `Пути файлов для «создать_файл» (частые ошибки):
-  метаданные — плоско в своём каталоге: <catalogs|documents|registers|inforegs|enums|accounts|accountregs|reports|widgets|journals|processors|subsystems|roles|services|scheduled>/<Имя>.yaml
-  модули .os — ПЛОСКО в src/, без подпапок: проведение src/<Документ>.posting.os, модуль объекта src/<Имя>.module.os, отчёт src/<Отчёт>.rep.os, страница src/<Страница>.page.os, сервис src/<Сервис>.service.os
+  метаданные — плоско в своём каталоге: <catalogs|documents|registers|inforegs|enums|accounts|accountregs|reports|widgets|journals|processors|subsystems|roles|services|scheduled|constants>/<Имя>.yaml
+  модули .os — ПЛОСКО в src/, без подпапок: проведение src/<Документ>.posting.os, обработка src/<имя>.proc.os, модуль объекта src/<Имя>.module.os, отчёт src/<Отчёт>.rep.os, страница src/<Страница>.page.os, сервис src/<Сервис>.service.os
+  печатные формы — printforms/<имя>.layout.yaml (суффикс .layout.yaml обязателен)
   формы — forms/<сущность-в-нижнем-регистре>/<Форма>.form.yaml (+ одноимённый .form.os)`
 
 // aiGenerateSystem — роль генератора каркаса конфигурации.
 var aiGenerateSystem = "Ты — генератор каркаса конфигурации OneBase (платформа учёта, похожая на 1С). " +
 	"По описанию задачи на русском создавай рабочий feature slice: YAML-метаданные через «создать_объект» " +
-	"или «создать_файл», при необходимости .os-модули, формы, отчёты, виджеты, журналы, страницы, подсистемы, роли и сервисы. " +
+	"или «создать_файл», при необходимости .os-модули, формы, отчёты, виджеты, журналы, страницы, подсистемы, роли, сервисы, обработки, печатные формы и константы. " +
 	"После создания набора файлов обязательно вызывай «проверить_конфигурацию» с full=true и исправляй ошибки. " +
 	"Перед финальным ответом вызывай «форматировать»; для отчётов и виджетов проверяй запросы через «прогнать_запрос». " +
 	"Используй существующие объекты (через «список_объектов», «показать_объект», «прочитать_файл») вместо дублирования. " +
