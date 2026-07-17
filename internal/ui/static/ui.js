@@ -997,8 +997,12 @@ obReady(function () {
     '#ob-ai-log .m.a code{background:#f1f5f9;border-radius:3px;padding:1px 4px;font-family:ui-monospace,Consolas,monospace;font-size:12px}' +
     '#ob-ai-log .m.a pre{background:#f1f5f9;border-radius:6px;padding:8px;overflow-x:auto;margin:6px 0}' +
     '#ob-ai-log .m.a pre code{background:none;padding:0}' +
-    '#ob-ai-log .m.a table{border-collapse:collapse;margin:6px 0;font-size:12px}' +
-    '#ob-ai-log .m.a th,#ob-ai-log .m.a td{border:1px solid #e2e8f0;padding:4px 7px;text-align:left;vertical-align:top}' +
+    // Таблица живёт в собственной скролл-обёртке .tw и держит естественную
+    // ширину; ячейкам возвращаем word-break:normal — иначе наследованный от .m
+    // break-word даёт min-width колонки в один символ и текст жмётся посимвольно.
+    '#ob-ai-log .m.a .tw{overflow-x:auto;margin:6px 0}' +
+    '#ob-ai-log .m.a table{border-collapse:collapse;margin:0;font-size:12px;width:max-content}' +
+    '#ob-ai-log .m.a th,#ob-ai-log .m.a td{border:1px solid #e2e8f0;padding:4px 7px;text-align:left;vertical-align:top;word-break:normal;max-width:240px}' +
     '#ob-ai-log .m.a th{background:#f1f5f9;font-weight:600;white-space:nowrap}' +
     '#ob-ai-log .m.a tbody tr:nth-child(even){background:#f8fafc}' +
     '#ob-ai-log .m.err{align-self:stretch;background:#fef2f2;border:1px solid #fecaca;color:#b91c1c}' +
@@ -1088,6 +1092,7 @@ obReady(function () {
       }
       function cells(l) { return l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(function (c) { return c.trim(); }); }
       function isSep(l) { return /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(l || ''); }
+      function tcell(tag, align, html) { return '<' + tag + (align ? ' style="text-align:' + align + '"' : '') + '>' + html + '</' + tag + '>'; }
       var lines = esc(src).replace(/\r\n?/g, '\n').split('\n');
       var out = [], i = 0;
       while (i < lines.length) {
@@ -1100,14 +1105,20 @@ obReady(function () {
           continue;
         }
         if (line.indexOf('|') >= 0 && isSep(lines[i + 1])) {
-          var head = cells(line); i += 2; var body = '';
+          var head = cells(line);
+          // Выравнивание из GFM-разделителя: `---:` → вправо, `:---:` → по центру.
+          var aligns = cells(lines[i + 1]).map(function (c) {
+            var a = /^(:)?-+(:)?$/.exec(c);
+            return a && a[2] ? (a[1] ? 'center' : 'right') : '';
+          });
+          i += 2; var body = '';
           while (i < lines.length && lines[i].indexOf('|') >= 0 && lines[i].trim() !== '') {
             var r = cells(lines[i]), tds = '';
-            for (var k = 0; k < head.length; k++) tds += '<td>' + inline(r[k] || '') + '</td>';
+            for (var k = 0; k < head.length; k++) tds += tcell('td', aligns[k], inline(r[k] || ''));
             body += '<tr>' + tds + '</tr>'; i++;
           }
-          var ths = ''; for (var h = 0; h < head.length; h++) ths += '<th>' + inline(head[h]) + '</th>';
-          out.push('<table><thead><tr>' + ths + '</tr></thead><tbody>' + body + '</tbody></table>');
+          var ths = ''; for (var h = 0; h < head.length; h++) ths += tcell('th', aligns[h], inline(head[h]));
+          out.push('<div class="tw"><table><thead><tr>' + ths + '</tr></thead><tbody>' + body + '</tbody></table></div>');
           continue;
         }
         var hm = /^(#{1,6})\s+(.*)$/.exec(line);
