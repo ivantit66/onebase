@@ -68,6 +68,11 @@ func TestStaticUIJS(t *testing.T) {
 		"ob-widget-style",
 		"#ob-ai-panel{position:fixed",
 		"#ob-msg-bar{position:fixed",
+		// Ручка изменения ширины панели ИИ и карточки отложенных действий
+		// (план 51: создание черновиков с подтверждением в чате).
+		"#ob-ai-rs{position:absolute",
+		"localStorage.getItem('obAiW')",
+		"'/ui/ai/action'",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("/static/ui.js не содержит %q", want)
