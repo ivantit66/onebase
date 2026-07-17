@@ -25,14 +25,15 @@ func TestAIChat_RendersMarkdown(t *testing.T) {
 		t.Error("в ui.js есть сырой null-байт — сентинел mdToHtml должен быть \\u0000-эскейпом")
 	}
 
-	// Оформление таблиц/кода ответа присутствует в общем layout.
-	html := renderPage(t, "page-index")
+	// Оформление таблиц/кода ответа инжектирует сам ui.js вместе с разметкой
+	// виджета — так стили действуют и на страницах с собственным <head>
+	// (админские «Система» → …), а не только в общем layout.
 	for _, want := range []string{
 		"#ob-ai-log .m.a table",
 		"#ob-ai-log .m.a th",
 		"#ob-ai-log .m.a code",
 	} {
-		if !strings.Contains(html, want) {
+		if !strings.Contains(js, want) {
 			t.Errorf("в стилях нет %q — оформление ответа ассистента не подключено", want)
 		}
 	}
