@@ -21,6 +21,8 @@ func TestSafeConfigPath_Valid(t *testing.T) {
 		"enums/статус.yaml",
 		"accounts/основной.yaml",
 		"accountregs/хозрасчётный.yaml",
+		"constants/общие.yaml",
+		"printforms/счёт.layout.yaml",
 		"src/модуль.os",
 		"forms/клиент/ФормаОбъекта.form.yaml",
 	} {

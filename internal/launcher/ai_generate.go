@@ -567,7 +567,7 @@ func (g *genSession) tools() ([]llm.Tool, llm.ToolExecutor) {
 	tools := []llm.Tool{
 		{
 			Name:        "создать_объект",
-			Description: "Создать черновик объекта метаданных в конфигурации. тип: справочник|документ|регистр накопления|регистр сведений|перечисление|план счетов|регистр бухгалтерии|журнал. имя — на русском. yaml — содержимое файла объекта (без модулей .os).",
+			Description: "Создать черновик объекта метаданных в конфигурации. тип: справочник|документ|регистр накопления|регистр сведений|перечисление|план счетов|регистр бухгалтерии|отчёт|виджет|журнал|обработка|страница|подсистема|роль|сервис|задание|константы|печатная форма. имя — на русском. yaml — содержимое файла объекта (без модулей .os).",
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -580,7 +580,7 @@ func (g *genSession) tools() ([]llm.Tool, llm.ToolExecutor) {
 		},
 		{
 			Name:        "создать_файл",
-			Description: "Создать или заменить whitelist-файл в staging. Разрешены YAML в каталогах метаданных/forms/roles/services/widgets/reports/pages/journals/processors/subsystems/scheduled и .os в src или forms/<объект>/.",
+			Description: "Создать или заменить whitelist-файл в staging. Разрешены YAML в каталогах метаданных/forms/roles/services/widgets/reports/pages/journals/processors/subsystems/scheduled/constants/printforms и .os в src или forms/<объект>/.",
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

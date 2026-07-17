@@ -55,6 +55,46 @@ func TestGenCreateObject_WritesToOverlay(t *testing.T) {
 	}
 }
 
+func TestGenCreateObject_ConstantsAndPrintForm(t *testing.T) {
+	g := newTestGenSession(t)
+	cases := []struct {
+		kind    string
+		name    string
+		content string
+		want    string
+	}{
+		{
+			kind:    "константы",
+			name:    "Общие",
+			content: "constants:\n  - {name: Организация, type: string}\n",
+			want:    "constants/общие.yaml",
+		},
+		{
+			kind:    "печатная форма",
+			name:    "Счёт",
+			content: "name: Счёт\ndocument: Реализация\n",
+			want:    "printforms/счёт.layout.yaml",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.kind, func(t *testing.T) {
+			if err := g.createObject(tc.kind, tc.name, tc.content); err != nil {
+				t.Fatalf("createObject(%q): %v", tc.kind, err)
+			}
+			got, err := os.ReadFile(filepath.Join(g.overlay, filepath.FromSlash(tc.want)))
+			if err != nil {
+				t.Fatalf("%s не создан: %v", tc.want, err)
+			}
+			if string(got) != tc.content {
+				t.Errorf("%s: содержимое не совпало: %q", tc.want, got)
+			}
+			if err := safeConfigPath(tc.want); err != nil {
+				t.Errorf("%s нельзя применить: %v", tc.want, err)
+			}
+		})
+	}
+}
+
 func TestGenCreateObject_UnknownKind(t *testing.T) {
 	g := newTestGenSession(t)
 	if err := g.createObject("ракета", "X", "name: X\n"); err == nil {
