@@ -967,6 +967,65 @@ obReady(function () {
   obInitFeed();
 });
 
+// Стили плавающих виджетов — ИИ-помощника (план 51, F3) и панели сообщений
+// («Окно сообщений» как в 1С). Разметку обоих строит сам ui.js, поэтому CSS
+// живёт здесь же: страницы с собственным <head> без общего стиля приложения
+// (админские «Система» → Пользователи/Обмен/…) иначе показывали голую
+// разметку виджетов внизу страницы.
+(function () {
+  if (document.getElementById('ob-widget-style')) return;
+  var st = document.createElement('style');
+  st.id = 'ob-widget-style';
+  st.textContent =
+    '#ob-ai-btn{position:fixed;right:18px;bottom:44px;z-index:320;width:48px;height:48px;border-radius:50%;background:#2563eb;color:#fff;border:none;cursor:pointer;font-size:22px;box-shadow:0 4px 14px rgba(37,99,235,.4)}' +
+    '#ob-ai-btn:hover{background:#1d4ed8}' +
+    '#ob-ai-panel{position:fixed;right:18px;bottom:44px;z-index:321;width:440px;max-width:calc(100vw - 24px);height:540px;max-height:calc(100vh - 80px);background:#fff;border:1px solid #cbd5e1;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.22);display:none;flex-direction:column;overflow:hidden;font-family:system-ui,sans-serif}' +
+    '#ob-ai-panel.open{display:flex}' +
+    '#ob-ai-head{background:#2563eb;color:#fff;padding:10px 14px;display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px}' +
+    '#ob-ai-head .sp{flex:1}' +
+    '#ob-ai-head button{background:none;border:none;color:#fff;cursor:pointer;font-size:18px;line-height:1}' +
+    '#ob-ai-log{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px;background:#f8fafc}' +
+    '#ob-ai-log .m{max-width:85%;padding:8px 11px;border-radius:12px;font-size:13px;line-height:1.4;white-space:pre-wrap;word-break:break-word}' +
+    '#ob-ai-log .m.u{align-self:flex-end;background:#2563eb;color:#fff;border-bottom-right-radius:3px}' +
+    '#ob-ai-log .m.a{align-self:flex-start;background:#fff;border:1px solid #e2e8f0;color:#1e293b;border-bottom-left-radius:3px;white-space:normal;max-width:92%;overflow-x:auto}' +
+    '#ob-ai-log .m.a p{margin:0 0 6px}' +
+    '#ob-ai-log .m.a p:last-child{margin-bottom:0}' +
+    '#ob-ai-log .m.a h1,#ob-ai-log .m.a h2,#ob-ai-log .m.a h3,#ob-ai-log .m.a h4{font-size:13px;font-weight:700;margin:8px 0 4px}' +
+    '#ob-ai-log .m.a ul,#ob-ai-log .m.a ol{margin:4px 0;padding-left:20px}' +
+    '#ob-ai-log .m.a li{margin:2px 0}' +
+    '#ob-ai-log .m.a a{color:#2563eb;text-decoration:underline}' +
+    '#ob-ai-log .m.a code{background:#f1f5f9;border-radius:3px;padding:1px 4px;font-family:ui-monospace,Consolas,monospace;font-size:12px}' +
+    '#ob-ai-log .m.a pre{background:#f1f5f9;border-radius:6px;padding:8px;overflow-x:auto;margin:6px 0}' +
+    '#ob-ai-log .m.a pre code{background:none;padding:0}' +
+    '#ob-ai-log .m.a table{border-collapse:collapse;margin:6px 0;font-size:12px}' +
+    '#ob-ai-log .m.a th,#ob-ai-log .m.a td{border:1px solid #e2e8f0;padding:4px 7px;text-align:left;vertical-align:top}' +
+    '#ob-ai-log .m.a th{background:#f1f5f9;font-weight:600;white-space:nowrap}' +
+    '#ob-ai-log .m.a tbody tr:nth-child(even){background:#f8fafc}' +
+    '#ob-ai-log .m.err{align-self:stretch;background:#fef2f2;border:1px solid #fecaca;color:#b91c1c}' +
+    '#ob-ai-log .hint{color:#94a3b8;font-size:12px;text-align:center;margin:auto 0}' +
+    '#ob-ai-foot{border-top:1px solid #e2e8f0;padding:8px;display:flex;gap:6px;background:#fff}' +
+    '#ob-ai-input{flex:1;resize:none;border:1px solid #cbd5e1;border-radius:8px;padding:8px;font-size:13px;font-family:inherit;max-height:90px}' +
+    '#ob-ai-send{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:0 14px;cursor:pointer;font-size:14px}' +
+    '#ob-ai-send:disabled{opacity:.5;cursor:default}' +
+    '#ob-msg-bar{position:fixed;left:0;right:0;bottom:0;z-index:300;background:#fff;border-top:1px solid #cbd5e1;box-shadow:0 -2px 8px rgba(0,0,0,.08);font-family:system-ui,sans-serif;font-size:13px;color:#1e293b;transform:translateY(calc(100% - 30px));transition:transform .18s ease}' +
+    '#ob-msg-bar.open{transform:translateY(0)}' +
+    '#ob-msg-bar.hidden{display:none}' +
+    '#ob-msg-head{height:30px;display:flex;align-items:center;padding:0 10px;cursor:pointer;background:#f1f5f9;user-select:none;gap:10px}' +
+    '#ob-msg-head .ttl{font-weight:600;color:#334155;flex:1;display:flex;align-items:center;gap:8px}' +
+    '#ob-msg-head .cnt{background:#ef4444;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700;min-width:18px;text-align:center;display:none}' +
+    '#ob-msg-head .cnt.show{display:inline-block}' +
+    '#ob-msg-head .arr{color:#64748b;font-size:11px;width:14px;text-align:center}' +
+    '#ob-msg-bar.open #ob-msg-head .arr{transform:rotate(180deg)}' +
+    '#ob-msg-head button{background:none;border:none;color:#64748b;cursor:pointer;font-size:12px;padding:4px 8px;border-radius:5px}' +
+    '#ob-msg-head button:hover{background:#e2e8f0;color:#1e293b}' +
+    '#ob-msg-list{max-height:200px;overflow-y:auto;padding:6px 0;background:#fff}' +
+    '#ob-msg-list .it{padding:5px 14px;border-bottom:1px solid #f1f5f9;display:flex;gap:10px;align-items:flex-start;font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word}' +
+    '#ob-msg-list .it:last-child{border-bottom:none}' +
+    '#ob-msg-list .it .t{color:#94a3b8;flex-shrink:0;font-size:11px;padding-top:1px}' +
+    '#ob-msg-list .empty{padding:10px 14px;color:#94a3b8;font-style:italic}';
+  (document.head || document.documentElement).appendChild(st);
+})();
+
 (function () {
   if (window.__obAiInit) return;
   window.__obAiInit = true;

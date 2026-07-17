@@ -62,6 +62,12 @@ func TestStaticUIJS(t *testing.T) {
 		"msg.name === 'уведомление'",
 		"msg.name === 'notify'",
 		"onebase:звонок.входящий",
+		// CSS плавающих виджетов инжектирует сам ui.js: их разметку строит он же,
+		// а страницы с собственным <head> (админские «Система» → …) без этого
+		// показывали голую разметку ИИ-чата и панели сообщений внизу страницы.
+		"ob-widget-style",
+		"#ob-ai-panel{position:fixed",
+		"#ob-msg-bar{position:fixed",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("/static/ui.js не содержит %q", want)
