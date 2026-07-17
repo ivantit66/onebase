@@ -273,6 +273,14 @@ function startBase(el, id) {
   var origText = btn.textContent || '';
   if (btn.innerHTML) btn.innerHTML = '⏳ Запуск...';
   var win = window.open('', '_blank');
+  // Заготовка вместо белого экрана: первый запуск мигрирует схему БД до открытия
+  // порта и может длиться дольше минуты — окно всё это время ждёт ответ /start.
+  if (win) {
+    try {
+      win.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>onebase</title></head><body style="font-family:Segoe UI,Arial,sans-serif;padding:28px"><h3 style="margin:0 0 12px">⏳ Запуск базы…</h3><p style="color:#555;max-width:48em">При первом запуске создаётся схема базы данных — это может занять несколько минут. Окно откроется автоматически.</p></body></html>');
+      win.document.close();
+    } catch (e) {}
+  }
   fetch('/bases/' + id + '/start', {method:'POST'})
     .then(function(r){ return r.json(); })
     .then(function(d){
