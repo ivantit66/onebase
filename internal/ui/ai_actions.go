@@ -134,24 +134,26 @@ func aiRefLookupField(entity *metadata.Entity) string {
 	return ""
 }
 
-// aiRefDisplay — представление записи для подписи карточки (best-effort).
-func (s *Server) aiRefDisplay(ctx context.Context, entity *metadata.Entity, id uuid.UUID) string {
+// aiRefDisplay — представление доступной пользователю записи для подписи
+// карточки. Чтение идёт с объектной и строковой проверкой: UUID из аргументов
+// модели/клиента не должен раскрывать подпись скрытой RLS-записи.
+func (s *Server) aiRefDisplay(ctx context.Context, entity *metadata.Entity, id uuid.UUID) (string, bool) {
+	row, err := s.store.GetByID(ctx, entity.Name, id, entity)
+	if err != nil || !s.rowAllowsSelected(ctx, entity, row) {
+		return "", false
+	}
 	field := aiRefLookupField(entity)
 	if field == "" {
-		return id.String()
-	}
-	row, err := s.store.GetByID(ctx, entity.Name, id, entity)
-	if err != nil {
-		return id.String()
+		return id.String(), true
 	}
 	for k, v := range row {
 		if strings.EqualFold(k, field) && v != nil {
 			if txt := strings.TrimSpace(fmt.Sprint(v)); txt != "" {
-				return txt
+				return txt, true
 			}
 		}
 	}
-	return id.String()
+	return id.String(), true
 }
 
 // aiDateLayouts — принимаемые форматы дат (те же, что у форм).
@@ -214,8 +216,15 @@ func (s *Server) aiNormalizeValue(ctx context.Context, f metadata.Field, raw any
 		if refEntity == nil {
 			return nil, "", fmt.Errorf("поле %s: неизвестная целевая сущность ссылки %q", f.Name, f.RefEntity)
 		}
+		if !s.canCtx(ctx, string(refEntity.Kind), refEntity.Name, "read") {
+			return nil, "", fmt.Errorf("поле %s: нет права на чтение %s", f.Name, refEntity.Name)
+		}
 		if id, err := uuid.Parse(str); err == nil {
-			return id.String(), s.aiRefDisplay(ctx, refEntity, id), nil
+			display, ok := s.aiRefDisplay(ctx, refEntity, id)
+			if !ok {
+				return nil, "", fmt.Errorf("поле %s: запись %s не найдена или недоступна", f.Name, refEntity.Name)
+			}
+			return id.String(), display, nil
 		}
 		// Резолв по имени. Под строковым доступом (RLS) поиск в обход политики
 		// не делаем — модель должна найти UUID через выполнить_запрос (тот путь
@@ -437,18 +446,28 @@ func (s *Server) aiStageOpen(ctx context.Context, call llm.ToolCall, pending *ai
 			if err != nil {
 				return aiErr(call, "id должен быть UUID")
 			}
-			label = "Открыть: " + entity.DisplayName("") + " — " + s.aiRefDisplay(ctx, entity, id)
+			display, ok := s.aiRefDisplay(ctx, entity, id)
+			if !ok {
+				return aiErr(call, "запись не найдена или недоступна")
+			}
+			label = "Открыть: " + entity.DisplayName("") + " — " + display
 			idStr = id.String()
 		}
 	case "report":
 		if s.reg.GetReport(name) == nil {
 			return aiErr(call, fmt.Sprintf("отчёт %q не найден", name))
 		}
+		if !s.canCtx(ctx, "report", name, "run") {
+			return aiErr(call, "у пользователя нет права на запуск отчёта "+name)
+		}
 		idStr = ""
 		label = "Открыть отчёт: " + name
 	case "processor":
 		if s.reg.GetProcessor(name) == nil {
 			return aiErr(call, fmt.Sprintf("обработка %q не найдена", name))
+		}
+		if !s.canCtx(ctx, "processor", name, "run") {
+			return aiErr(call, "у пользователя нет права на запуск обработки "+name)
 		}
 		idStr = ""
 		label = "Открыть обработку: " + name
@@ -477,9 +496,15 @@ func (s *Server) aiActionRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "Неизвестный тип действия"})
 		return
 	}
-	kind := metadata.KindDocument
-	if req.Kind == string(metadata.KindCatalog) {
+	var kind metadata.Kind
+	switch req.Kind {
+	case string(metadata.KindDocument):
+		kind = metadata.KindDocument
+	case string(metadata.KindCatalog):
 		kind = metadata.KindCatalog
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "Неизвестный вид действия"})
+		return
 	}
 	ctx := r.Context()
 	entity, action, err := s.aiNormalizeCreate(ctx, kind, req.Entity, req.Fields, req.TPRows)
@@ -538,7 +563,10 @@ func (s *Server) aiActionRun(w http.ResponseWriter, r *http.Request) {
 	}
 	s.store.LogAIQuery(ctx, entry)
 
-	display := s.aiRefDisplay(ctx, entity, obj.ID)
+	display := obj.ID.String()
+	if readable, ok := s.aiRefDisplay(ctx, entity, obj.ID); ok {
+		display = readable
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,
 		"id":      obj.ID.String(),

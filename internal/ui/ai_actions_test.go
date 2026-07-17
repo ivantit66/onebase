@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/ivantit66/onebase/internal/auth"
 	"github.com/ivantit66/onebase/internal/llm"
 	"github.com/ivantit66/onebase/internal/metadata"
 )
@@ -232,6 +233,14 @@ func TestAIActionRun_RejectsUnknown(t *testing.T) {
 		t.Fatalf("ожидался 400 на неизвестный тип, получен %d", rr.Code)
 	}
 
+	// Неизвестный вид не должен молча превращаться в document.
+	rr = httptest.NewRecorder()
+	s.aiActionRun(rr, httptest.NewRequest("POST", "/ui/ai/action",
+		strings.NewReader(`{"тип":"создать","вид":"report","сущность":"Заказ"}`)))
+	if rr.Code != 400 {
+		t.Fatalf("ожидался 400 на неизвестный вид, получен %d", rr.Code)
+	}
+
 	// Подделанное действие с несуществующим полем отклоняется повторной валидацией.
 	rr = httptest.NewRecorder()
 	s.aiActionRun(rr, httptest.NewRequest("POST", "/ui/ai/action",
@@ -243,6 +252,58 @@ func TestAIActionRun_RejectsUnknown(t *testing.T) {
 	_ = json.Unmarshal(rr.Body.Bytes(), &out)
 	if out.OK || !strings.Contains(out.Error, "Взлом") {
 		t.Fatalf("ожидалась ошибка валидации, получено: %+v", out)
+	}
+}
+
+func TestAIActions_RLSHidesReferenceAndOpen(t *testing.T) {
+	ents := aiActionsEntities()
+	// Владелец нужен для строковой политики на справочнике ссылок.
+	ents[0].Fields = append(ents[0].Fields, metadata.Field{Name: "Owner", Type: metadata.FieldTypeString})
+	s, ctx := newSubmitTestServer(t, ents)
+	allowedID := uuid.New()
+	hiddenID := uuid.New()
+	if err := s.store.Upsert(ctx, ents[0].Name, allowedID, map[string]any{"Наименование": "Доступный", "Owner": "u"}, ents[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.Upsert(ctx, ents[0].Name, hiddenID, map[string]any{"Наименование": "Скрытый", "Owner": "other"}, ents[0]); err != nil {
+		t.Fatal(err)
+	}
+	user := &auth.User{Login: "u", Roles: []*auth.Role{{Permissions: auth.Permission{
+		Catalogs:  map[string][]string{ents[0].Name: {"read"}},
+		Documents: map[string][]string{ents[1].Name: {"read", "write"}},
+		RowAccess: auth.RowAccess{Catalogs: map[string]auth.RowPolicies{
+			ents[0].Name: {"read": {Field: "Owner", Op: "eq", Value: auth.RowValue{User: "login"}}},
+		}},
+	}}}}
+	userCtx := auth.ContextWithUser(context.Background(), user)
+
+	// Прямой UUID скрытой ссылки не должен раскрывать подпись и не должен
+	// попадать в подготовленное действие.
+	pending := &aiPendingActions{}
+	res := s.aiStageCreate(userCtx, metadata.KindDocument, llm.ToolCall{ID: "c1", Input: map[string]any{
+		"сущность": ents[1].Name,
+		"поля":     map[string]any{"Контрагент": hiddenID.String()},
+	}}, pending)
+	if !res.IsError || strings.Contains(res.Content, "Скрытый") || len(pending.Actions) != 0 {
+		t.Fatalf("скрытая RLS-ссылка прошла staging: result=%+v actions=%+v", res, pending.Actions)
+	}
+
+	// Тот же UUID нельзя использовать для карточки открытия формы: прежний код
+	// читал GetByID напрямую и возвращал модели подпись скрытой записи.
+	res = s.aiStageOpen(userCtx, llm.ToolCall{ID: "o1", Input: map[string]any{
+		"вид": "catalog", "сущность": ents[0].Name, "id": hiddenID.String(),
+	}}, pending)
+	if !res.IsError || strings.Contains(res.Content, "Скрытый") {
+		t.Fatalf("открытие раскрыло скрытую RLS-запись: %+v", res)
+	}
+
+	// Доступная строка по-прежнему разрешена.
+	res = s.aiStageCreate(userCtx, metadata.KindDocument, llm.ToolCall{ID: "c2", Input: map[string]any{
+		"сущность": ents[1].Name,
+		"поля":     map[string]any{"Контрагент": allowedID.String()},
+	}}, pending)
+	if res.IsError || !strings.Contains(res.Content, "Доступный") {
+		t.Fatalf("доступная RLS-ссылка отклонена: %+v", res)
 	}
 }
 
