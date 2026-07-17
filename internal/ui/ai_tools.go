@@ -39,13 +39,16 @@ func (s *Server) aiDataAllowed(r *http.Request) bool {
 	return u.AllowsAIDataAccess()
 }
 
-// aiTools формирует набор read-only инструментов для tool-use чата и исполнитель.
-// Инструменты, дающие доступ к произвольным данным, выдаются администратору и
-// пользователям с флагом AIDataAccess (см. aiDataAllowed). Для остальных
-// возвращается (nil, nil) — чат отвечает без доступа к данным.
-func (s *Server) aiTools(r *http.Request) ([]llm.Tool, llm.ToolExecutor) {
+// aiTools формирует набор инструментов для tool-use чата и исполнитель:
+// read-only доступ к данным плюс отложенные действия (создание черновиков,
+// открытие форм — план 51, слой 2, фаза 2). Инструменты выдаются администратору
+// и пользователям с флагом AIDataAccess (см. aiDataAllowed). Для остальных
+// возвращается (nil, nil, nil) — чат отвечает без доступа к данным. Третье
+// значение — аккумулятор действий, ожидающих подтверждения пользователем;
+// aiChat отдаёт их клиенту вместе с ответом модели.
+func (s *Server) aiTools(r *http.Request) ([]llm.Tool, llm.ToolExecutor, *aiPendingActions) {
 	if !s.aiDataAllowed(r) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	tools := []llm.Tool{
 		{
@@ -69,17 +72,26 @@ func (s *Server) aiTools(r *http.Request) ([]llm.Tool, llm.ToolExecutor) {
 		},
 	}
 
+	tools = append(tools, aiMutationTools()...)
+
+	pending := &aiPendingActions{}
 	exec := func(ctx context.Context, call llm.ToolCall) llm.ToolResult {
 		switch call.Name {
 		case "описание_данных":
 			return llm.ToolResult{ID: call.ID, Content: s.aiSchemaText(ctx)}
 		case "выполнить_запрос":
 			return s.aiRunQuery(ctx, call)
+		case "создать_документ":
+			return s.aiStageCreate(ctx, metadata.KindDocument, call, pending)
+		case "создать_элемент_справочника":
+			return s.aiStageCreate(ctx, metadata.KindCatalog, call, pending)
+		case "открыть_форму":
+			return s.aiStageOpen(ctx, call, pending)
 		default:
 			return llm.ToolResult{ID: call.ID, Content: "неизвестный инструмент: " + call.Name, IsError: true}
 		}
 	}
-	return tools, exec
+	return tools, exec, pending
 }
 
 // aiSchemaText кратко описывает доступные объекты конфигурации для модели. В

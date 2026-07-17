@@ -20,7 +20,12 @@ const aiChatSystemPrompt = "Ты — встроенный ИИ-помощник 
 	"вопросы по фактическим данным: сначала вызови «описание_данных», чтобы узнать " +
 	"объекты и поля, затем «выполнить_запрос». Числа бери только из результатов " +
 	"инструментов, не выдумывай. Если инструментов нет, а для ответа нужны данные из " +
-	"базы — честно скажи об этом и подскажи, какой отчёт или обработку посмотреть."
+	"базы — честно скажи об этом и подскажи, какой отчёт или обработку посмотреть. " +
+	"Инструменты «создать_документ» и «создать_элемент_справочника» лишь готовят черновик: " +
+	"запись выполняется только после того, как пользователь подтвердит действие кнопкой в чате. " +
+	"Перед подготовкой создания выясни структуру через «описание_данных», а UUID ссылочных " +
+	"значений находи через «выполнить_запрос». Проведение документов тебе недоступно. " +
+	"Инструментом «открыть_форму» давай пользователю кнопку перехода к списку, записи, отчёту или обработке."
 
 // aiEnabled сообщает клиенту, показывать ли кнопку чата (помощник настроен).
 func (s *Server) aiEnabled(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +98,7 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 	chatReq := llm.ChatRequest{System: aiChatSystemPrompt, Messages: msgs}
 	// Tool-use (F4): администратору доступны инструменты чтения данных, чтобы ИИ
 	// сам выполнял запросы. Остальным — обычный ответ без доступа к данным.
-	tools, exec := s.aiTools(r)
+	tools, exec, pending := s.aiTools(r)
 	resp, err := runner.RunWithTools(r.Context(), "чат", chatReq, tools, exec)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"error": llm.SafeErr(err)})
@@ -110,5 +115,11 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 	}
 	s.store.LogAIQuery(r.Context(), entry)
 
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "text": resp.Text, "model": resp.Model})
+	payload := map[string]any{"ok": true, "text": resp.Text, "model": resp.Model}
+	// Отложенные действия (план 51): черновики/команды, подготовленные
+	// инструментами в этом раунде, — клиент нарисует карточки с подтверждением.
+	if pending != nil && len(pending.Actions) > 0 {
+		payload["actions"] = pending.Actions
+	}
+	writeJSON(w, http.StatusOK, payload)
 }

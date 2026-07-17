@@ -399,6 +399,8 @@ func (s *Server) Mount(r chi.Router) {
 	// AI assistant chat (план 51, F3)
 	r.Get("/ui/ai/enabled", s.aiEnabled)
 	r.Post("/ui/ai/chat", s.aiChat)
+	// Подтверждённое действие ИИ-чата (создание черновика) — план 51, фаза 2.
+	r.Post("/ui/ai/action", s.aiActionRun)
 }
 
 // MountDebug registers debug API routes gated by an internal shared token
