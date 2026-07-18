@@ -277,9 +277,13 @@ type cfgEntity struct {
 	PostingSource    string // raw .posting.os content (ОбработкаПроведения)
 	ManagerSource    string // raw .manager.os content (модуль менеджера)
 	LinkedPrintForms []cfgPrintForm
-	Predefined       []cfgPredefined
-	Titles           map[string]string // переводы синонима объекта
-	Activity         *cfgActivity
+	// LinkedDSLForms — DSL-формы (.os) и декларативные макеты (LayoutOnly)
+	// этой сущности: вкладка «Печатные формы» показывает все варианты, а не
+	// только legacy YAML.
+	LinkedDSLForms []cfgDSLPrintForm
+	Predefined     []cfgPredefined
+	Titles         map[string]string // переводы синонима объекта
+	Activity       *cfgActivity
 }
 
 type cfgRegister struct {
