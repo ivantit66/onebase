@@ -255,9 +255,46 @@ func (h *handler) loadCfgData(ctx context.Context, b *Base, tab string, lang ...
 		}
 		data.DSLPrintForms = append(data.DSLPrintForms, cpf)
 	}
+
+	// Декларативные формы — standalone .layout.yaml без парного .os (план 64,
+	// этап 3; сюда попадают макеты из «+ Печатная форма (макет)» и импорта из
+	// PDF). Раньше они не показывались вовсе: после создания конфигуратор
+	// «терял» форму, а SelectedTreeID=mkt-<имя> указывал на несуществующий
+	// узел, и дерево сбрасывалось на первый элемент.
+	for _, lf := range proj.LayoutForms {
+		cpf := cfgDSLPrintForm{
+			Name:       lf.Name,
+			Document:   lf.Document,
+			HasLayout:  true,
+			LayoutOnly: true,
+		}
+		if lf.Layout != nil {
+			cpf.LayoutPreview = template.HTML(lf.Layout.PreviewHTML())
+		}
+		if lf.Path != "" {
+			if raw, err := os.ReadFile(lf.Path); err == nil {
+				cpf.LayoutYAML = string(raw)
+			}
+		}
+		if cpf.LayoutYAML == "" && lf.Layout != nil {
+			if raw, err := marshalLayout(lf.Layout); err == nil {
+				cpf.LayoutYAML = string(raw)
+			}
+		}
+		data.DSLPrintForms = append(data.DSLPrintForms, cpf)
+	}
+
+	// Обратный индекс «документ → DSL/декларативные формы» для вкладки
+	// «Печатные формы» сущности (там раньше были видны только legacy YAML).
+	dslByDoc := make(map[string][]cfgDSLPrintForm)
+	for _, cpf := range data.DSLPrintForms {
+		key := strings.ToLower(cpf.Document)
+		dslByDoc[key] = append(dslByDoc[key], cpf)
+	}
 	for _, e := range data.Entities {
 		data.AllEntityNames = append(data.AllEntityNames, e.Name)
 		e.LinkedPrintForms = pfByDoc[strings.ToLower(e.Name)]
+		e.LinkedDSLForms = dslByDoc[strings.ToLower(e.Name)]
 		if e.Kind == "Справочник" {
 			data.Catalogs = append(data.Catalogs, e)
 		} else {

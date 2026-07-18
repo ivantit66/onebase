@@ -263,11 +263,36 @@ func (h *handler) cfgAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repo := auth.NewRepo(db)
-	if _, err := repo.Create(r.Context(), req.Login, req.Password, req.FullName, req.IsAdmin); err != nil {
+	hadUsers, err := repo.HasUsers(r.Context())
+	if err != nil {
 		writeJSON(w, 500, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true})
+	// Иначе первый обычный пользователь мгновенно включает авторизацию и
+	// навсегда закрывает конфигуратор: войти в него может только admin.
+	if !hadUsers && !req.IsAdmin {
+		writeJSON(w, 400, map[string]any{"error": tr(lang, "Первый пользователь должен быть администратором")})
+		return
+	}
+	user, err := repo.Create(r.Context(), req.Login, req.Password, req.FullName, req.IsAdmin)
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	// До создания первого пользователя текущая страница была открыта без
+	// cookie. Сразу начинаем configurator-сессию, чтобы cfgAdmin('users') после
+	// AJAX не получил HTML логина внутри панели (его form submit давал HTTP 405).
+	if !hadUsers {
+		token, err := repo.CreateSession(r.Context(), user.ID, auth.SessionMeta{
+			Kind: auth.SessionKindConfigurator, IP: r.RemoteAddr, UserAgent: r.UserAgent(),
+		})
+		if err != nil {
+			writeJSON(w, 500, map[string]any{"error": err.Error()})
+			return
+		}
+		setConfiguratorSessionCookie(w, token)
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "sessionStarted": !hadUsers})
 }
 
 func (h *handler) cfgAdminUserDelete(w http.ResponseWriter, r *http.Request) {

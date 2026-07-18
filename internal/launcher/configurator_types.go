@@ -277,9 +277,13 @@ type cfgEntity struct {
 	PostingSource    string // raw .posting.os content (ОбработкаПроведения)
 	ManagerSource    string // raw .manager.os content (модуль менеджера)
 	LinkedPrintForms []cfgPrintForm
-	Predefined       []cfgPredefined
-	Titles           map[string]string // переводы синонима объекта
-	Activity         *cfgActivity
+	// LinkedDSLForms — DSL-формы (.os) и декларативные макеты (LayoutOnly)
+	// этой сущности: вкладка «Печатные формы» показывает все варианты, а не
+	// только legacy YAML.
+	LinkedDSLForms []cfgDSLPrintForm
+	Predefined     []cfgPredefined
+	Titles         map[string]string // переводы синонима объекта
+	Activity       *cfgActivity
 }
 
 type cfgRegister struct {
@@ -379,6 +383,10 @@ type cfgDSLPrintForm struct {
 	// Overrides — есть одноимённая YAML-форма у того же entity,
 	// которую этот .os перебивает.
 	Overrides bool
+	// LayoutOnly — декларативная форма: standalone .layout.yaml без парного
+	// .os (printform.LayoutForm). В дереве показывается только узел макета,
+	// панель .os-модуля не рендерится.
+	LayoutOnly bool
 }
 
 type cfgInfoRegister struct {
@@ -513,6 +521,9 @@ type configuratorData struct {
 	// fields save
 	FieldsSaved       bool
 	FieldsSavedEntity string
+	// SavedMessage — готовый текст success-баннера; если задан, shell показывает
+	// его вместо generic «Типы полей для «X» сохранены» (макеты, импорт из PDF).
+	SavedMessage string
 	// exact tree item to select after save (overrides prefix-search for FieldsSavedEntity)
 	SelectedTreeID string
 	// platform version

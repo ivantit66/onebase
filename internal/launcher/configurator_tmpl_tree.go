@@ -115,6 +115,11 @@ const cfgTabTree = `{{define "tab-tree"}}
   </div>
   {{end}}
   {{range .DSLPrintForms}}
+  {{if .LayoutOnly}}
+  <div class="cfg-item" data-id="mkt-{{.Name}}" onclick="selItem(this)">
+    <span class="ic">&#x1F4D0;</span>{{.Name}}<span style="color:#aaa;font-size:10px;margin-left:4px">→{{.Document}} ({{t $.Lang "макет"}})</span>
+  </div>
+  {{else}}
   <div class="cfg-item" data-id="dpf-{{.Name}}" onclick="selItem(this)"{{if .Overrides}} title="Перебивает одноимённую YAML-форму у этого документа"{{end}}>
     <span class="ic">📋</span>{{.Name}}<span style="color:#aaa;font-size:10px;margin-left:4px">→{{.Document}} (DSL{{if .Overrides}}, перебивает YAML{{end}})</span>
   </div>
@@ -122,6 +127,7 @@ const cfgTabTree = `{{define "tab-tree"}}
   <div class="cfg-item cfg-sub" data-id="mkt-{{.Name}}" onclick="selItem(this)" style="padding-left:32px">
     <span class="ic" style="font-size:12px">&#x1F4D0;</span>{{t $.Lang "Макет"}} {{.Name}}
   </div>
+  {{end}}
   {{end}}
   {{end}}
   </details>
@@ -176,12 +182,16 @@ const cfgTabTree = `{{define "tab-tree"}}
   </div>
   <div id="cfg-new-form-pf" class="cfg-new-form" style="display:none">
     <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.3px">{{t $.Lang "Новая печатная форма"}}</div>
-    <form method="POST" action="/bases/{{$.Base.ID}}/configurator/new-printform">
+    <form method="POST" action="/bases/{{$.Base.ID}}/configurator/new-printform" onsubmit="return cfgNewPrintFormSubmit(this,'/bases/{{$.Base.ID}}/configurator')">
       <input type="text" name="name" id="cfg-new-pf-name" placeholder="{{t $.Lang "Имя формы"}} (напр. СчётНаОплату)" autocomplete="off">
       <select name="document" style="width:100%;padding:5px 6px;border:1px solid #ccd0d8;border-radius:3px;font-size:12px;margin-bottom:6px">
         <option value="">{{t $.Lang "— документ/справочник —"}}</option>
         {{range $.AllEntityNames}}<option value="{{.}}">{{.}}</option>{{end}}
       </select>
+      <div style="font-size:11px;color:#334155;display:flex;flex-direction:column;gap:3px;margin-bottom:6px">
+        <label style="cursor:pointer"><input type="radio" name="pf_kind" value="layout" checked> {{t $.Lang "Макет (визуальный конструктор)"}}</label>
+        <label style="cursor:pointer"><input type="radio" name="pf_kind" value="yaml"> {{t $.Lang "YAML (классический формат)"}}</label>
+      </div>
       <div class="row">
         <button type="submit" class="btn-create">{{t $.Lang "Создать"}}</button>
         <button type="button" class="btn-cancel" onclick="cfgHideNew()">✕</button>
@@ -889,8 +899,9 @@ const cfgTabTree = `{{define "tab-tree"}}
   </div>
   {{end}}
 
-  {{/* DSL Print forms (.os) */}}
+  {{/* DSL Print forms (.os); LayoutOnly-формы без .os — только панель макета ниже */}}
   {{range .DSLPrintForms}}
+  {{if not .LayoutOnly}}
   <div class="cfg-panel" id="dpf-{{.Name}}">
     <div class="panel-title">📋 {{.Name}}</div>
     <div class="panel-kind">{{t $.Lang "DSL печатная форма"}} · {{t $.Lang "документ"}}: {{.Document}}</div>
@@ -920,12 +931,14 @@ const cfgTabTree = `{{define "tab-tree"}}
     </form>
   </div>
   {{end}}
+  {{end}}
 
   {{/* Layout panels */}}
   {{range .DSLPrintForms}}
   {{if .HasLayout}}
   <div class="cfg-panel" id="mkt-{{.Name}}">
     <div class="panel-title">&#x1F4D0; {{t $.Lang "Макет"}}: {{.Name}}</div>
+    {{if .LayoutOnly}}<div class="panel-kind">{{t $.Lang "Декларативная печатная форма"}} · {{t $.Lang "документ"}}: {{.Document}}</div>{{end}}
     <form method="POST" action="/bases/{{$.Base.ID}}/configurator/layout" onsubmit="return saveLayoutEditor('{{.Name}}')">
       <input type="hidden" name="layout_name" value="{{.Name}}">
 
@@ -946,7 +959,7 @@ const cfgTabTree = `{{define "tab-tree"}}
         <button type="button" onclick="ldPreview('{{.Name}}','{{.Document}}','html')" style="font-size:12px;padding:4px 10px;background:#0ea5e9;color:#fff;border:none;border-radius:4px;cursor:pointer">{{t $.Lang "Предпросмотр"}}</button>
         <button type="button" onclick="ldPreview('{{.Name}}','{{.Document}}','pdf')"  title="{{t $.Lang "Откроется во внешнем приложении (системный просмотрщик PDF)"}}" style="font-size:12px;padding:4px 10px;background:#fff;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer">{{t $.Lang "Предпросмотр PDF"}}</button>
         <span style="width:1px;background:#d1d5db;align-self:stretch"></span>
-        <button type="button" onclick="cfgImportPdfLayout('/bases/{{$.Base.ID}}/configurator/layout/import-pdf')" title="{{t $.Lang "Извлечь черновик макета из PDF (выгрузка 1С/Excel с текстовым слоем)"}}" style="font-size:12px;padding:4px 10px;background:#fff;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer">&#x1F4C4; {{t $.Lang "Из PDF"}}</button>
+        <button type="button" onclick="cfgImportPdfLayout('/bases/{{$.Base.ID}}/configurator/layout/import-pdf','{{.Document}}')" title="{{t $.Lang "Извлечь черновик макета из PDF (выгрузка 1С/Excel с текстовым слоем)"}}" style="font-size:12px;padding:4px 10px;background:#fff;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer">&#x1F4C4; {{t $.Lang "Из PDF"}}</button>
       </div>
 
       {{/* Параметры листа: формат/ориентация/поля → печатная граница в конструкторе */}}
@@ -992,8 +1005,11 @@ const cfgTabTree = `{{define "tab-tree"}}
       </div>
 
       {{/* Cell properties panel — закреплённый док снизу (не проматывает страницу
-           при выборе ячейки). На неактивной cfg-panel скрыт через display:none. */}}
-      <div id="vprops-{{.Name}}" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:50;max-height:44vh;overflow:auto;background:#f0f8ff;border-top:2px solid #b0d0f0;box-shadow:0 -4px 16px rgba(15,23,42,.18);padding:10px 14px">
+           при выборе ячейки). На неактивной cfg-panel скрыт через display:none.
+           Высота регулируется ручкой сверху (--cfg-vprops-h + localStorage). */}}
+      <div id="vprops-{{.Name}}" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:50;background:#f0f8ff;border-top:2px solid #b0d0f0;box-shadow:0 -4px 16px rgba(15,23,42,.18)">
+        <div class="vprops-grip" title="{{t $.Lang "Потяните, чтобы изменить высоту; двойной клик — сброс"}}" onpointerdown="ldPropsResizeStart(event)" ondblclick="ldPropsResizeReset()"></div>
+        <div style="max-height:calc(var(--cfg-vprops-h,44vh) - 10px);overflow:auto;padding:2px 14px 10px">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
           <span style="font-weight:bold;font-size:12px">{{t $.Lang "Свойства ячейки"}}</span>
           <span>
@@ -1073,6 +1089,7 @@ const cfgTabTree = `{{define "tab-tree"}}
           <div><label>{{t $.Lang "Объединить"}} (colspan)</label><br><input type="number" id="vp-colspan-{{.Name}}" min="1" max="20" style="width:100%;padding:3px" oninput="updateCellProp('{{.Name}}','colspan',parseInt(this.value)||0)"></div>
           <div><label>{{t $.Lang "Объединить"}} (rowspan)</label><br><input type="number" id="vp-rowspan-{{.Name}}" min="1" max="20" style="width:100%;padding:3px" oninput="updateCellProp('{{.Name}}','rowspan',parseInt(this.value)||0)"></div>
           <div></div>
+        </div>
         </div>
       </div>
       <div class="module-save-row">
@@ -1757,12 +1774,26 @@ const cfgTabTree = `{{define "tab-tree"}}
   </div>{{/* end ot-forms */}}
 
   <div class="obj-pane" id="ot-print-{{$e.Name}}">
-    {{if $e.LinkedPrintForms}}
+    {{if or $e.LinkedPrintForms $e.LinkedDSLForms}}
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      {{/* Порядок как приоритет рантайма: макеты (декларативные) > DSL > legacy YAML */}}
+      {{range $e.LinkedDSLForms}}
+      {{if .LayoutOnly}}
+      <a href="#" onclick="cfgSelectPanel('mkt-{{.Name}}');return false"
+         style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:#f0fdf4;border:1px solid #a7d8b9;border-radius:4px;font-size:12px;color:#166534;text-decoration:none">
+        &#x1F4D0; {{.Name}} <span style="color:#64748b;font-size:10px">({{t $.Lang "макет"}})</span>
+      </a>
+      {{else}}
+      <a href="#" onclick="cfgSelectPanel('dpf-{{.Name}}');return false"
+         style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:#f0f4ff;border:1px solid #c8d4f0;border-radius:4px;font-size:12px;color:#1a4a80;text-decoration:none">
+        📋 {{.Name}} <span style="color:#64748b;font-size:10px">(DSL{{if .HasLayout}}+{{t $.Lang "макет"}}{{end}})</span>
+      </a>
+      {{end}}
+      {{end}}
       {{range $e.LinkedPrintForms}}
       <a href="#" onclick="cfgSelectPanel('pf-{{.Name}}');return false"
-         style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:#f0f4ff;border:1px solid #c8d4f0;border-radius:4px;font-size:12px;color:#1a4a80;text-decoration:none">
-        🖨 {{.Name}}
+         style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:#f0f4ff;border:1px solid #c8d4f0;border-radius:4px;font-size:12px;color:#1a4a80;text-decoration:none"{{if .Shadowed}} title="Эту YAML-форму перебивает одноимённая .os"{{end}}>
+        🖨 {{if .Shadowed}}⚠️ {{end}}{{.Name}} <span style="color:#64748b;font-size:10px">(YAML)</span>
       </a>
       {{end}}
     </div>
@@ -1777,7 +1808,7 @@ const cfgTabTree = `{{define "tab-tree"}}
               style="font-size:12px;padding:5px 12px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer">
         + {{t $.Lang "Печатная форма (макет)"}}
       </button>
-      <button type="button" onclick="cfgImportPdfLayout('/bases/{{.BaseID}}/configurator/layout/import-pdf')"
+      <button type="button" onclick="cfgImportPdfLayout('/bases/{{.BaseID}}/configurator/layout/import-pdf','{{$e.Name}}')"
               style="font-size:12px;padding:5px 12px;background:#0369a1;color:#fff;border:none;border-radius:4px;cursor:pointer;margin-left:6px"
               title="{{t $.Lang "Извлечь черновик макета из PDF (выгрузка 1С/Excel с текстовым слоем)"}}">
         &#x1F4C4; {{t $.Lang "Создать макет из PDF"}}
