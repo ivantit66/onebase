@@ -283,9 +283,18 @@ func (h *handler) loadCfgData(ctx context.Context, b *Base, tab string, lang ...
 		}
 		data.DSLPrintForms = append(data.DSLPrintForms, cpf)
 	}
+
+	// Обратный индекс «документ → DSL/декларативные формы» для вкладки
+	// «Печатные формы» сущности (там раньше были видны только legacy YAML).
+	dslByDoc := make(map[string][]cfgDSLPrintForm)
+	for _, cpf := range data.DSLPrintForms {
+		key := strings.ToLower(cpf.Document)
+		dslByDoc[key] = append(dslByDoc[key], cpf)
+	}
 	for _, e := range data.Entities {
 		data.AllEntityNames = append(data.AllEntityNames, e.Name)
 		e.LinkedPrintForms = pfByDoc[strings.ToLower(e.Name)]
+		e.LinkedDSLForms = dslByDoc[strings.ToLower(e.Name)]
 		if e.Kind == "Справочник" {
 			data.Catalogs = append(data.Catalogs, e)
 		} else {
