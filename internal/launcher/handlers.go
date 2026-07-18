@@ -599,11 +599,13 @@ func (h *handler) configExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lang := resolveLang(r)
+	backURL := "/bases/" + b.ID + "/configurator?tab=files"
 	if b.ConfigSource != "database" {
 		render(w, r, "page-config-result", map[string]any{
 			"Title":   tr(lang, "onebase — Конфигуратор"),
 			"Message": tr(lang, "Выгрузка доступна только для баз в режиме «В базе данных»."),
 			"Error":   "",
+			"BackURL": backURL,
 		})
 		return
 	}
@@ -612,7 +614,8 @@ func (h *handler) configExport(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		render(w, r, "page-config-result", map[string]any{
 			"Title": tr(lang, "onebase — Конфигуратор"), "Message": "",
-			"Error": tr(lang, "Ошибка подключения") + ": " + err.Error(),
+			"Error":   tr(lang, "Ошибка подключения") + ": " + err.Error(),
+			"BackURL": backURL,
 		})
 		return
 	}
@@ -628,7 +631,8 @@ func (h *handler) configExport(w http.ResponseWriter, r *http.Request) {
 	if err := repo.ExportToDir(r.Context(), workDir); err != nil {
 		render(w, r, "page-config-result", map[string]any{
 			"Title": tr(lang, "onebase — Конфигуратор"), "Message": "",
-			"Error": tr(lang, "Ошибка выгрузки") + ": " + err.Error(),
+			"Error":   tr(lang, "Ошибка выгрузки") + ": " + err.Error(),
+			"BackURL": backURL,
 		})
 		return
 	}
@@ -639,7 +643,34 @@ func (h *handler) configExport(w http.ResponseWriter, r *http.Request) {
 		"Title":   tr(lang, "onebase — Конфигуратор"),
 		"Message": fmt.Sprintf(tr(lang, "Конфигурация выгружена в папку")+": %s", workDir),
 		"Error":   "",
+		"BackURL": backURL,
 	})
+}
+
+// validateConfigImportDir rejects an empty/non-project directory before
+// configdb.ImportFromDir starts its replace-all transaction. In particular,
+// an untouched ~/.onebase/workspace/<base-id> must not be accepted as a valid
+// zero-file configuration.
+func validateConfigImportDir(srcDir string) error {
+	info, err := os.Stat(srcDir)
+	if err != nil {
+		return fmt.Errorf("папка конфигурации недоступна: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("путь не является папкой: %s", srcDir)
+	}
+	appPath := filepath.Join(srcDir, "config", "app.yaml")
+	if info, err := os.Stat(appPath); err != nil || info.IsDir() {
+		return fmt.Errorf("папка не содержит config/app.yaml: %s", srcDir)
+	}
+	cfg, err := project.LoadConfig(srcDir)
+	if err != nil {
+		return fmt.Errorf("ошибка config/app.yaml: %w", err)
+	}
+	if strings.TrimSpace(cfg.Name) == "" {
+		return fmt.Errorf("в config/app.yaml не заполнено поле name")
+	}
+	return nil
 }
 
 func (h *handler) configImport(w http.ResponseWriter, r *http.Request) {
@@ -649,18 +680,34 @@ func (h *handler) configImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lang := resolveLang(r)
+	backURL := "/bases/" + b.ID + "/configurator?tab=files"
 
 	r.ParseForm()
-	srcDir := r.FormValue("path")
+	srcDir := strings.TrimSpace(r.FormValue("path"))
 	if srcDir == "" {
-		srcDir, _ = workspacePath(b.ID)
+		srcDir, err = workspacePath(b.ID)
+		if err != nil {
+			render(w, r, "page-config-result", map[string]any{
+				"Title": tr(lang, "onebase — Загрузка конфигурации"), "Message": "",
+				"Error": tr(lang, "Ошибка загрузки") + ": " + err.Error(), "BackURL": backURL,
+			})
+			return
+		}
+	}
+	if err := validateConfigImportDir(srcDir); err != nil {
+		render(w, r, "page-config-result", map[string]any{
+			"Title": tr(lang, "onebase — Загрузка конфигурации"), "Message": "",
+			"Error": tr(lang, "Ошибка загрузки") + ": " + err.Error(), "BackURL": backURL,
+		})
+		return
 	}
 
 	db, err := OpenDB(r.Context(), b)
 	if err != nil {
 		render(w, r, "page-config-result", map[string]any{
 			"Title": tr(lang, "onebase — Загрузка конфигурации"), "Message": "",
-			"Error": tr(lang, "Ошибка подключения") + ": " + err.Error(),
+			"Error":   tr(lang, "Ошибка подключения") + ": " + err.Error(),
+			"BackURL": backURL,
 		})
 		return
 	}
@@ -670,7 +717,8 @@ func (h *handler) configImport(w http.ResponseWriter, r *http.Request) {
 	if err := repo.ImportFromDir(r.Context(), srcDir); err != nil {
 		render(w, r, "page-config-result", map[string]any{
 			"Title": tr(lang, "onebase — Загрузка конфигурации"), "Message": "",
-			"Error": tr(lang, "Ошибка загрузки") + ": " + err.Error(),
+			"Error":   tr(lang, "Ошибка загрузки") + ": " + err.Error(),
+			"BackURL": backURL,
 		})
 		return
 	}
@@ -680,7 +728,8 @@ func (h *handler) configImport(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		render(w, r, "page-config-result", map[string]any{
 			"Title": tr(lang, "onebase — Загрузка конфигурации"), "Message": "",
-			"Error": tr(lang, "Ошибка версии конфигурации") + ": " + err.Error(),
+			"Error":   tr(lang, "Ошибка версии конфигурации") + ": " + err.Error(),
+			"BackURL": backURL,
 		})
 		return
 	}
@@ -691,6 +740,7 @@ func (h *handler) configImport(w http.ResponseWriter, r *http.Request) {
 		"Title":   tr(lang, "onebase — Загрузка конфигурации"),
 		"Message": fmt.Sprintf(tr(lang, "Конфигурация загружена из")+": %s\n\n"+tr(lang, "Миграция")+":\n%s", srcDir, out),
 		"Error":   "",
+		"BackURL": backURL,
 	})
 }
 

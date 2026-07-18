@@ -476,7 +476,7 @@ const tplConfigResult = `
   <h2>{{.Title}}</h2>
   <p style="margin-bottom:12px;font-size:13px;color:#555">{{.Message}}</p>
   {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
-  <div style="margin-top:14px"><a class="btn-cancel" href="/">← {{t $.Lang "Назад"}}</a></div>
+  <div style="margin-top:14px"><a class="btn-cancel" href="{{if .BackURL}}{{.BackURL}}{{else}}/{{end}}">← {{t $.Lang "Назад"}}</a></div>
 </div>
 </body></html>
 {{end}}

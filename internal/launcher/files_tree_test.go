@@ -108,7 +108,7 @@ func TestBuildConfigFileTree(t *testing.T) {
 // Вкладка «Файлы» рендерит дерево файлов с просмотрщиком (issue #132).
 func TestTabFiles_Render(t *testing.T) {
 	data := &configuratorData{
-		Base: &Base{ID: "test-base", ConfigSource: "file", Path: "/tmp/x"},
+		Base: &Base{ID: "test-base", ConfigSource: "database"},
 		Tab:  "files",
 		Lang: "ru",
 		ConfigFileTree: []fileTreeCategory{
@@ -139,6 +139,8 @@ func TestTabFiles_Render(t *testing.T) {
 		`class="ftedit"`,       // фаза 2: «открыть в редакторе»
 		`tab=tree`,             // ведёт на вкладку дерева
 		`select=`,              // с выбором узла
+		`id="config-import-dir"`,
+		`pickDir('config-import-dir'`, // выбор каталога как на вкладке импорта
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("tab-files не содержит %q", want)
