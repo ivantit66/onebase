@@ -136,13 +136,24 @@ func withOptionalCatalogTx(db CatalogsDB, ctx context.Context, fn func(context.C
 }
 
 // CatalogsRoot is the DSL global Справочники / Catalogs.
+// CatalogObjectFactory — необязательная фабрика объектных обёрток справочника.
+// Позволяет вышестоящему слою (ui) подменить объекты, возвращаемые
+// Справочники.X.Создать() и Ссылка.ПолучитьОбъект(), на полнофункциональные —
+// с табличными частями и DSL-хуком ПриЗаписи (как у документов). Без фабрики
+// используется встроенный CatalogRecordWriter (только поля шапки).
+type CatalogObjectFactory interface {
+	NewCatalogObject(entity *metadata.Entity) any
+	LoadCatalogObject(entity *metadata.Entity, uuidStr string) (any, error)
+}
+
 type CatalogsRoot struct {
-	db        CatalogsDB
-	lookup    EntityLookup
-	ctxSrc    CtxSource
-	caller    ManagerCaller // optional — fallback к модулю менеджера в CallMethod
-	access    RowAccessChecker
-	registrar ExchangeRegistrar
+	db         CatalogsDB
+	lookup     EntityLookup
+	ctxSrc     CtxSource
+	caller     ManagerCaller // optional — fallback к модулю менеджера в CallMethod
+	access     RowAccessChecker
+	registrar  ExchangeRegistrar
+	objFactory CatalogObjectFactory
 }
 
 // NewCatalogsRoot creates the root object for injection as DSL extraVar.
@@ -172,12 +183,19 @@ func (r *CatalogsRoot) WithExchangeRegistrar(reg ExchangeRegistrar) *CatalogsRoo
 	return r
 }
 
+// WithObjectFactory подключает фабрику объектных обёрток (см.
+// CatalogObjectFactory). Возвращает себя для цепочки.
+func (r *CatalogsRoot) WithObjectFactory(f CatalogObjectFactory) *CatalogsRoot {
+	r.objFactory = f
+	return r
+}
+
 func (r *CatalogsRoot) Get(entityName string) any {
 	entity := r.lookup.GetEntity(entityName)
 	if entity == nil {
 		return nil
 	}
-	return &CatalogProxy{entity: entity, db: r.db, ctxSrc: r.ctxSrc, caller: r.caller, access: r.access, registrar: r.registrar}
+	return &CatalogProxy{entity: entity, db: r.db, ctxSrc: r.ctxSrc, caller: r.caller, access: r.access, registrar: r.registrar, objFactory: r.objFactory}
 }
 
 func (r *CatalogsRoot) Set(_ string, _ any) {}
@@ -188,12 +206,13 @@ func (r *CatalogsRoot) Set(_ string, _ any) {}
 //	Справочники.ТипЦен.НайтиПоНаименованию("X")     → *Ref or nil
 //	Справочники.Контрагент.Создать()                → *CatalogRecordWriter
 type CatalogProxy struct {
-	entity    *metadata.Entity
-	db        CatalogsDB
-	ctxSrc    CtxSource
-	caller    ManagerCaller // optional — для вызовов методов модуля менеджера
-	access    RowAccessChecker
-	registrar ExchangeRegistrar
+	entity     *metadata.Entity
+	db         CatalogsDB
+	ctxSrc     CtxSource
+	caller     ManagerCaller // optional — для вызовов методов модуля менеджера
+	access     RowAccessChecker
+	registrar  ExchangeRegistrar
+	objFactory CatalogObjectFactory
 }
 
 // NewCatalogProxy создаёт менеджера справочника для привязки к ссылкам,
@@ -215,6 +234,13 @@ func (p *CatalogProxy) WithRowAccessChecker(c RowAccessChecker) *CatalogProxy {
 // standalone-прокси (обычно менеджеру ссылки на справочник). Для цепочки.
 func (p *CatalogProxy) WithExchangeRegistrar(reg ExchangeRegistrar) *CatalogProxy {
 	p.registrar = reg
+	return p
+}
+
+// WithObjectFactory подключает фабрику объектных обёрток к standalone-прокси
+// (менеджеру ссылки). Для цепочки.
+func (p *CatalogProxy) WithObjectFactory(f CatalogObjectFactory) *CatalogProxy {
+	p.objFactory = f
 	return p
 }
 
@@ -290,6 +316,9 @@ func (p *CatalogProxy) CallMethod(method string, args []any) any {
 		}
 		return p.matchByField(field, args[1])
 	case "создать", "create":
+		if p.objFactory != nil {
+			return p.objFactory.NewCatalogObject(p.entity)
+		}
 		return &CatalogRecordWriter{
 			entity:    p.entity,
 			db:        p.db,
@@ -346,7 +375,11 @@ func (p *CatalogProxy) DeleteRef(uuidStr string) error {
 // LoadObject реализует RefManager — загружает существующую запись справочника
 // по UUID и возвращает CatalogRecordWriter с предзаполненными полями, так что
 // Ссылка.ПолучитьОбъект().Поле = … → Записать() обновит запись по тому же id.
+// При подключённой фабрике объект строит она (с табличными частями и хуками).
 func (p *CatalogProxy) LoadObject(uuidStr string) (any, error) {
+	if p.objFactory != nil {
+		return p.objFactory.LoadCatalogObject(p.entity, uuidStr)
+	}
 	id, err := uuid.Parse(uuidStr)
 	if err != nil {
 		return nil, i18nerr.Errorf("неверный идентификатор ссылки: %q", uuidStr)

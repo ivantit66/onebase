@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"context"
 	"html/template"
 	"net/http"
 	"sort"
@@ -105,27 +104,7 @@ func New(reg *runtime.Registry, store *storage.DB, interp *interpreter.Interpret
 		loginLimit = auth.NewLoginLimiter(5, time.Minute)
 	}
 	s := &Server{reg: reg, store: store, interp: interp, authRepo: authRepo, cfg: cfg, sched: sched, mailer: cfg.Mailer, maxFileSizeBytes: maxBytes, allowedAttachmentTypes: cfg.AllowedTypes, globalDebug: debugger.NewGlobalDebugController(), messages: NewMessageStore(), widgetCache: widget.NewCache(60 * time.Second), lockMgr: runtime.NewLockManager(), aiChatLimit: newAIWindowLimiter(10, time.Minute), loginLimit: loginLimit, extforms: extform.New(store), extreports: extform.NewReports(store), extprocessors: extform.NewProcessors(store), tmpl: template.Must(newTemplate(cfg.Bundle)), hub: realtime.NewHub(), ops: newOperationLimiter(), exportJobs: newExportJobStore(defaultExportJobTTL)}
-	s.entitySvc = &entityservice.Service{
-		Store:  store,
-		Reg:    reg,
-		Interp: interp,
-		// PrepareHook/EnrichTPRows зовут уже существующие методы Server'а —
-		// enrichHeaderRefs (замена UUID → *Ref в шапке) и enrichTPRowsWithRefs
-		// (то же для строк ТЧ).
-		PrepareHook:  s.enrichHeaderRefs,
-		EnrichTPRows: s.enrichTPRowsWithRefs,
-		// BuildVars — полный набор с locks/users/документами + Сообщить с
-		// захватом и в message store, и в локальный slice msgs (для SaveResult).
-		BuildVars: s.buildDSLVarsWithMessages,
-		// MakeThis — обёртка над *runtime.Object с поддержкой методов ТЧ
-		// (this.Товары.Добавить() и т.п.). Без неё ОбработкаЗаполнения не
-		// смогла бы построить строки табличной части в приёмнике.
-		MakeThis: func(ctx context.Context, obj *runtime.Object, e *metadata.Entity) interpreter.This {
-			return s.newFormObjectThis(ctx, obj, e, nil)
-		},
-		// Исходящие веб-хуки (план 29): save/post диспетчеризуются из Save.
-		Hooks: cfg.Webhooks,
-	}
+	s.entitySvc = s.newEntityService(cfg.Webhooks)
 	// Отладчик подключается к исполнению через DebugSource: каждый запуск DSL
 	// захватывает текущую сессию глобального контроллера в свой execCtx.
 	// Устанавливается однократно здесь, до начала обслуживания HTTP, — сам

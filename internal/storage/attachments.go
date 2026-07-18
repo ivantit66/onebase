@@ -194,6 +194,10 @@ func (db *DB) UploadAttachment(ctx context.Context, ownerKind, ownerName string,
 		os.Remove(filePath)
 		return Attachment{}, err
 	}
+	// The metadata INSERT may belong to an explicit DSL transaction. If that
+	// transaction (or the current savepoint) rolls back, remove the physical
+	// file as compensation so it cannot become an orphan.
+	DeferUntilTxRollback(ctx, func() { _ = os.Remove(filePath) })
 	return *a, nil
 }
 
@@ -222,7 +226,9 @@ func (db *DB) OpenAttachment(ctx context.Context, id uuid.UUID) (*os.File, *Atta
 	return f, a, nil
 }
 
-// DeleteAttachment removes the file from disk and deletes the database record.
+// DeleteAttachment deletes metadata and removes the file from disk. Inside a
+// transaction the physical removal is delayed until the outer commit, so a
+// rollback cannot leave a restored metadata row pointing to a missing file.
 func (db *DB) DeleteAttachment(ctx context.Context, id uuid.UUID) error {
 	d := db.dialect
 	a, err := db.GetAttachment(ctx, id)
@@ -230,10 +236,15 @@ func (db *DB) DeleteAttachment(ctx context.Context, id uuid.UUID) error {
 		return err
 	}
 	filePath := filepath.Join(db.filesDir, a.OwnerName, id.String())
-	os.Remove(filePath)
 	q := fmt.Sprintf(`DELETE FROM _attachments WHERE id=%s`, d.Placeholder(1))
-	_, err = db.Exec(ctx, q, id.String())
-	return err
+	if _, err = db.Exec(ctx, q, id.String()); err != nil {
+		return err
+	}
+	removeFile := func() { _ = os.Remove(filePath) }
+	if !DeferUntilTxCommit(ctx, removeFile) {
+		removeFile()
+	}
+	return nil
 }
 
 // attachmentScanner is satisfied by both sql.Row and sql.Rows.

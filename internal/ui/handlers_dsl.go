@@ -61,21 +61,24 @@ func (s *Server) runOnWrite(obj *runtime.Object, mc *runtime.MovementsCollector)
 }
 
 func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollector) map[string]any {
+	// TxState is created before the common variable set so path resolvers and
+	// all write-capable DSL objects observe the same live transaction context.
+	txState := interpreter.NewTxState(ctx)
 	// Базовый набор (Перечисления, Константы, Запрос, Предопределённые,
 	// Движения, HTTP, Email) — общий с scheduler, см. internal/dslvars.
 	vars := dslvars.Common{
 		Ctx: ctx, Reg: s.reg, Store: s.store, Mailer: s.mailer, Movements: mc,
-		NetGuard:  s.netGuard(ctx),
-		ExecGuard: s.execGuard(ctx),
-		Notifier:  s.notifier(),
-		Interp:    s.interp, // для hook-правила конфликта в ПланыОбмена.ЗагрузитьПакет
+		NetGuard:          s.netGuard(ctx),
+		ExecGuard:         s.execGuard(ctx),
+		Notifier:          s.notifier(),
+		Interp:            s.interp, // для hook-правила конфликта в ПланыОбмена.ЗагрузитьПакет
+		EmailFileResolver: s.emailAttachmentPathResolver(txState.Ctx),
 	}.Build()
 
 	// TxState несёт «живой» контекст. Транзакционные функции
 	// (НачатьТранзакцию и т.д.) и запись справочников из обработки
 	// (Справочники.X.Создать().Записать()) используют txState.Ctx(),
 	// поэтому запись участвует в открытой DSL-транзакции.
-	txState := interpreter.NewTxState(ctx)
 	// Caller подключается ДО создания CatalogsRoot.WithManagerCaller —
 	// он использует ctx как контекст для вызова процедур менеджера.
 	mgrCaller := &managerCaller{s: s, ctx: ctx}
@@ -83,7 +86,8 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 	catalogs := interpreter.NewCatalogsRoot(txState, s.store, s.reg).
 		WithManagerCaller(mgrCaller).
 		WithRowAccessChecker(rowAccess).
-		WithExchangeRegistrar(s.exchangeRegistrar())
+		WithExchangeRegistrar(s.exchangeRegistrar()).
+		WithObjectFactory(s.catObjectFactory(txState))
 	// Документы.X.Создать()/.Записать()/.Провести() из обработки.
 	documents := newDocsRoot(s, txState)
 	// РегистрыНакопления.X.Остатки()/.Движения()/.ВыбратьПоРегистратору(Док).
@@ -198,6 +202,9 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 	vars["ObjectAttributeValues"] = attrValuesFn
 	vars["СохранитьКартинку"] = putImageFn
 	vars["PutImage"] = putImageFn
+	// Вложения из DSL (план 105): ПрисоединитьФайл/СписокВложений/
+	// ПутьКВложению/УдалитьВложение. Живой контекст — как у транзакций.
+	s.registerAttachmentBuiltins(vars, txState.Ctx)
 	queryFactory := interpreter.NewQueryFactoryWithCompiler(txState.Ctx(), s.store, s.reg, s.compileDSLQueryWithRowAccess)
 	vars["__factory_Запрос"] = queryFactory
 	vars["__factory_Query"] = queryFactory

@@ -2,9 +2,13 @@ package interpreter_test
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
+	"github.com/ivantit66/onebase/internal/dsl/lexer"
+	"github.com/ivantit66/onebase/internal/dsl/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -74,4 +78,73 @@ func TestEmailNotConfigured(t *testing.T) {
 	require.True(t, ok, fmt.Sprintf("expected string, got %T", result))
 	assert.Contains(t, msg, "caught:")
 	assert.Contains(t, msg, "не настроен")
+}
+
+// attachStubSender реализует и EmailSender, и EmailAttachmentSender.
+type attachStubSender struct {
+	stubSender
+	files []interpreter.EmailAttachment
+}
+
+func (s *attachStubSender) SendWithAttachments(to, subject, textBody, htmlBody string, files []interpreter.EmailAttachment) error {
+	s.to, s.subject, s.text, s.html = to, subject, textBody, htmlBody
+	s.files = files
+	s.calls++
+	return nil
+}
+
+// ПисьмоEmail.ПрисоединитьФайл: файл читается с диска и уходит в
+// SendWithAttachments; без вложений используется обычный Send.
+func TestEmailObjectWithAttachment(t *testing.T) {
+	stub := &attachStubSender{}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "прайс.zip")
+	require.NoError(t, os.WriteFile(path, []byte{0x50, 0x4B, 0x03, 0x04}, 0o644))
+
+	src := fmt.Sprintf(`Процедура Тест()
+  Письмо = Новый ПисьмоEmail;
+  Письмо.Кому  = "client@example.com";
+  Письмо.Тема  = "Обновление";
+  Письмо.Текст = "Файл во вложении";
+  Письмо.ПрисоединитьФайл("%s");
+  Письмо.Отправить();
+КонецПроцедуры`, path)
+	runHTTPSrc(t, src, interpreter.NewEmailFunctions(stub, nil))
+
+	require.Equal(t, 1, stub.calls)
+	require.Len(t, stub.files, 1)
+	assert.Equal(t, "прайс.zip", stub.files[0].Name)
+	assert.Equal(t, []byte{0x50, 0x4B, 0x03, 0x04}, stub.files[0].Data)
+	assert.NotEmpty(t, stub.files[0].MimeType)
+}
+
+// Отправитель без поддержки вложений даёт понятную ошибку.
+func TestEmailAttachmentUnsupportedSender(t *testing.T) {
+	stub := &stubSender{}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	require.NoError(t, os.WriteFile(path, []byte("x"), 0o644))
+
+	src := fmt.Sprintf(`Процедура Тест()
+  Письмо = Новый ПисьмоEmail;
+  Письмо.Кому = "a@b.ru";
+  Письмо.Тема = "Т";
+  Письмо.ПрисоединитьФайл("%s");
+  Письмо.Отправить();
+КонецПроцедуры`, path)
+	err := runHTTPSrcErr(t, src, interpreter.NewEmailFunctions(stub, nil))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "не поддерживает вложения")
+}
+
+// runHTTPSrcErr — как runHTTPSrc, но возвращает ошибку исполнения.
+func runHTTPSrcErr(t *testing.T, src string, extra map[string]any) error {
+	t.Helper()
+	l := lexer.New(src, "test.os")
+	p := parser.New(l)
+	prog, err := p.ParseProgram()
+	require.NoError(t, err)
+	interp := interpreter.New()
+	var result any
+	return interp.RunWithResult(prog.Procedures[0], nil, &result, extra)
 }

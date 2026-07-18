@@ -35,7 +35,8 @@ func (s *Server) refManagerFor(entity *metadata.Entity, ctx context.Context) int
 	case metadata.KindCatalog:
 		return interpreter.NewCatalogProxy(entity, s.store, ctxSrc).
 			WithRowAccessChecker(s.dslRowAccessChecker()).
-			WithExchangeRegistrar(s.exchangeRegistrar())
+			WithExchangeRegistrar(s.exchangeRegistrar()).
+			WithObjectFactory(s.catObjectFactory(ctxSrc))
 	case metadata.KindDocument:
 		return &docProxy{s: s, ctxSrc: ctxSrc, entity: entity}
 	}
@@ -404,7 +405,7 @@ func (w *docWriter) ctx() context.Context {
 func (w *docWriter) Get(name string) any {
 	for _, tp := range w.entity.TableParts {
 		if strings.EqualFold(tp.Name, name) {
-			return &tpProxy{w: w, tpName: tp.Name}
+			return &tpProxy{obj: w.obj, tpName: tp.Name}
 		}
 	}
 	return w.obj.Get(name)
@@ -693,8 +694,9 @@ func (w *docWriter) displayName() string {
 }
 
 // tpProxy — табличная часть документа (Док.Товары).
+// tpProxy — табличная часть записываемого объекта (документа или справочника).
 type tpProxy struct {
-	w      *docWriter
+	obj    *runtime.Object
 	tpName string
 }
 
@@ -705,19 +707,19 @@ func (t *tpProxy) Set(_ string, _ any) {}
 // загруженные строки ТЧ. Без этого ТЧ документа, полученного из БД
 // (Ссылка.ПолучитьОбъект / НайтиПоНомеру), нельзя было прочитать в DSL.
 func (t *tpProxy) IterateRows() []map[string]any {
-	return t.w.obj.TablePartRows[t.tpName]
+	return t.obj.TablePartRows[t.tpName]
 }
 
 func (t *tpProxy) CallMethod(method string, args []any) any {
 	switch strings.ToLower(method) {
 	case "добавить", "add":
 		row := map[string]any{}
-		t.w.obj.TablePartRows[t.tpName] = append(t.w.obj.TablePartRows[t.tpName], row)
+		t.obj.TablePartRows[t.tpName] = append(t.obj.TablePartRows[t.tpName], row)
 		return &interpreter.MapThis{M: row}
 	case "очистить", "clear":
-		t.w.obj.TablePartRows[t.tpName] = nil
+		t.obj.TablePartRows[t.tpName] = nil
 	case "количество", "count":
-		return float64(len(t.w.obj.TablePartRows[t.tpName]))
+		return float64(len(t.obj.TablePartRows[t.tpName]))
 	}
 	return nil
 }

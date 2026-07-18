@@ -162,6 +162,8 @@ func (f *dslFile) Get(field string) any {
 	switch field {
 	case "существует", "exists":
 		return f.info != nil
+	case "этокаталог", "isdirectory":
+		return f.info != nil && f.info.IsDir()
 	case "размер", "size":
 		if f.info != nil {
 			return float64(f.info.Size())

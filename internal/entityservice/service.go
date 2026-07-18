@@ -91,20 +91,28 @@ func (s *Service) dispatchSaved(ctx context.Context, req SaveRequest, isPosting 
 	if !s.Hooks.Enabled() {
 		return
 	}
-	event := "catalog.save"
+	eventName := "catalog.save"
 	if req.Entity.Kind == metadata.KindDocument {
-		event = "document.save"
+		eventName = "document.save"
 		if isPosting {
-			event = "document.post"
+			eventName = "document.post"
 		}
 	}
-	s.Hooks.Dispatch(webhook.Event{
-		Name:   event,
+	event := webhook.Event{
+		Name:   eventName,
 		Entity: req.Entity.Name,
 		ID:     req.ID.String(),
 		User:   storage.AuditUserLogin(ctx),
 		Record: webhookRecord(req.Fields),
-	})
+	}
+	dispatch := func() { s.Hooks.Dispatch(event) }
+	// Save may join an explicit DSL transaction. Do not publish a webhook for
+	// data that can still be rolled back; the storage transaction invokes this
+	// callback only after the outer commit.
+	if storage.DeferUntilTxCommit(ctx, dispatch) {
+		return
+	}
+	dispatch()
 }
 
 // webhookRecord копирует поля записи для шаблона тела хука, отбрасывая
@@ -241,7 +249,7 @@ func (s *Service) Save(ctx context.Context, req SaveRequest) (SaveResult, error)
 	}
 
 	// Транзакция: upsert + ТЧ + движения + проведение.
-	err := s.Store.WithTx(ctx, func(ctx context.Context) error {
+	err := s.Store.WithTxIfNeeded(ctx, func(ctx context.Context) error {
 		if err := s.Store.AdvisoryXactLock(ctx, lockCollector.Keys()); err != nil {
 			return err
 		}

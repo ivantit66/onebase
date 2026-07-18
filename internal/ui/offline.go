@@ -52,6 +52,9 @@ func RunProcessorOffline(ctx context.Context, proj *project.Project, db *storage
 		lockMgr:  runtime.NewLockManager(),
 		messages: NewMessageStore(),
 	}
+	// Запись справочников/документов из обработки (catWriter/docWriter →
+	// entityservice.Save) должна работать и в offline-режиме.
+	s.entitySvc = s.newEntityService(nil)
 
 	proc := reg.GetProcessor(procName)
 	if proc == nil {
