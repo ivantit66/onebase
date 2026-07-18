@@ -83,7 +83,8 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 	catalogs := interpreter.NewCatalogsRoot(txState, s.store, s.reg).
 		WithManagerCaller(mgrCaller).
 		WithRowAccessChecker(rowAccess).
-		WithExchangeRegistrar(s.exchangeRegistrar())
+		WithExchangeRegistrar(s.exchangeRegistrar()).
+		WithObjectFactory(s.catObjectFactory(txState))
 	// Документы.X.Создать()/.Записать()/.Провести() из обработки.
 	documents := newDocsRoot(s, txState)
 	// РегистрыНакопления.X.Остатки()/.Движения()/.ВыбратьПоРегистратору(Док).
