@@ -26,6 +26,11 @@ body{font-family:'Segoe UI',Arial,sans-serif;font-size:13px;background:#f0f2f5;h
 .cfg-left.collapsed + .cfg-resizer{display:none}
 body.cfg-resizing{cursor:col-resize}
 body.cfg-resizing .cfg-left,body.cfg-resizing .dbg-panel{transition:none}
+/* Ручка высоты дока свойств ячейки (редактор макетов печатных форм) */
+.vprops-grip{height:10px;cursor:ns-resize;background:transparent;position:relative;touch-action:none;transition:background .15s}
+.vprops-grip::after{content:'';position:absolute;left:50%;top:4px;width:44px;height:3px;margin-left:-22px;border-radius:2px;background:#b0c8e4}
+.vprops-grip:hover,.vprops-grip.dragging{background:#dcebfb}
+body.cfg-vresizing{cursor:ns-resize;user-select:none}
 .cfg-group{font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;padding:10px 12px 4px;margin-top:4px}
 .cfg-tree details summary{font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;padding:10px 12px 4px;margin-top:4px;cursor:pointer;list-style:none;display:flex;align-items:center;gap:2px}
 .cfg-tree details summary::-webkit-details-marker{display:none}

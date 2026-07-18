@@ -168,3 +168,31 @@ func TestLayoutEditor_UXImprovements(t *testing.T) {
 		}
 	}
 }
+
+// Регулируемая высота дока свойств ячейки: ручка сверху панели (drag по
+// вертикали), высота в --cfg-vprops-h + localStorage, сброс двойным кликом.
+func TestLayoutEditor_PropsPanelResize(t *testing.T) {
+	js := configuratorJS(t)
+	for _, sub := range []string{
+		"function ldPropsResizeStart", // drag ручки
+		"function ldPropsResizeReset", // сброс по dblclick
+		"--cfg-vprops-h",              // общая CSS-переменная высоты
+		"cfgVPropsH",                  // ключ localStorage (восстановление в initResizers)
+	} {
+		if !strings.Contains(js, sub) {
+			t.Errorf("в JS редактора нет фрагмента: %q", sub)
+		}
+	}
+
+	html := renderLayoutPanelTree(t)
+	for _, sub := range []string{
+		`class="vprops-grip"`,
+		`ldPropsResizeStart(event)`,
+		`ldPropsResizeReset()`,
+		`var(--cfg-vprops-h,44vh)`, // высота по умолчанию как раньше
+	} {
+		if !strings.Contains(html, sub) {
+			t.Errorf("в HTML панели редактора нет фрагмента: %q", sub)
+		}
+	}
+}
