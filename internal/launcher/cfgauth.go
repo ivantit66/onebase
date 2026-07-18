@@ -190,6 +190,16 @@ func (h *handler) cfgLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setConfiguratorSessionCookie(w, token)
+
+	http.Redirect(w, r, "/bases/"+id+"/configurator", http.StatusFound)
+}
+
+// setConfiguratorSessionCookie starts the dedicated configurator session in
+// the browser. It is shared by the normal login and by first-admin bootstrap:
+// before the first user exists the configurator is intentionally open, so the
+// create-user AJAX response must establish a session before the next request.
+func setConfiguratorSessionCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "onebase_session",
 		Value:    token,
@@ -197,8 +207,6 @@ func (h *handler) cfgLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
-
-	http.Redirect(w, r, "/bases/"+id+"/configurator", http.StatusFound)
 }
 
 func (h *handler) cfgLogout(w http.ResponseWriter, r *http.Request) {

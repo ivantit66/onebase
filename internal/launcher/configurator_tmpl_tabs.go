@@ -114,7 +114,10 @@ function cfgViewFile(el){
     <form method="POST" action="/bases/{{.Base.ID}}/config/import">
       <div class="fg">
         <label>{{t $.Lang "Путь к папке"}}</label>
-        <input type="text" name="path" placeholder="~/.onebase/workspace/{{.Base.ID}}">
+        <div class="input-browse">
+          <input type="text" id="config-import-dir" name="path" placeholder="~/.onebase/workspace/{{.Base.ID}}">
+          <button type="button" class="btn-browse" onclick="pickDir('config-import-dir','{{t $.Lang "Выберите папку конфигурации"}}')">📁</button>
+        </div>
       </div>
       <button class="btn-primary" type="submit">{{t $.Lang "Загрузить"}}</button>
     </form>
