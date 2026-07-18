@@ -1043,6 +1043,10 @@ obReady(function () {
 (function () {
   if (window.__obAiInit) return;
   window.__obAiInit = true;
+  // Во вкладочной оболочке ui.js загружается и в верхнем окне, и внутри
+  // каждой вкладки-iframe. Помощник принадлежит оболочке: если строить его во
+  // фрейме, поверх кнопки оболочки появляется второй робот.
+  if (window.__obEmbedded) return;
   function init() {
     if (document.getElementById('ob-ai-btn')) return;
     fetch('/ui/ai/enabled').then(function (r) { return r.json(); }).then(function (d) {
