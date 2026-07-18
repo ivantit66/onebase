@@ -826,6 +826,8 @@
   "Открыть карточку": "Open card",
   "Показывать «+ Создать» в picker'е": "Show «+ Create» in the picker",
   "Выберите папку XML-выгрузки": "Select XML export folder",
+  "Выберите папку конфигурации": "Select configuration folder",
+  "Первый пользователь должен быть администратором": "The first user must be an administrator",
   "Добавить обработку": "Add data processor",
   "Добавить общий модуль": "Add common module",
   "Переместить вверх": "Move up",
