@@ -33,6 +33,10 @@ type Scheduler struct {
 	log     *slog.Logger
 	mailer  *mailer.Mailer
 	msgSink func(userID, text string)
+	// varsBuilder — внешний сборщик полного DSL-окружения заданий (обычно
+	// ui.Server.BuildJobDSLVars): даёт заданиям Справочники/Документы/вложения/
+	// транзакции наравне с обработками. nil → базовый набор dslvars.Common.
+	varsBuilder VarsBuilder
 
 	mu         sync.Mutex
 	running    bool
@@ -63,6 +67,12 @@ type activeRun struct {
 // SetMessageSink hooks Сообщить() output into an external store (e.g. UI message panel).
 // userID is empty string for scheduler context (anonymous/system).
 func (s *Scheduler) SetMessageSink(f func(userID, text string)) { s.msgSink = f }
+
+// VarsBuilder строит DSL-окружение для запуска обработки задания.
+type VarsBuilder func(ctx context.Context, mc *runtime.MovementsCollector) map[string]any
+
+// SetVarsBuilder подключает внешний сборщик DSL-окружения (см. поле varsBuilder).
+func (s *Scheduler) SetVarsBuilder(b VarsBuilder) { s.varsBuilder = b }
 
 func New(db *storage.DB, reg *runtime.Registry, interp *interpreter.Interpreter) *Scheduler {
 	return &Scheduler{
@@ -459,7 +469,14 @@ func (s *Scheduler) runProcessor(ctx context.Context, job *metadata.ScheduledJob
 
 	paramsThis := &interpreter.MapThis{M: paramValues}
 	mc := runtime.NewMovementsCollector("scheduler", uuid.Nil)
-	dslVars := s.buildDSLVars(ctx, mc)
+	// Полное DSL-окружение (Справочники/Документы/вложения/транзакции) строит
+	// внешний VarsBuilder (ui), если подключён; иначе — базовый набор Common.
+	var dslVars map[string]any
+	if s.varsBuilder != nil {
+		dslVars = s.varsBuilder(ctx, mc)
+	} else {
+		dslVars = s.buildDSLVars(ctx, mc)
+	}
 	dslVars["Параметры"] = paramsThis
 	dslVars["Сообщить"] = msgFunc
 	dslVars["Message"] = msgFunc

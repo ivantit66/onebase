@@ -55,6 +55,13 @@ func resolveSafePath(p string) (string, error) {
 // safePathOrRaise возвращает безопасный путь либо прерывает выполнение DSL
 // пользовательской ошибкой (panic userError, перехватывается Попыткой).
 // op — имя операции для сообщения.
+// ResolveSafePath — экспортированная обёртка resolveSafePath для файловых
+// builtins вышестоящих слоёв (ui: вложения из DSL). Уважает ту же песочницу,
+// что и встроенные файловые функции.
+func ResolveSafePath(p string) (string, error) {
+	return resolveSafePath(p)
+}
+
 func safePathOrRaise(op, p string) string {
 	safe, err := resolveSafePath(p)
 	if err != nil {

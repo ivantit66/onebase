@@ -11,7 +11,35 @@ import (
 	"github.com/ivantit66/onebase/internal/entityservice"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/runtime"
+	"github.com/ivantit66/onebase/internal/webhook"
 )
+
+// newEntityService собирает entityservice.Service, привязанный к серверу:
+// PrepareHook/EnrichTPRows — обогащение ссылок, BuildVars — полный DSL-набор,
+// MakeThis — обёртка с методами ТЧ. Используется и полным сервером (New), и
+// offline-запуском обработок (RunProcessorOffline).
+func (s *Server) newEntityService(hooks *webhook.Dispatcher) *entityservice.Service {
+	return &entityservice.Service{
+		Store:        s.store,
+		Reg:          s.reg,
+		Interp:       s.interp,
+		PrepareHook:  s.enrichHeaderRefs,
+		EnrichTPRows: s.enrichTPRowsWithRefs,
+		BuildVars:    s.buildDSLVarsWithMessages,
+		MakeThis: func(ctx context.Context, obj *runtime.Object, e *metadata.Entity) interpreter.This {
+			return s.newFormObjectThis(ctx, obj, e, nil)
+		},
+		// Исходящие веб-хуки (план 29): save/post диспетчеризуются из Save.
+		Hooks: hooks,
+	}
+}
+
+// BuildJobDSLVars — полное DSL-окружение для регламентных заданий (план 101):
+// scheduler вызывает его вместо собственного базового набора, чтобы задания
+// имели Справочники/Документы/вложения/транзакции — как обработки из UI/procrun.
+func (s *Server) BuildJobDSLVars(ctx context.Context, mc *runtime.MovementsCollector) map[string]any {
+	return s.buildDSLVars(ctx, mc)
+}
 
 // catFactory реализует interpreter.CatalogObjectFactory: объекты справочников,
 // создаваемые из DSL (Справочники.X.Создать() / Ссылка.ПолучитьОбъект()),

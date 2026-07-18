@@ -43,6 +43,11 @@ func New(reg *runtime.Registry, store *storage.DB, interp *interpreter.Interpret
 		uiCfg.Metrics = metricsReg
 	}
 	uiSrv := ui.New(reg, store, interp, authRepo, uiCfg, sched)
+	// Регламентные задания получают полное DSL-окружение ui (Справочники,
+	// Документы, вложения, транзакции) — план 101.
+	if sched != nil {
+		sched.SetVarsBuilder(uiSrv.BuildJobDSLVars)
+	}
 	if metricsReg != nil {
 		registerRuntimeMetrics(metricsReg, authRepo, uiSrv, sched, uiCfg.Webhooks)
 	}

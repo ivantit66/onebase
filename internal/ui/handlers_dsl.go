@@ -199,6 +199,9 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 	vars["ObjectAttributeValues"] = attrValuesFn
 	vars["СохранитьКартинку"] = putImageFn
 	vars["PutImage"] = putImageFn
+	// Вложения из DSL (план 105): ПрисоединитьФайл/СписокВложений/
+	// ПутьКВложению/УдалитьВложение. Живой контекст — как у транзакций.
+	s.registerAttachmentBuiltins(vars, txState.Ctx)
 	queryFactory := interpreter.NewQueryFactoryWithCompiler(txState.Ctx(), s.store, s.reg, s.compileDSLQueryWithRowAccess)
 	vars["__factory_Запрос"] = queryFactory
 	vars["__factory_Query"] = queryFactory
