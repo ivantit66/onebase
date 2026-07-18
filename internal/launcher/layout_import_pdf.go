@@ -55,6 +55,13 @@ func (h *handler) configuratorImportPDFLayout(w http.ResponseWriter, r *http.Req
 		h.layoutCreateError(w, r, b, lang, tr(lang, "Недопустимое имя файла"))
 		return
 	}
+	// Привязка к документу обязательна: без document: форма не попадает в
+	// список печати (runtime индексирует декларативные формы по Document).
+	document := strings.TrimSpace(r.FormValue("document"))
+	if document == "" {
+		h.layoutCreateError(w, r, b, lang, tr(lang, "Для макета выберите документ/справочник"))
+		return
+	}
 
 	page := 1
 	if p := strings.TrimSpace(r.FormValue("page")); p != "" {
@@ -82,6 +89,7 @@ func (h *handler) configuratorImportPDFLayout(w http.ResponseWriter, r *http.Req
 		return
 	}
 	lt.Name = layoutName
+	lt.Document = document
 
 	src, merr := marshalLayout(lt)
 	if merr != nil {
@@ -128,6 +136,7 @@ func (h *handler) configuratorImportPDFLayout(w http.ResponseWriter, r *http.Req
 	data := h.loadCfgData(r.Context(), b, "tree")
 	data.FieldsSaved = true
 	data.FieldsSavedEntity = layoutName
+	data.SavedMessage = tr(lang, "✓ Макет") + " «" + layoutName + "» " + tr(lang, "создан из PDF — черновик открыт в редакторе. Перезапустите базу, чтобы форма появилась в списке печати.")
 	data.SelectedTreeID = "mkt-" + layoutName
 	renderCfg(w, r, data)
 }

@@ -203,6 +203,7 @@ func (h *handler) configuratorSaveLayout(w http.ResponseWriter, r *http.Request)
 	} else {
 		data.FieldsSaved = true
 		data.FieldsSavedEntity = layoutName
+		data.SavedMessage = tr(lang, "✓ Макет") + " «" + layoutName + "» " + tr(lang, "сохранён. Перезапустите базу, чтобы изменения вступили в силу.")
 		data.SelectedTreeID = "mkt-" + layoutName
 	}
 	renderCfg(w, r, data)
