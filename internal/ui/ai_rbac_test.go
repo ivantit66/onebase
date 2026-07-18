@@ -164,7 +164,7 @@ func flaggedUserAndServer(t *testing.T) (*Server, *http.Request) {
 // admin_only флаг AIDataAccess не даёт не-админу инструментов данных.
 func TestAITools_FlaggedUser_DefaultScope_NoTools(t *testing.T) {
 	s, r := flaggedUserAndServer(t)
-	if tools, exec := s.aiTools(r); tools != nil || exec != nil {
+	if tools, exec, _ := s.aiTools(r); tools != nil || exec != nil {
 		t.Fatalf("в режиме admin_only флаг не должен давать инструменты: tools=%v exec!=nil=%v", tools, exec != nil)
 	}
 }

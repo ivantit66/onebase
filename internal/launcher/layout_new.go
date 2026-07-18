@@ -262,6 +262,7 @@ func (h *handler) configuratorNewLayout(w http.ResponseWriter, r *http.Request) 
 	data := h.loadCfgData(r.Context(), b, "tree")
 	data.FieldsSaved = true
 	data.FieldsSavedEntity = layoutName
+	data.SavedMessage = tr(lang, "✓ Макет") + " «" + layoutName + "» " + tr(lang, "создан. Перезапустите базу, чтобы форма появилась в списке печати.")
 	data.SelectedTreeID = "mkt-" + layoutName
 	renderCfg(w, r, data)
 }

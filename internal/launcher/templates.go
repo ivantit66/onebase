@@ -273,6 +273,14 @@ function startBase(el, id) {
   var origText = btn.textContent || '';
   if (btn.innerHTML) btn.innerHTML = '⏳ Запуск...';
   var win = window.open('', '_blank');
+  // Заготовка вместо белого экрана: первый запуск мигрирует схему БД до открытия
+  // порта и может длиться дольше минуты — окно всё это время ждёт ответ /start.
+  if (win) {
+    try {
+      win.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>onebase</title></head><body style="font-family:Segoe UI,Arial,sans-serif;padding:28px"><h3 style="margin:0 0 12px">⏳ Запуск базы…</h3><p style="color:#555;max-width:48em">При первом запуске создаётся схема базы данных — это может занять несколько минут. Окно откроется автоматически.</p></body></html>');
+      win.document.close();
+    } catch (e) {}
+  }
   fetch('/bases/' + id + '/start', {method:'POST'})
     .then(function(r){ return r.json(); })
     .then(function(d){
@@ -468,7 +476,7 @@ const tplConfigResult = `
   <h2>{{.Title}}</h2>
   <p style="margin-bottom:12px;font-size:13px;color:#555">{{.Message}}</p>
   {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
-  <div style="margin-top:14px"><a class="btn-cancel" href="/">← {{t $.Lang "Назад"}}</a></div>
+  <div style="margin-top:14px"><a class="btn-cancel" href="{{if .BackURL}}{{.BackURL}}{{else}}/{{end}}">← {{t $.Lang "Назад"}}</a></div>
 </div>
 </body></html>
 {{end}}

@@ -37,4 +37,18 @@ func TestAIChat_RendersMarkdown(t *testing.T) {
 			t.Errorf("в стилях нет %q — оформление ответа ассистента не подключено", want)
 		}
 	}
+
+	// Регресс: ячейки таблицы наследовали word-break:break-word от .m — в узкой
+	// панели колонки сжимались до посимвольного переноса («Шка/ф/«Сек/рет»).
+	// Ячейкам возвращён word-break:normal, а широкая таблица целиком скроллится
+	// в собственной обёртке .tw, не растягивая остальной текст сообщения.
+	for _, want := range []string{
+		"#ob-ai-log .m.a .tw{overflow-x:auto",
+		"word-break:normal",
+		`out.push('<div class="tw"><table>`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("в ui.js нет %q — таблицы ассистента снова будут жаться посимвольно вместо скролла", want)
+		}
+	}
 }

@@ -152,16 +152,144 @@ func TestLayoutEditor_UXImprovements(t *testing.T) {
 
 	html := renderLayoutPanelTree(t)
 	for _, sub := range []string{
-		`id="yamlpane-Накладная"`,                                               // #2 сворачиваемая панель
-		`ldToggleYaml('Накладная')`,                                             // #2 кнопка сворачивания
-		`position:fixed;left:0;right:0;bottom:0;z-index:50`,                     // #1 закреплённый док
-		`ldDeselect('Накладная')`,                                               // #1 закрытие дока
-		`cfgImportPdfLayout('/bases/test-base/configurator/layout/import-pdf')`, // #6 кнопка «Из PDF» в тулбаре
+		`id="yamlpane-Накладная"`,                                                            // #2 сворачиваемая панель
+		`ldToggleYaml('Накладная')`,                                                          // #2 кнопка сворачивания
+		`position:fixed;left:0;right:0;bottom:0;z-index:50`,                                  // #1 закреплённый док
+		`ldDeselect('Накладная')`,                                                            // #1 закрытие дока
+		`cfgImportPdfLayout('/bases/test-base/configurator/layout/import-pdf','Реализация')`, // #6 кнопка «Из PDF» в тулбаре (с привязкой к документу)
 		`{{Номер}}`, // #3 подсказка про интерполяцию
 		"Откроется во внешнем приложении",                      // #5 подсказка на кнопке PDF
 		`id="pg-fmt-Накладная"`,                                // границы листа: выбор формата
 		`ldSetPageField('Накладная','orientation',this.value)`, // выбор ориентации
 		`ldSetPageMargin('Накладная','left',this.value)`,       // поля листа
+	} {
+		if !strings.Contains(html, sub) {
+			t.Errorf("в HTML панели редактора нет фрагмента: %q", sub)
+		}
+	}
+}
+
+// Standalone-макеты (LayoutOnly, декларативные .layout.yaml без парного .os) —
+// раньше не показывались в конфигураторе вовсе: после «+ Печатная форма
+// (макет)» или импорта из PDF дерево сбрасывалось на первый элемент, а форма
+// «пропадала». Теперь: узел mkt-* в дереве + панель редактора макета, панель
+// .os-модуля не рендерится.
+func TestLayoutEditor_StandaloneLayoutForm(t *testing.T) {
+	data := &configuratorData{
+		Base: &Base{ID: "test-base", Name: "Тест", ConfigSource: "file"},
+		Lang: "ru",
+		Tab:  "tree",
+		DSLPrintForms: []cfgDSLPrintForm{{
+			Name:       "Счет2",
+			Document:   "Реализация",
+			HasLayout:  true,
+			LayoutOnly: true,
+			LayoutYAML: "areas:\n  - name: Страница1\n    rows: []\n",
+		}},
+	}
+	var buf bytes.Buffer
+	if err := cfgTmpl.ExecuteTemplate(&buf, "tab-tree", data); err != nil {
+		t.Fatalf("ExecuteTemplate tab-tree: %v", err)
+	}
+	html := buf.String()
+	for _, sub := range []string{
+		`data-id="mkt-Счет2"`, // узел в дереве «Печатные формы»
+		`id="mkt-Счет2"`,      // панель редактора макета
+		`id="ta-mkt-Счет2"`,   // YAML-редактор внутри панели
+	} {
+		if !strings.Contains(html, sub) {
+			t.Errorf("в HTML нет фрагмента standalone-макета: %q", sub)
+		}
+	}
+	if strings.Contains(html, `id="dpf-Счет2"`) {
+		t.Error("для standalone-макета не должна рендериться панель .os-модуля")
+	}
+}
+
+// Вкладка «Печатные формы» сущности показывает все виды форм: декларативные
+// макеты (mkt-*) и DSL (dpf-*) — раньше были видны только legacy YAML (pf-*).
+func TestEntityPrintTab_ShowsAllFormKinds(t *testing.T) {
+	data := &configuratorData{
+		Base: &Base{ID: "test-base", Name: "Тест", ConfigSource: "file"},
+		Lang: "ru",
+		Tab:  "tree",
+		Docs: []cfgEntity{{
+			Name: "Реализация", Kind: "Документ",
+			LinkedPrintForms: []cfgPrintForm{{Name: "накладная", Document: "Реализация"}},
+			LinkedDSLForms: []cfgDSLPrintForm{
+				{Name: "упд", Document: "Реализация", HasLayout: true},
+				{Name: "Счет2", Document: "Реализация", HasLayout: true, LayoutOnly: true},
+			},
+		}},
+	}
+	var buf bytes.Buffer
+	if err := cfgTmpl.ExecuteTemplate(&buf, "tab-tree", data); err != nil {
+		t.Fatalf("ExecuteTemplate tab-tree: %v", err)
+	}
+	html := buf.String()
+	for _, sub := range []string{
+		`cfgSelectPanel('dpf-упд')`,      // DSL-форма
+		`cfgSelectPanel('mkt-Счет2')`,    // декларативный макет
+		`cfgSelectPanel('pf-накладная')`, // legacy YAML (с пометкой)
+		`(YAML)`,
+	} {
+		if !strings.Contains(html, sub) {
+			t.Errorf("на вкладке «Печатные формы» нет фрагмента: %q", sub)
+		}
+	}
+}
+
+// Диалог «+» у группы «Печатные формы» предлагает выбор типа: макет
+// (визуальный конструктор, по умолчанию) или классический YAML; отправка
+// переключает action между new-layout и new-printform.
+func TestPrintFormNewDialog_KindChoice(t *testing.T) {
+	html := renderLayoutPanelTree(t)
+	for _, sub := range []string{
+		`name="pf_kind"`,
+		`value="layout" checked`,
+		`value="yaml"`,
+		`cfgNewPrintFormSubmit(this,'/bases/test-base/configurator')`,
+	} {
+		if !strings.Contains(html, sub) {
+			t.Errorf("в HTML диалога новой печатной формы нет фрагмента: %q", sub)
+		}
+	}
+
+	js := configuratorJS(t)
+	for _, sub := range []string{
+		"function cfgNewPrintFormSubmit",
+		"'/new-layout'",
+		"'/new-printform'",
+		"_pdfDoc",                       // привязка к документу в диалоге импорта PDF
+		"fd.append('document', docVal)", // document уходит на сервер импорта
+	} {
+		if !strings.Contains(js, sub) {
+			t.Errorf("в JS нет фрагмента: %q", sub)
+		}
+	}
+}
+
+// Регулируемая высота дока свойств ячейки: ручка сверху панели (drag по
+// вертикали), высота в --cfg-vprops-h + localStorage, сброс двойным кликом.
+func TestLayoutEditor_PropsPanelResize(t *testing.T) {
+	js := configuratorJS(t)
+	for _, sub := range []string{
+		"function ldPropsResizeStart", // drag ручки
+		"function ldPropsResizeReset", // сброс по dblclick
+		"--cfg-vprops-h",              // общая CSS-переменная высоты
+		"cfgVPropsH",                  // ключ localStorage (восстановление в initResizers)
+	} {
+		if !strings.Contains(js, sub) {
+			t.Errorf("в JS редактора нет фрагмента: %q", sub)
+		}
+	}
+
+	html := renderLayoutPanelTree(t)
+	for _, sub := range []string{
+		`class="vprops-grip"`,
+		`ldPropsResizeStart(event)`,
+		`ldPropsResizeReset()`,
+		`var(--cfg-vprops-h,44vh)`, // высота по умолчанию как раньше
 	} {
 		if !strings.Contains(html, sub) {
 			t.Errorf("в HTML панели редактора нет фрагмента: %q", sub)

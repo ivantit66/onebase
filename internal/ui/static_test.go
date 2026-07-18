@@ -68,6 +68,11 @@ func TestStaticUIJS(t *testing.T) {
 		"ob-widget-style",
 		"#ob-ai-panel{position:fixed",
 		"#ob-msg-bar{position:fixed",
+		// Ручка изменения ширины панели ИИ и карточки отложенных действий
+		// (план 51: создание черновиков с подтверждением в чате).
+		"#ob-ai-rs{position:absolute",
+		"localStorage.getItem('obAiW')",
+		"'/ui/ai/action'",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("/static/ui.js не содержит %q", want)
@@ -145,6 +150,14 @@ func TestTabShellSingleSSEAndEventForwarding(t *testing.T) {
 	// (до .gitattributes eol=lf) ui.js может лежать с CRLF — нормализуем, чтобы
 	// проверки точных "\n"-строк не зависели от EOL чекаута.
 	src := strings.ReplaceAll(string(uiJS), "\r\n", "\n")
+	// Глобальный ИИ-помощник принадлежит верхнему окну оболочки. Иначе каждая
+	// активная вкладка рисует поверх его кнопки собственного робота.
+	aiStart := strings.Index(src, "if (window.__obAiInit) return;")
+	aiBuild := strings.Index(src, "function buildUI()")
+	if aiStart < 0 || aiBuild <= aiStart ||
+		!strings.Contains(src[aiStart:aiBuild], "if (window.__obEmbedded) return;") {
+		t.Error("ui.js должен строить ИИ-помощника только в верхнем окне вкладочной оболочки")
+	}
 	// SSE /ui/events подключается только в верхнем окне, не во фрейме оболочки.
 	if !strings.Contains(src, "if (!window.__obEmbedded) {") {
 		t.Error("ui.js должен подключать SSE /ui/events только вне вкладочного фрейма (гейт window.__obEmbedded)")

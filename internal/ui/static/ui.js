@@ -997,8 +997,12 @@ obReady(function () {
     '#ob-ai-log .m.a code{background:#f1f5f9;border-radius:3px;padding:1px 4px;font-family:ui-monospace,Consolas,monospace;font-size:12px}' +
     '#ob-ai-log .m.a pre{background:#f1f5f9;border-radius:6px;padding:8px;overflow-x:auto;margin:6px 0}' +
     '#ob-ai-log .m.a pre code{background:none;padding:0}' +
-    '#ob-ai-log .m.a table{border-collapse:collapse;margin:6px 0;font-size:12px}' +
-    '#ob-ai-log .m.a th,#ob-ai-log .m.a td{border:1px solid #e2e8f0;padding:4px 7px;text-align:left;vertical-align:top}' +
+    // Таблица живёт в собственной скролл-обёртке .tw и держит естественную
+    // ширину; ячейкам возвращаем word-break:normal — иначе наследованный от .m
+    // break-word даёт min-width колонки в один символ и текст жмётся посимвольно.
+    '#ob-ai-log .m.a .tw{overflow-x:auto;margin:6px 0}' +
+    '#ob-ai-log .m.a table{border-collapse:collapse;margin:0;font-size:12px;width:max-content}' +
+    '#ob-ai-log .m.a th,#ob-ai-log .m.a td{border:1px solid #e2e8f0;padding:4px 7px;text-align:left;vertical-align:top;word-break:normal;max-width:240px}' +
     '#ob-ai-log .m.a th{background:#f1f5f9;font-weight:600;white-space:nowrap}' +
     '#ob-ai-log .m.a tbody tr:nth-child(even){background:#f8fafc}' +
     '#ob-ai-log .m.err{align-self:stretch;background:#fef2f2;border:1px solid #fecaca;color:#b91c1c}' +
@@ -1007,6 +1011,16 @@ obReady(function () {
     '#ob-ai-input{flex:1;resize:none;border:1px solid #cbd5e1;border-radius:8px;padding:8px;font-size:13px;font-family:inherit;max-height:90px}' +
     '#ob-ai-send{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:0 14px;cursor:pointer;font-size:14px}' +
     '#ob-ai-send:disabled{opacity:.5;cursor:default}' +
+    '#ob-ai-rs{position:absolute;left:0;top:0;bottom:0;width:6px;cursor:ew-resize;touch-action:none;z-index:2}' +
+    '#ob-ai-rs:hover,#ob-ai-rs.drag{background:rgba(37,99,235,.25)}' +
+    '#ob-ai-log .m.act{align-self:stretch;max-width:100%;background:#eef2ff;border:1px solid #c7d2fe;color:#1e293b;white-space:normal}' +
+    '#ob-ai-log .m.act .lbl{white-space:pre-wrap;margin-bottom:8px}' +
+    '#ob-ai-log .m.act .btns{display:flex;gap:8px}' +
+    '#ob-ai-log .m.act .btns button{background:#2563eb;color:#fff;border:none;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:13px}' +
+    '#ob-ai-log .m.act .btns button.sec{background:#e2e8f0;color:#334155}' +
+    '#ob-ai-log .m.act .btns button:disabled{opacity:.6;cursor:default}' +
+    '#ob-ai-log .m.act .res{font-size:13px}' +
+    '#ob-ai-log .m.act .res a{color:#2563eb;text-decoration:underline;cursor:pointer}' +
     '#ob-msg-bar{position:fixed;left:0;right:0;bottom:0;z-index:300;background:#fff;border-top:1px solid #cbd5e1;box-shadow:0 -2px 8px rgba(0,0,0,.08);font-family:system-ui,sans-serif;font-size:13px;color:#1e293b;transform:translateY(calc(100% - 30px));transition:transform .18s ease}' +
     '#ob-msg-bar.open{transform:translateY(0)}' +
     '#ob-msg-bar.hidden{display:none}' +
@@ -1029,6 +1043,10 @@ obReady(function () {
 (function () {
   if (window.__obAiInit) return;
   window.__obAiInit = true;
+  // Во вкладочной оболочке ui.js загружается и в верхнем окне, и внутри
+  // каждой вкладки-iframe. Помощник принадлежит оболочке: если строить его во
+  // фрейме, поверх кнопки оболочки появляется второй робот.
+  if (window.__obEmbedded) return;
   function init() {
     if (document.getElementById('ob-ai-btn')) return;
     fetch('/ui/ai/enabled').then(function (r) { return r.json(); }).then(function (d) {
@@ -1042,7 +1060,8 @@ obReady(function () {
     btn.textContent = '🤖';
     var panel = document.createElement('div');
     panel.id = 'ob-ai-panel';
-    panel.innerHTML = '<div id="ob-ai-head"><span>🤖 ИИ-помощник</span><span class="sp"></span><button type="button" id="ob-ai-close" title="Закрыть">×</button></div>' +
+    panel.innerHTML = '<div id="ob-ai-rs" title="Потяните, чтобы изменить ширину; двойной клик — сброс"></div>' +
+      '<div id="ob-ai-head"><span>🤖 ИИ-помощник</span><span class="sp"></span><button type="button" id="ob-ai-close" title="Закрыть">×</button></div>' +
       '<div id="ob-ai-log"><div class="hint">Спросите про данные, отчёт или как что-то сделать.</div></div>' +
       '<div id="ob-ai-foot"><textarea id="ob-ai-input" rows="1" placeholder="Ваш вопрос…"></textarea><button id="ob-ai-send" type="button" title="Отправить">▶</button></div>';
     document.body.appendChild(btn);
@@ -1052,6 +1071,43 @@ obReady(function () {
     var send = document.getElementById('ob-ai-send');
     var history = [];
     var busy = false;
+    // Служебные заметки для модели (подтверждение/отмена действий) — уходят
+    // префиксом следующего сообщения пользователя, в журнале чата не видны.
+    var pendingNote = '';
+    // Изменяемая ширина панели: ручка на левой кромке (панель прижата к правому
+    // краю, тянуть естественно влево). Ширина живёт в localStorage.
+    (function () {
+      var rs = document.getElementById('ob-ai-rs');
+      var saved = parseInt(localStorage.getItem('obAiW'), 10);
+      if (saved) panel.style.width = saved + 'px';
+      function clampW(w) {
+        var max = Math.min(Math.round(window.innerWidth * 0.9), window.innerWidth - 24);
+        return Math.max(320, Math.min(max, w));
+      }
+      rs.addEventListener('pointerdown', function (e) {
+        e.preventDefault();
+        rs.setPointerCapture(e.pointerId);
+        rs.classList.add('drag');
+        function move(ev) {
+          panel.style.width = clampW(window.innerWidth - 18 - ev.clientX) + 'px';
+        }
+        function up() {
+          rs.removeEventListener('pointermove', move);
+          rs.removeEventListener('pointerup', up);
+          rs.removeEventListener('pointercancel', up);
+          rs.classList.remove('drag');
+          var w = parseInt(panel.style.width, 10);
+          if (w) localStorage.setItem('obAiW', String(w));
+        }
+        rs.addEventListener('pointermove', move);
+        rs.addEventListener('pointerup', up);
+        rs.addEventListener('pointercancel', up);
+      });
+      rs.addEventListener('dblclick', function () {
+        panel.style.width = '';
+        localStorage.removeItem('obAiW');
+      });
+    })();
     function open() {
       panel.classList.add('open');
       btn.style.display = 'none';
@@ -1088,6 +1144,7 @@ obReady(function () {
       }
       function cells(l) { return l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(function (c) { return c.trim(); }); }
       function isSep(l) { return /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(l || ''); }
+      function tcell(tag, align, html) { return '<' + tag + (align ? ' style="text-align:' + align + '"' : '') + '>' + html + '</' + tag + '>'; }
       var lines = esc(src).replace(/\r\n?/g, '\n').split('\n');
       var out = [], i = 0;
       while (i < lines.length) {
@@ -1100,14 +1157,20 @@ obReady(function () {
           continue;
         }
         if (line.indexOf('|') >= 0 && isSep(lines[i + 1])) {
-          var head = cells(line); i += 2; var body = '';
+          var head = cells(line);
+          // Выравнивание из GFM-разделителя: `---:` → вправо, `:---:` → по центру.
+          var aligns = cells(lines[i + 1]).map(function (c) {
+            var a = /^(:)?-+(:)?$/.exec(c);
+            return a && a[2] ? (a[1] ? 'center' : 'right') : '';
+          });
+          i += 2; var body = '';
           while (i < lines.length && lines[i].indexOf('|') >= 0 && lines[i].trim() !== '') {
             var r = cells(lines[i]), tds = '';
-            for (var k = 0; k < head.length; k++) tds += '<td>' + inline(r[k] || '') + '</td>';
+            for (var k = 0; k < head.length; k++) tds += tcell('td', aligns[k], inline(r[k] || ''));
             body += '<tr>' + tds + '</tr>'; i++;
           }
-          var ths = ''; for (var h = 0; h < head.length; h++) ths += '<th>' + inline(head[h]) + '</th>';
-          out.push('<table><thead><tr>' + ths + '</tr></thead><tbody>' + body + '</tbody></table>');
+          var ths = ''; for (var h = 0; h < head.length; h++) ths += tcell('th', aligns[h], inline(head[h]));
+          out.push('<div class="tw"><table><thead><tr>' + ths + '</tr></thead><tbody>' + body + '</tbody></table></div>');
           continue;
         }
         var hm = /^(#{1,6})\s+(.*)$/.exec(line);
@@ -1140,12 +1203,112 @@ obReady(function () {
       log.scrollTop = log.scrollHeight;
       return d;
     }
+    // Открытие формы из чата: во вкладочной оболочке — новой вкладкой, на
+    // отдельной странице — новым окном (паттерн openRefCurrent).
+    function aiOpenURL(url, title) {
+      try {
+        if (window.__obEmbedded && window.parent && window.parent.obOpenTab) {
+          window.parent.postMessage({ source: 'obOpenTab', url: url, title: title || 'Форма' }, '*');
+          return;
+        }
+      } catch (e) {}
+      window.open(url, '_blank');
+    }
+    // URL собирается на клиенте из провалидированных сервером частей: «вид» —
+    // белый список, сущность/id — через encodeURIComponent. Сырые URL от
+    // сервера/модели не принимаются (нет open redirect / javascript:).
+    function aiActionURL(a) {
+      var v = a['вид'], ent = encodeURIComponent(a['сущность'] || '');
+      if (!ent) return '';
+      if (a.id && (v === 'document' || v === 'catalog')) return '/ui/_ref-open/' + ent + '/' + encodeURIComponent(a.id);
+      if (v === 'document' || v === 'catalog' || v === 'report' || v === 'processor') return '/ui/' + v + '/' + ent;
+      return '';
+    }
+    // Карточка отложенного действия (план 51): создание исполняется только по
+    // кнопке «Создать» (POST /ui/ai/action), «открыть» — просто кнопка перехода.
+    // Всё содержимое вставляется через textContent — HTML из данных не рендерится.
+    function addAction(a) {
+      if (!a || typeof a !== 'object') return;
+      var isCreate = a['тип'] === 'создать';
+      var openURL = a['тип'] === 'открыть' ? aiActionURL(a) : '';
+      if (!isCreate && !openURL) return;
+      var card = document.createElement('div');
+      card.className = 'm act';
+      var lbl = document.createElement('div');
+      lbl.className = 'lbl';
+      lbl.textContent = a['подпись'] || '';
+      card.appendChild(lbl);
+      var btns = document.createElement('div');
+      btns.className = 'btns';
+      function finish(text, link) {
+        btns.remove();
+        var res = document.createElement('div');
+        res.className = 'res';
+        res.textContent = text;
+        if (link) res.appendChild(link);
+        card.appendChild(res);
+        log.scrollTop = log.scrollHeight;
+      }
+      if (isCreate) {
+        var ok = document.createElement('button');
+        ok.type = 'button';
+        ok.textContent = 'Создать';
+        var no = document.createElement('button');
+        no.type = 'button';
+        no.className = 'sec';
+        no.textContent = 'Отмена';
+        ok.addEventListener('click', function () {
+          ok.disabled = no.disabled = true;
+          ok.textContent = 'Создаю…';
+          fetch('/ui/ai/action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(a) })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+              if (d && d.ok) {
+                var link = document.createElement('a');
+                link.textContent = d['подпись'] || 'открыть';
+                link.href = d.url || '#';
+                link.addEventListener('click', function (ev) {
+                  ev.preventDefault();
+                  aiOpenURL(d.url, d['подпись']);
+                });
+                finish('✓ Создано: ', link);
+                pendingNote += '[Служебно: пользователь подтвердил действие, создан объект «' + (d['подпись'] || '') + '», id ' + (d.id || '') + '.]\n';
+              } else {
+                finish('✗ ' + ((d && d.error) || 'Ошибка'));
+                pendingNote += '[Служебно: действие не выполнено: ' + ((d && d.error) || 'ошибка') + ']\n';
+              }
+            })
+            .catch(function () {
+              ok.disabled = no.disabled = false;
+              ok.textContent = 'Создать';
+            });
+        });
+        no.addEventListener('click', function () {
+          finish('Отменено');
+          pendingNote += '[Служебно: пользователь отклонил предложенное действие «' + (a['подпись'] || '').split('\n')[0] + '».]\n';
+        });
+        btns.appendChild(ok);
+        btns.appendChild(no);
+      } else {
+        var go = document.createElement('button');
+        go.type = 'button';
+        go.textContent = 'Открыть';
+        go.addEventListener('click', function () { aiOpenURL(openURL, a['сущность']); });
+        btns.appendChild(go);
+      }
+      card.appendChild(btns);
+      log.appendChild(card);
+      log.scrollTop = log.scrollHeight;
+    }
     function doSend() {
       var t = input.value.trim();
       if (!t || busy) return;
       input.value = '';
       addMsg('user', t);
-      history.push({ role: 'user', content: t });
+      // Служебные заметки (результаты подтверждений) — префиксом в историю,
+      // чтобы модель знала итог; в журнале чата показан только текст пользователя.
+      history.push({ role: 'user', content: (pendingNote ? pendingNote + '\n' : '') + t });
+      pendingNote = '';
       busy = true;
       send.disabled = true;
       var pend = addMsg('assistant', '…');
@@ -1155,6 +1318,9 @@ obReady(function () {
           if (d && d.ok) {
             pend.innerHTML = mdToHtml(d.text);
             history.push({ role: 'assistant', content: d.text });
+            if (d.actions && d.actions.length) {
+              for (var i = 0; i < d.actions.length; i++) addAction(d.actions[i]);
+            }
           } else {
             history.pop();
             pend.className = 'm err';

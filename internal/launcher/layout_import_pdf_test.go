@@ -68,12 +68,15 @@ func imageOnlyPDF(t *testing.T) []byte {
 }
 
 // postImportPDF собирает multipart-запрос и вызывает хендлер.
-func postImportPDF(t *testing.T, h *handler, b *Base, name, page string, pdfBytes []byte) *httptest.ResponseRecorder {
+func postImportPDF(t *testing.T, h *handler, b *Base, name, doc, page string, pdfBytes []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	if name != "" {
 		_ = mw.WriteField("name", name)
+	}
+	if doc != "" {
+		_ = mw.WriteField("document", doc)
 	}
 	if page != "" {
 		_ = mw.WriteField("page", page)
@@ -99,7 +102,7 @@ func postImportPDF(t *testing.T, h *handler, b *Base, name, page string, pdfByte
 
 func TestImportPDF_HappyPath(t *testing.T) {
 	h, b, dir := newLayoutTestBase(t)
-	rec := postImportPDF(t, h, b, "ИзPDFНакладная", "1", syntheticTablePDF(t))
+	rec := postImportPDF(t, h, b, "ИзPDFНакладная", "Реализация", "1", syntheticTablePDF(t))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("код %d, тело %s", rec.Code, rec.Body.String())
 	}
@@ -111,6 +114,15 @@ func TestImportPDF_HappyPath(t *testing.T) {
 	parsed, err := printform.ParseLayoutBytes(data)
 	if err != nil {
 		t.Fatalf("созданный макет не парсится: %v", err)
+	}
+	// Привязка к документу: без document: runtime не покажет форму в печати.
+	if parsed.Document != "Реализация" {
+		t.Errorf("document = %q, ожидалось «Реализация»", parsed.Document)
+	}
+	// Импортированная standalone-форма видна в дереве конфигуратора (узел
+	// макета), и SelectedTreeID указывает на существующий элемент.
+	if !strings.Contains(rec.Body.String(), `data-id="mkt-ИзPDFНакладная"`) {
+		t.Error("после импорта в дереве нет узла mkt-ИзPDFНакладная")
 	}
 	if len(parsed.Areas) != 1 || parsed.Areas[0].Name != "Страница1" {
 		t.Fatalf("ожидалась область «Страница1», got %+v", parsed.Areas)
@@ -132,7 +144,7 @@ func TestImportPDF_HappyPath(t *testing.T) {
 
 func TestImportPDF_ScanReportsError(t *testing.T) {
 	h, b, _ := newLayoutTestBase(t)
-	rec := postImportPDF(t, h, b, "Скан", "1", imageOnlyPDF(t))
+	rec := postImportPDF(t, h, b, "Скан", "Реализация", "1", imageOnlyPDF(t))
 	// Хендлер перерисовывает конфигуратор с баннером ошибки (код 200, текст внутри).
 	body := rec.Body.String()
 	if !strings.Contains(body, "текстовый слой") && !strings.Contains(body, "скан") {
@@ -142,15 +154,28 @@ func TestImportPDF_ScanReportsError(t *testing.T) {
 
 func TestImportPDF_MissingName(t *testing.T) {
 	h, b, _ := newLayoutTestBase(t)
-	rec := postImportPDF(t, h, b, "", "1", syntheticTablePDF(t))
+	rec := postImportPDF(t, h, b, "", "Реализация", "1", syntheticTablePDF(t))
 	if !strings.Contains(rec.Body.String(), "обязательно") && !strings.Contains(rec.Body.String(), "required") {
 		t.Errorf("ожидалось сообщение про обязательное имя, тело:\n%s", truncate(rec.Body.String(), 400))
 	}
 }
 
+// Без привязки к документу импорт отклоняется: форма с пустым document: не
+// попадает в список печати (симптом «после импорта формы нигде нет»).
+func TestImportPDF_MissingDocument(t *testing.T) {
+	h, b, dir := newLayoutTestBase(t)
+	rec := postImportPDF(t, h, b, "БезДокумента", "", "1", syntheticTablePDF(t))
+	if !strings.Contains(rec.Body.String(), "выберите документ") && !strings.Contains(rec.Body.String(), "select a document") {
+		t.Errorf("ожидалось сообщение про выбор документа, тело:\n%s", truncate(rec.Body.String(), 400))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "printforms", "БезДокумента.layout.yaml")); err == nil {
+		t.Error("макет без документа не должен создаваться")
+	}
+}
+
 func TestImportPDF_MissingFile(t *testing.T) {
 	h, b, _ := newLayoutTestBase(t)
-	rec := postImportPDF(t, h, b, "БезФайла", "1", nil)
+	rec := postImportPDF(t, h, b, "БезФайла", "Реализация", "1", nil)
 	if !strings.Contains(rec.Body.String(), "PDF") {
 		t.Errorf("ожидалось сообщение про выбор PDF, тело:\n%s", truncate(rec.Body.String(), 400))
 	}
@@ -160,7 +185,7 @@ func TestImportPDF_Oversize(t *testing.T) {
 	h, b, _ := newLayoutTestBase(t)
 	// Тело больше лимита: набиваем мусором сверх maxPDFUpload.
 	big := bytes.Repeat([]byte("A"), maxPDFUpload+1024)
-	rec := postImportPDF(t, h, b, "Большой", "1", big)
+	rec := postImportPDF(t, h, b, "Большой", "Реализация", "1", big)
 	// MaxBytesReader/ParseMultipartForm должны отвергнуть: макет НЕ создаётся.
 	// Сообщение об ошибке oversize — «Файл слишком большой или форма повреждена».
 	body := rec.Body.String()

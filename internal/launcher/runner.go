@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -29,10 +30,14 @@ type managedProc struct {
 type Runner struct {
 	mu    sync.Mutex
 	procs map[string]*managedProc
+	// exits отмечает базы, чей процесс завершился после последнего Start.
+	// WaitReady по этому признаку отличает «упал при старте» (ошибка с хвостом
+	// лога сразу) от «ещё запускается» (ждём дольше).
+	exits map[string]bool
 }
 
 func NewRunner() *Runner {
-	return &Runner{procs: make(map[string]*managedProc)}
+	return &Runner{procs: make(map[string]*managedProc), exits: make(map[string]bool)}
 }
 
 // DebugToken возвращает секрет debug API для запущенной базы (пустую строку,
@@ -127,16 +132,31 @@ func (r *Runner) Start(base *Base) error {
 	}
 
 	r.procs[base.ID] = &managedProc{cmd: cmd, port: base.Port, startedAt: time.Now(), debugToken: debugToken}
+	delete(r.exits, base.ID)
 
 	go func() {
 		cmd.Wait()
 		logFile.Close()
-		r.mu.Lock()
-		delete(r.procs, base.ID)
-		r.mu.Unlock()
+		r.recordExit(base.ID, cmd)
 	}()
 
 	return nil
+}
+
+// recordExit снимает с учёта только тот процесс, завершение которого мы
+// наблюдали. После быстрого Restart старый cmd может завершиться уже после
+// запуска нового процесса с тем же baseID; без проверки он удалил бы новый
+// процесс из procs и WaitReady ошибочно счёл бы его упавшим.
+func (r *Runner) recordExit(baseID string, cmd *exec.Cmd) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if current, ok := r.procs[baseID]; ok {
+		if current.cmd != cmd {
+			return
+		}
+		delete(r.procs, baseID)
+	}
+	r.exits[baseID] = true
 }
 
 func (r *Runner) Stop(baseID string) error {
@@ -329,11 +349,32 @@ func (r *Runner) Restart(base *Base) error {
 	return r.Start(base)
 }
 
+// startupGraceTimeout — сколько ждать готовности процесса базы, запущенного этим
+// лаунчером. Сервер открывает порт ТОЛЬКО после загрузки конфигурации и полной
+// миграции схемы БД, поэтому первый запуск (схема создаётся с нуля) на большой
+// конфигурации или медленном диске легко не укладывается в 15 секунд. Большой
+// запас не задерживает диагностику реальных сбоев: если процесс завершился,
+// WaitReady возвращает ошибку немедленно. Переменная — для подмены в тестах.
+var startupGraceTimeout = 2 * time.Minute
+
 // WaitReady polls /health on the base's port until it responds 200 or timeout.
+// Для базы, запущенной этим лаунчером, ожидание умнее фиксированного таймаута:
+//   - процесс завершился, не начав слушать порт, — немедленная ошибка с хвостом
+//     его лога (реальная причина: битая конфигурация, ошибка миграции и т.п.);
+//   - процесс жив, но ещё не отвечает — ждём до startupGraceTimeout (первая
+//     миграция схемы БД выполняется до открытия порта).
+//
+// Для «усыновлённых» баз (запущены не этим лаунчером) действует переданный timeout.
 func (r *Runner) WaitReady(base *Base, timeout time.Duration) error {
 	url := fmt.Sprintf("http://localhost:%d/health", base.Port)
-	deadline := time.Now().Add(timeout)
 	client := &http.Client{Timeout: 500 * time.Millisecond}
+	// procExited ловит и мгновенное падение — процесс, успевший завершиться
+	// между Start и WaitReady, из procs уже удалён.
+	tracked := r.IsRunning(base.ID) || r.procExited(base.ID)
+	if tracked && startupGraceTimeout > timeout {
+		timeout = startupGraceTimeout
+	}
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(url)
 		if err == nil {
@@ -342,12 +383,80 @@ func (r *Runner) WaitReady(base *Base, timeout time.Duration) error {
 				return nil
 			}
 		}
+		if tracked && !r.IsRunning(base.ID) {
+			logPath, _ := baseLogPath(base.ID)
+			if tail := tailFile(logPath, logTailLines); tail != "" {
+				return i18nerr.Errorf("процесс базы завершился при запуске — причина в конце лога (%s): %s", logPath, "\n\n"+tail)
+			}
+			return i18nerr.Errorf("процесс базы завершился при запуске — подробности в логе: %s", logPath)
+		}
 		time.Sleep(200 * time.Millisecond)
+	}
+	if tracked {
+		logPath, _ := baseLogPath(base.ID)
+		return i18nerr.Errorf("база не ответила на порту %d за %s, но процесс ещё работает — вероятно, идёт первая миграция схемы БД; подождите и откройте базу ещё раз (лог: %s)", base.Port, timeout, logPath)
 	}
 	return i18nerr.Errorf("сервер не ответил на порту %d за %s", base.Port, timeout)
 }
 
+// procExited сообщает, завершался ли процесс базы после последнего Start.
+func (r *Runner) procExited(baseID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.exits[baseID]
+}
+
+// logTailLines — сколько последних строк лога попадает в ошибку запуска.
+const logTailLines = 15
+
+// tailFile возвращает последние n строк файла (читает не более 8 КБ с конца).
+// Пустая строка — файла нет или прочитать не удалось.
+func tailFile(path string, n int) string {
+	if path == "" {
+		return ""
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || st.Size() == 0 {
+		return ""
+	}
+	const maxTail = 8 << 10
+	off := st.Size() - maxTail
+	if off < 0 {
+		off = 0
+	}
+	buf := make([]byte, st.Size()-off)
+	if _, err := f.ReadAt(buf, off); err != nil && err != io.EOF {
+		return ""
+	}
+	text := strings.TrimRight(string(buf), "\r\n\t ")
+	if off > 0 {
+		// Первая строка обрезана серединой — отбрасываем её.
+		if i := strings.IndexByte(text, '\n'); i >= 0 {
+			text = text[i+1:]
+		}
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	for i, ln := range lines {
+		lines[i] = strings.TrimRight(ln, "\r")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// logsDirOverride подменяет каталог логов баз в тестах.
+var logsDirOverride string
+
 func baseLogPath(id string) (string, error) {
+	if logsDirOverride != "" {
+		return filepath.Join(logsDirOverride, id+".log"), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err

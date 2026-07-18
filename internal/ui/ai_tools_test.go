@@ -178,7 +178,7 @@ func TestAITools_NonAdminGetsNoTools(t *testing.T) {
 
 	// Запрос без пользователя в контексте → isAdmin==false.
 	r := httptest.NewRequest(http.MethodPost, "/ui/ai/chat", nil)
-	tools, exec := s.aiTools(r)
+	tools, exec, _ := s.aiTools(r)
 	if tools != nil || exec != nil {
 		t.Fatalf("не-админ не должен получать инструменты ИИ: tools=%v exec!=nil=%v", tools, exec != nil)
 	}
@@ -189,7 +189,7 @@ func TestAITools_NonAdminGetsNoTools(t *testing.T) {
 func TestAITools_AdminGetsTools(t *testing.T) {
 	s := aiToolsTestServer(t) // authRepo == nil → isAdmin всегда true
 	r := httptest.NewRequest(http.MethodPost, "/ui/ai/chat", nil)
-	tools, exec := s.aiTools(r)
+	tools, exec, _ := s.aiTools(r)
 	if tools == nil {
 		t.Fatal("администратор должен получать инструменты ИИ, получено nil")
 	}
@@ -260,7 +260,7 @@ func TestAITools_FlaggedUserGetsTools(t *testing.T) {
 	// Запрос несёт пользователя с флагом → aiDataAllowed==true.
 	r := httptest.NewRequest(http.MethodPost, "/ui/ai/chat", nil)
 	r = r.WithContext(auth.ContextWithUser(r.Context(), got))
-	tools, exec := s.aiTools(r)
+	tools, exec, _ := s.aiTools(r)
 	if tools == nil || exec == nil {
 		t.Fatalf("пользователь с AIDataAccess должен получать инструменты ИИ: tools=%v exec!=nil=%v", tools, exec != nil)
 	}
@@ -284,7 +284,7 @@ func TestAITools_RoleAIDataAccessGetsToolsInRBACScope(t *testing.T) {
 	}
 	r := httptest.NewRequest(http.MethodPost, "/ui/ai/chat", nil)
 	r = r.WithContext(auth.ContextWithUser(r.Context(), u))
-	tools, exec := s.aiTools(r)
+	tools, exec, _ := s.aiTools(r)
 	if tools == nil || exec == nil {
 		t.Fatalf("роль с ai_data_access должна получать инструменты в rbac: tools=%v exec!=nil=%v", tools, exec != nil)
 	}

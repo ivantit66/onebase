@@ -85,7 +85,8 @@ try{if(localStorage.getItem('cfgTitlesOn')==='1')document.documentElement.classL
 </div>
 <div class="cfg-body">
 {{if .Error}}<div class="err-box">{{.Error}}</div>{{end}}
-{{if and .FieldsSaved (ne .FieldsSavedEntity "panel-backup")}}<div class="success-box">{{t $.Lang "✓ Типы полей для"}} «{{.FieldsSavedEntity}}» {{t $.Lang "сохранены. Перезапустите базу, чтобы изменения вступили в силу."}}</div>{{end}}
+{{if .SavedMessage}}<div class="success-box">{{.SavedMessage}}</div>
+{{else if and .FieldsSaved (ne .FieldsSavedEntity "panel-backup")}}<div class="success-box">{{t $.Lang "✓ Типы полей для"}} «{{.FieldsSavedEntity}}» {{t $.Lang "сохранены. Перезапустите базу, чтобы изменения вступили в силу."}}</div>{{end}}
 <div id="dbg-wrapper" style="display:flex;flex:1;overflow:hidden">
 {{end}}`
 

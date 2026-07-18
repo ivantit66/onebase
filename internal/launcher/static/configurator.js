@@ -112,6 +112,25 @@ function cfgNewPrintFormShow() {
   document.getElementById('cfg-new-pf-name').value = '';
   document.getElementById('cfg-new-pf-name').focus();
 }
+// cfgNewPrintFormSubmit — «+» у печатных форм: по выбранному типу постит либо
+// на new-layout (макет v2, визуальный конструктор — рекомендуемый вариант),
+// либо на new-printform (классическая YAML-форма). new-layout ждёт поля
+// name+entity, new-printform — name+document, поэтому action и имя селекта
+// переключаются перед отправкой.
+function cfgNewPrintFormSubmit(form, basePath) {
+  var kindInp = form.querySelector('input[name="pf_kind"]:checked');
+  var kind = kindInp ? kindInp.value : 'yaml';
+  var sel = form.querySelector('select');
+  if (kind === 'layout') {
+    if (!sel.value) { alert(T("Для макета выберите документ/справочник")); return false; }
+    form.action = basePath + '/new-layout';
+    sel.name = 'entity';
+  } else {
+    form.action = basePath + '/new-printform';
+    sel.name = 'document';
+  }
+  return true;
+}
 // _cfgSubmitForm создаёт скрытую POST-форму и отправляет её (план 64, 6.4).
 function _cfgSubmitForm(action, fields) {
   var f = document.createElement('form');
@@ -137,16 +156,28 @@ function cfgCreateOSLayout(action, osform) {
 }
 // cfgImportPdfLayout — «Создать макет из PDF»: модальный диалог (имя + файл +
 // № страницы), затем multipart-POST на import-pdf. После импорта сервер
-// открывает редактор макета (план 64, этап 6).
-function cfgImportPdfLayout(action) {
+// открывает редактор макета (план 64, этап 6). entity — документ/справочник,
+// к которому привязывается форма (document: в макете); без привязки форма не
+// попадает в список печати. Если entity не передан (нет контекста), диалог
+// показывает обязательный select по __cfg.entityNames.
+function cfgImportPdfLayout(action, entity) {
   var overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center';
   var box = document.createElement('div');
   box.style.cssText = 'background:#fff;border-radius:8px;padding:20px;min-width:360px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,.3);font-size:13px';
+  var docBlock;
+  if (entity) {
+    docBlock = '<div style="margin-bottom:8px;color:#334155">'+T("Документ")+': <b>'+entity+'</b><input type="hidden" id="_pdfDoc" value="'+entity.replace(/"/g,'&quot;')+'"></div>';
+  } else {
+    var names = (window.__cfg && window.__cfg.entityNames) || [];
+    docBlock = '<label style="display:block;margin-bottom:8px">'+T("Документ")+'<br><select id="_pdfDoc" style="width:100%;padding:6px;border:1px solid #cbd5e1;border-radius:4px"><option value=""></option>' +
+      names.map(function(n){ return '<option>'+n+'</option>'; }).join('') + '</select></label>';
+  }
   box.innerHTML =
     '<div style="font-weight:600;font-size:15px;margin-bottom:12px">'+T("Создать макет из PDF")+'</div>' +
     '<div style="color:#64748b;font-size:12px;margin-bottom:12px">'+T("Подходит вектор с текстовым слоем (выгрузка из 1С/Excel). Сканы импортировать нельзя. Черновик нужно доработать в редакторе.")+'</div>' +
     '<label style="display:block;margin-bottom:8px">'+T("Имя макета")+'<br><input type="text" id="_pdfName" style="width:100%;padding:6px;border:1px solid #cbd5e1;border-radius:4px;box-sizing:border-box"></label>' +
+    docBlock +
     '<label style="display:block;margin-bottom:8px">'+T("PDF-файл")+'<br><input type="file" id="_pdfFile" accept="application/pdf,.pdf" style="width:100%"></label>' +
     '<label style="display:block;margin-bottom:14px">'+T("Номер страницы")+'<br><input type="number" id="_pdfPage" value="1" min="1" style="width:80px;padding:6px;border:1px solid #cbd5e1;border-radius:4px"></label>' +
     '<div id="_pdfErr" style="color:#dc2626;font-size:12px;margin-bottom:8px;display:none"></div>' +
@@ -162,15 +193,18 @@ function cfgImportPdfLayout(action) {
   var okBtn = document.getElementById('_pdfOk');
   okBtn.onclick = function() {
     var name = (document.getElementById('_pdfName').value || '').trim();
+    var docVal = (document.getElementById('_pdfDoc').value || '').trim();
     var fileInp = document.getElementById('_pdfFile');
     var page = document.getElementById('_pdfPage').value || '1';
     var err = document.getElementById('_pdfErr');
     err.style.display = 'none';
     if (!name) { err.textContent = T("Имя макета обязательно"); err.style.display = ''; return; }
+    if (!docVal) { err.textContent = T("Для макета выберите документ/справочник"); err.style.display = ''; return; }
     if (!fileInp.files || !fileInp.files[0]) { err.textContent = T("Выберите PDF-файл"); err.style.display = ''; return; }
     var fd = new FormData();
     fd.append('file', fileInp.files[0]);
     fd.append('name', name);
+    fd.append('document', docVal);
     fd.append('page', page);
     okBtn.disabled = true; okBtn.textContent = T("Импорт...");
     fetch(action, {method:'POST', body:fd})
@@ -1102,9 +1136,52 @@ function cfgMakeResizer(target, opts){
 function cfgRestoreVar(cssVar,storeKey){
   try{var v=localStorage.getItem(storeKey);if(v)document.documentElement.style.setProperty(cssVar,v);}catch(_){}
 }
+// ── Высота дока свойств ячейки (редактор макетов печатных форм) ────────────
+// Панелей несколько (по одной на макет), высота общая: CSS-переменная
+// --cfg-vprops-h + localStorage — тот же приём, что у боковых панелей выше.
+// Ручка рендерится в шаблоне (.vprops-grip), обработчики — инлайновые.
+// Двойной клик ловим вручную по таймингу pointerdown: preventDefault на
+// pointerdown подавляет синтез mousedown/dblclick в Chromium, поэтому
+// ondblclick на ручке с мышью не срабатывает. Сброс — только если второе
+// нажатие отпущено без движения (иначе это обычное перетаскивание).
+var _vpropsLastDown=0;
+function ldPropsResizeStart(e){
+  e.preventDefault();
+  var grip=e.currentTarget;
+  var now=Date.now();
+  var maybeReset=(now-_vpropsLastDown<400);
+  _vpropsLastDown=now;
+  try{grip.setPointerCapture(e.pointerId);}catch(_){}
+  grip.classList.add('dragging');
+  document.body.classList.add('cfg-vresizing');
+  var startY=e.clientY;
+  function move(ev){
+    if(Math.abs(ev.clientY-startY)>4)maybeReset=false;
+    var h=window.innerHeight-ev.clientY;
+    h=Math.max(120,Math.min(Math.round(window.innerHeight*0.85),h));
+    document.documentElement.style.setProperty('--cfg-vprops-h',h+'px');
+  }
+  function up(){
+    grip.classList.remove('dragging');
+    document.body.classList.remove('cfg-vresizing');
+    grip.removeEventListener('pointermove',move);
+    grip.removeEventListener('pointerup',up);
+    if(maybeReset){_vpropsLastDown=0;ldPropsResizeReset();return;}
+    var cur=getComputedStyle(document.documentElement).getPropertyValue('--cfg-vprops-h').trim();
+    try{localStorage.setItem('cfgVPropsH',cur);}catch(_){}
+  }
+  grip.addEventListener('pointermove',move);
+  grip.addEventListener('pointerup',up);
+}
+// Двойной клик по ручке — сброс к высоте по умолчанию (44vh).
+function ldPropsResizeReset(){
+  document.documentElement.style.removeProperty('--cfg-vprops-h');
+  try{localStorage.removeItem('cfgVPropsH');}catch(_){}
+}
 function initResizers(){
   cfgRestoreVar('--cfg-left-w','cfgLeftW');
   cfgRestoreVar('--cfg-dbg-w','cfgDbgW');
+  cfgRestoreVar('--cfg-vprops-h','cfgVPropsH');
   var left=document.getElementById('cfg-sidebar');
   if(left&&!left._rsz){left._rsz=cfgMakeResizer(left,{side:'right',cssVar:'--cfg-left-w',storeKey:'cfgLeftW',min:150,max:600});}
   var dbg=document.getElementById('dbg-panel');
