@@ -29,17 +29,23 @@ type EmailAttachmentSender interface {
 	SendWithAttachments(to, subject, textBody, htmlBody string, files []EmailAttachment) error
 }
 
+// EmailFileResolver optionally authorizes and resolves a path before an email
+// attachment is read. UI uses it for RLS-checked attachment-storage paths,
+// which intentionally live outside the ordinary DSL file sandbox.
+type EmailFileResolver func(path string) (string, error)
+
 // ─── dslEmail (Новый ПисьмоEmail) ────────────────────────────────────────────
 
 type dslEmail struct {
-	sender  EmailSender
-	guard   NetGuard
-	to      string
-	cc      string
-	subject string
-	text    string
-	html    string
-	files   []EmailAttachment
+	sender   EmailSender
+	guard    NetGuard
+	resolver EmailFileResolver
+	to       string
+	cc       string
+	subject  string
+	text     string
+	html     string
+	files    []EmailAttachment
 }
 
 func (e *dslEmail) Get(field string) any {
@@ -82,7 +88,17 @@ func (e *dslEmail) CallMethod(name string, args []any) any {
 		if len(args) < 1 {
 			panic(userError{Msg: "ПисьмоEmail.ПрисоединитьФайл: не указан путь к файлу"})
 		}
-		path := safePathOrRaise("ПисьмоEmail.ПрисоединитьФайл", strings.TrimSpace(fmt.Sprint(args[0])))
+		pathArg := strings.TrimSpace(fmt.Sprint(args[0]))
+		path := ""
+		if e.resolver != nil {
+			var err error
+			path, err = e.resolver(pathArg)
+			if err != nil {
+				panic(userError{Msg: "ПисьмоEmail.ПрисоединитьФайл: " + err.Error()})
+			}
+		} else {
+			path = safePathOrRaise("ПисьмоEmail.ПрисоединитьФайл", pathArg)
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			panic(userError{Msg: "ПисьмоEmail.ПрисоединитьФайл: " + err.Error()})
@@ -129,7 +145,11 @@ func (e *dslEmail) CallMethod(name string, args []any) any {
 
 // NewEmailFunctions returns DSL functions/factories to inject into extraVars.
 // If sender is nil or not configured, functions panic with a user-friendly message.
-func NewEmailFunctions(sender EmailSender, guard NetGuard) map[string]any {
+func NewEmailFunctions(sender EmailSender, guard NetGuard, resolvers ...EmailFileResolver) map[string]any {
+	var resolver EmailFileResolver
+	if len(resolvers) > 0 {
+		resolver = resolvers[0]
+	}
 	send := func(to, subject, textBody string) {
 		checkNet(guard)
 		if sender == nil || !sender.Configured() {
@@ -153,7 +173,7 @@ func NewEmailFunctions(sender EmailSender, guard NetGuard) map[string]any {
 		if sender == nil || !sender.Configured() {
 			panic(userError{Msg: "email не настроен — добавьте секцию email: в config/app.yaml"})
 		}
-		return &dslEmail{sender: sender, guard: guard}
+		return &dslEmail{sender: sender, guard: guard, resolver: resolver}
 	}
 
 	return map[string]any{

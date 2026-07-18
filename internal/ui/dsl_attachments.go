@@ -44,6 +44,65 @@ func (s *Server) resolveAttachmentOwner(arg any) (*metadata.Entity, uuid.UUID, e
 	return entity, id, nil
 }
 
+// resolveStoredAttachmentOwner is fail-closed: an attachment whose owner no
+// longer exists in the registry (or whose stored kind does not match) must not
+// bypass RLS merely because metadata lookup failed.
+func (s *Server) resolveStoredAttachmentOwner(att *storage.Attachment) (*metadata.Entity, error) {
+	if att == nil {
+		return nil, fmt.Errorf("вложение не найдено")
+	}
+	entity := s.reg.GetEntity(att.OwnerName)
+	if entity == nil || !strings.EqualFold(string(entity.Kind), att.OwnerKind) {
+		return nil, fmt.Errorf("неизвестный владелец вложения %s.%s", att.OwnerKind, att.OwnerName)
+	}
+	return entity, nil
+}
+
+// emailAttachmentPathResolver keeps the normal file sandbox, but also accepts
+// the exact storage path of an attachment after checking its owner through
+// RLS. This makes ПутьКВложению → ПисьмоEmail.ПрисоединитьФайл work in demo
+// mode without opening the whole attachment directory to arbitrary DSL reads.
+func (s *Server) emailAttachmentPathResolver(ctxFn func() context.Context) interpreter.EmailFileResolver {
+	return func(path string) (string, error) {
+		if safe, err := interpreter.ResolveSafePath(path); err == nil {
+			return safe, nil
+		} else {
+			sandboxErr := err
+			id, parseErr := uuid.Parse(filepath.Base(filepath.Clean(path)))
+			if parseErr != nil {
+				return "", sandboxErr
+			}
+			ctx := ctxFn()
+			att, getErr := s.store.GetAttachment(ctx, id)
+			if getErr != nil {
+				return "", sandboxErr
+			}
+			entity, ownerErr := s.resolveStoredAttachmentOwner(att)
+			if ownerErr != nil {
+				return "", ownerErr
+			}
+			if accessErr := s.checkDSLRowAccess(ctx, entity, "read", att.OwnerID, nil); accessErr != nil {
+				return "", accessErr
+			}
+			f, _, openErr := s.store.OpenAttachment(ctx, id)
+			if openErr != nil {
+				return "", openErr
+			}
+			storedPath := f.Name()
+			_ = f.Close()
+			want, absErr := filepath.Abs(filepath.Clean(path))
+			if absErr != nil {
+				return "", sandboxErr
+			}
+			got, absErr := filepath.Abs(filepath.Clean(storedPath))
+			if absErr != nil || want != got {
+				return "", sandboxErr
+			}
+			return storedPath, nil
+		}
+	}
+}
+
 func (s *Server) attachmentMaxBytes() int64 {
 	if s.maxFileSizeBytes > 0 {
 		return s.maxFileSizeBytes
@@ -139,18 +198,23 @@ func (s *Server) registerAttachmentBuiltins(vars map[string]any, ctxFn func() co
 			return nil, fmt.Errorf("ПутьКВложению: неверный идентификатор %q", fmt.Sprint(args[0]))
 		}
 		ctx := ctxFn()
-		f, att, err := s.store.OpenAttachment(ctx, id)
+		att, err := s.store.GetAttachment(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("ПутьКВложению: %w", err)
+		}
+		entity, err := s.resolveStoredAttachmentOwner(att)
+		if err != nil {
+			return nil, fmt.Errorf("ПутьКВложению: %w", err)
+		}
+		if err := s.checkDSLRowAccess(ctx, entity, "read", att.OwnerID, nil); err != nil {
+			return nil, fmt.Errorf("ПутьКВложению: %w", err)
+		}
+		f, _, err := s.store.OpenAttachment(ctx, id)
 		if err != nil {
 			return nil, fmt.Errorf("ПутьКВложению: %w", err)
 		}
 		path := f.Name()
 		f.Close()
-		entity := s.reg.GetEntity(att.OwnerName)
-		if entity != nil {
-			if err := s.checkDSLRowAccess(ctx, entity, "read", att.OwnerID, nil); err != nil {
-				return nil, fmt.Errorf("ПутьКВложению: %w", err)
-			}
-		}
 		return path, nil
 	})
 
@@ -167,11 +231,12 @@ func (s *Server) registerAttachmentBuiltins(vars map[string]any, ctxFn func() co
 		if err != nil {
 			return nil, fmt.Errorf("УдалитьВложение: %w", err)
 		}
-		entity := s.reg.GetEntity(att.OwnerName)
-		if entity != nil {
-			if err := s.checkDSLRowAccess(ctx, entity, "write", att.OwnerID, nil); err != nil {
-				return nil, fmt.Errorf("УдалитьВложение: %w", err)
-			}
+		entity, err := s.resolveStoredAttachmentOwner(att)
+		if err != nil {
+			return nil, fmt.Errorf("УдалитьВложение: %w", err)
+		}
+		if err := s.checkDSLRowAccess(ctx, entity, "write", att.OwnerID, nil); err != nil {
+			return nil, fmt.Errorf("УдалитьВложение: %w", err)
 		}
 		if err := s.store.DeleteAttachment(ctx, id); err != nil {
 			return nil, fmt.Errorf("УдалитьВложение: %w", err)

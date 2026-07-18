@@ -46,6 +46,7 @@ func (s *TxState) begin(db TxDB) {
 		if _, err := s.txs[0].Exec(s.Ctx(), "SAVEPOINT "+sp); err != nil {
 			panic(userError{Msg: "НачатьТранзакцию (savepoint): " + err.Error()})
 		}
+		storage.PushTxHookScope(s.Ctx())
 		s.saves = append(s.saves, sp)
 		s.txs = append(s.txs, s.txs[0])          // same underlying tx
 		s.ctxStack = append(s.ctxStack, s.Ctx()) // same ctx
@@ -67,6 +68,7 @@ func (s *TxState) commit() {
 		if _, err := tx.Exec(txCtx, "RELEASE SAVEPOINT "+sp); err != nil {
 			panic(userError{Msg: "ЗафиксироватьТранзакцию: " + err.Error()})
 		}
+		storage.CommitTxHookScope(txCtx)
 	} else {
 		if err := tx.Commit(txCtx); err != nil {
 			panic(userError{Msg: "ЗафиксироватьТранзакцию: " + err.Error()})
@@ -89,6 +91,7 @@ func (s *TxState) rollback() {
 		if _, err := tx.Exec(txCtx, "ROLLBACK TO SAVEPOINT "+sp); err != nil {
 			panic(userError{Msg: "ОтменитьТранзакцию: " + err.Error()})
 		}
+		storage.RollbackTxHookScope(txCtx)
 	} else {
 		_ = tx.Rollback(txCtx)
 	}
@@ -113,10 +116,10 @@ func NewTxFunctions(state *TxState, db TxDB) map[string]any {
 	})
 	return map[string]any{
 		"НачатьТранзакцию":        begin,
-		"BeginTransaction":         begin,
+		"BeginTransaction":        begin,
 		"ЗафиксироватьТранзакцию": commit,
-		"CommitTransaction":        commit,
+		"CommitTransaction":       commit,
 		"ОтменитьТранзакцию":      rollback,
-		"RollbackTransaction":      rollback,
+		"RollbackTransaction":     rollback,
 	}
 }

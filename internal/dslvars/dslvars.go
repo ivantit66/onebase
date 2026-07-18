@@ -26,11 +26,15 @@ import (
 
 // Common — параметры базовой DSL-карты. Заполните поля и вызовите Build().
 type Common struct {
-	Ctx       context.Context
-	Reg       *runtime.Registry
-	Store     *storage.DB
-	Mailer    interpreter.EmailSender     // nil допустим — email-функции запаникуют при вызове, не при сборке
-	Movements *runtime.MovementsCollector // nil допустим — попадёт в карту как Движения=nil (совместимо с прежним поведением)
+	Ctx    context.Context
+	Reg    *runtime.Registry
+	Store  *storage.DB
+	Mailer interpreter.EmailSender // nil допустим — email-функции запаникуют при вызове, не при сборке
+	// EmailFileResolver authorizes paths used as email attachments. UI supplies
+	// an RLS-aware resolver for files from attachment storage; nil keeps the
+	// ordinary DSL file-sandbox behavior.
+	EmailFileResolver interpreter.EmailFileResolver
+	Movements         *runtime.MovementsCollector // nil допустим — попадёт в карту как Движения=nil (совместимо с прежним поведением)
 	// NetGuard вызывается перед каждой сетевой операцией DSL (HTTP-клиент,
 	// email). Возвращает ошибку, если сеть заблокирована предохранителем
 	// (план 62). nil → сеть не ограничивается (для тестов/совместимости).
@@ -81,7 +85,7 @@ func (c Common) Build() map[string]any {
 	for k, v := range interpreter.NewHTTPFunctions(c.NetGuard) {
 		vars[k] = v
 	}
-	for k, v := range interpreter.NewEmailFunctions(c.Mailer, c.NetGuard) {
+	for k, v := range interpreter.NewEmailFunctions(c.Mailer, c.NetGuard, c.EmailFileResolver) {
 		vars[k] = v
 	}
 	for k, v := range interpreter.NewFileFunctions(nil) {

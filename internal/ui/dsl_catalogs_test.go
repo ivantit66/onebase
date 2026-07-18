@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ivantit66/onebase/internal/dsl/ast"
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
@@ -16,9 +17,10 @@ import (
 // setupCatTest поднимает SQLite + Server с фабрикой объектов справочников.
 // Справочник Клиенты: ТЧ Контакты + хук ПриЗаписи, который собирает
 // нормализованное поле из строк ТЧ (проверка, что хук видит ТЧ через this).
-func setupCatTest(t *testing.T) (context.Context, *storage.DB, *Server, *interpreter.CatalogProxy) {
+func setupCatTest(t *testing.T) (context.Context, *storage.DB, *Server, *interpreter.CatalogProxy, *interpreter.TxState) {
 	t.Helper()
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
 	db, err := storage.ConnectSQLite(ctx, filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -78,13 +80,13 @@ func setupCatTest(t *testing.T) (context.Context, *storage.DB, *Server, *interpr
 	if !ok {
 		t.Fatalf("Справочники.Клиенты → не *CatalogProxy")
 	}
-	return ctx, db, s, proxy
+	return ctx, db, s, proxy, txState
 }
 
 // Создание справочника с ТЧ из DSL: строки ТЧ сохраняются, хук ПриЗаписи
 // исполняется и видит табличную часть.
 func TestCatWriter_CreateWithTableParts(t *testing.T) {
-	ctx, db, _, proxy := setupCatTest(t)
+	ctx, db, _, proxy, _ := setupCatTest(t)
 
 	rec := proxy.CallMethod("создать", nil)
 	w, ok := rec.(*catWriter)
@@ -155,9 +157,49 @@ func TestCatWriter_CreateWithTableParts(t *testing.T) {
 	}
 }
 
+// catWriter must join an explicit DSL transaction. Before this regression
+// test, entityservice.Save tried to open a second SQLite transaction and
+// blocked forever on the single connection.
+func TestCatWriter_ExplicitTransactionCommitAndRollback(t *testing.T) {
+	ctx, db, _, proxy, txState := setupCatTest(t)
+	txFns := interpreter.NewTxFunctions(txState, db)
+	callTx := func(name string) {
+		t.Helper()
+		fn := txFns[name].(interpreter.BuiltinFunc)
+		if _, err := fn(nil, "", 0); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+
+	callTx("НачатьТранзакцию")
+	rolledBack := proxy.CallMethod("создать", nil).(*catWriter)
+	rolledBack.Set("Наименование", "Откат")
+	rolledBack.CallMethod("записать", nil)
+	callTx("ОтменитьТранзакцию")
+	var count int
+	if err := db.QueryRow(ctx, "SELECT COUNT(*) FROM клиенты").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("rollback left %d catalog rows", count)
+	}
+
+	callTx("НачатьТранзакцию")
+	committed := proxy.CallMethod("создать", nil).(*catWriter)
+	committed.Set("Наименование", "Коммит")
+	committed.CallMethod("записать", nil)
+	callTx("ЗафиксироватьТранзакцию")
+	if err := db.QueryRow(ctx, "SELECT COUNT(*) FROM клиенты").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("commit left %d catalog rows, want 1", count)
+	}
+}
+
 // Без фабрики поведение прежнее: Создать() возвращает CatalogRecordWriter.
 func TestCatalogsRoot_WithoutFactoryKeepsLegacyWriter(t *testing.T) {
-	ctx, db, _, _ := setupCatTest(t)
+	ctx, db, _, _, _ := setupCatTest(t)
 	_ = ctx
 
 	registry := runtime.NewRegistry()

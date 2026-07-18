@@ -23,6 +23,7 @@ func TestDSLAttachments_FullCycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	db.SetFilesDir(filepath.Join(dir, "attachment-store"))
 
 	cat := &metadata.Entity{
 		Name:   "Релизы",
@@ -91,6 +92,27 @@ func TestDSLAttachments_FullCycle(t *testing.T) {
 	}
 	if string(data) != "BINARY-CONTENT" {
 		t.Fatalf("содержимое вложения повреждено: %q", data)
+	}
+
+	// Attachment storage is outside the ordinary DSL sandbox. The email path
+	// resolver allows the exact RLS-checked attachment, but no other outside
+	// file, so ПутьКВложению can safely feed ПисьмоEmail.ПрисоединитьФайл.
+	sandboxDir := filepath.Join(dir, "sandbox")
+	if err := os.MkdirAll(sandboxDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	interpreter.SetFileSandbox(sandboxDir)
+	defer interpreter.SetFileSandbox("")
+	resolver := s.emailAttachmentPathResolver(txState.Ctx)
+	if resolved, err := resolver(path); err != nil || resolved != path {
+		t.Fatalf("stored attachment path rejected: path=%q resolved=%q err=%v", path, resolved, err)
+	}
+	outside := filepath.Join(dir, "not-an-attachment.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolver(outside); err == nil {
+		t.Fatal("resolver allowed an arbitrary file outside the DSL sandbox")
 	}
 
 	call("УдалитьВложение", attID)
