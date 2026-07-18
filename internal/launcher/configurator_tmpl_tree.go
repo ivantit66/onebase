@@ -1774,12 +1774,26 @@ const cfgTabTree = `{{define "tab-tree"}}
   </div>{{/* end ot-forms */}}
 
   <div class="obj-pane" id="ot-print-{{$e.Name}}">
-    {{if $e.LinkedPrintForms}}
+    {{if or $e.LinkedPrintForms $e.LinkedDSLForms}}
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      {{/* Порядок как приоритет рантайма: макеты (декларативные) > DSL > legacy YAML */}}
+      {{range $e.LinkedDSLForms}}
+      {{if .LayoutOnly}}
+      <a href="#" onclick="cfgSelectPanel('mkt-{{.Name}}');return false"
+         style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:#f0fdf4;border:1px solid #a7d8b9;border-radius:4px;font-size:12px;color:#166534;text-decoration:none">
+        &#x1F4D0; {{.Name}} <span style="color:#64748b;font-size:10px">({{t $.Lang "макет"}})</span>
+      </a>
+      {{else}}
+      <a href="#" onclick="cfgSelectPanel('dpf-{{.Name}}');return false"
+         style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:#f0f4ff;border:1px solid #c8d4f0;border-radius:4px;font-size:12px;color:#1a4a80;text-decoration:none">
+        📋 {{.Name}} <span style="color:#64748b;font-size:10px">(DSL{{if .HasLayout}}+{{t $.Lang "макет"}}{{end}})</span>
+      </a>
+      {{end}}
+      {{end}}
       {{range $e.LinkedPrintForms}}
       <a href="#" onclick="cfgSelectPanel('pf-{{.Name}}');return false"
-         style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:#f0f4ff;border:1px solid #c8d4f0;border-radius:4px;font-size:12px;color:#1a4a80;text-decoration:none">
-        🖨 {{.Name}}
+         style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:#f0f4ff;border:1px solid #c8d4f0;border-radius:4px;font-size:12px;color:#1a4a80;text-decoration:none"{{if .Shadowed}} title="Эту YAML-форму перебивает одноимённая .os"{{end}}>
+        🖨 {{if .Shadowed}}⚠️ {{end}}{{.Name}} <span style="color:#64748b;font-size:10px">(YAML)</span>
       </a>
       {{end}}
     </div>

@@ -206,6 +206,39 @@ func TestLayoutEditor_StandaloneLayoutForm(t *testing.T) {
 	}
 }
 
+// Вкладка «Печатные формы» сущности показывает все виды форм: декларативные
+// макеты (mkt-*) и DSL (dpf-*) — раньше были видны только legacy YAML (pf-*).
+func TestEntityPrintTab_ShowsAllFormKinds(t *testing.T) {
+	data := &configuratorData{
+		Base: &Base{ID: "test-base", Name: "Тест", ConfigSource: "file"},
+		Lang: "ru",
+		Tab:  "tree",
+		Docs: []cfgEntity{{
+			Name: "Реализация", Kind: "Документ",
+			LinkedPrintForms: []cfgPrintForm{{Name: "накладная", Document: "Реализация"}},
+			LinkedDSLForms: []cfgDSLPrintForm{
+				{Name: "упд", Document: "Реализация", HasLayout: true},
+				{Name: "Счет2", Document: "Реализация", HasLayout: true, LayoutOnly: true},
+			},
+		}},
+	}
+	var buf bytes.Buffer
+	if err := cfgTmpl.ExecuteTemplate(&buf, "tab-tree", data); err != nil {
+		t.Fatalf("ExecuteTemplate tab-tree: %v", err)
+	}
+	html := buf.String()
+	for _, sub := range []string{
+		`cfgSelectPanel('dpf-упд')`,      // DSL-форма
+		`cfgSelectPanel('mkt-Счет2')`,    // декларативный макет
+		`cfgSelectPanel('pf-накладная')`, // legacy YAML (с пометкой)
+		`(YAML)`,
+	} {
+		if !strings.Contains(html, sub) {
+			t.Errorf("на вкладке «Печатные формы» нет фрагмента: %q", sub)
+		}
+	}
+}
+
 // Диалог «+» у группы «Печатные формы» предлагает выбор типа: макет
 // (визуальный конструктор, по умолчанию) или классический YAML; отправка
 // переключает action между new-layout и new-printform.
