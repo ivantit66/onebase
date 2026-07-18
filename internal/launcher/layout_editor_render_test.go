@@ -152,10 +152,10 @@ func TestLayoutEditor_UXImprovements(t *testing.T) {
 
 	html := renderLayoutPanelTree(t)
 	for _, sub := range []string{
-		`id="yamlpane-Накладная"`,                                               // #2 сворачиваемая панель
-		`ldToggleYaml('Накладная')`,                                             // #2 кнопка сворачивания
-		`position:fixed;left:0;right:0;bottom:0;z-index:50`,                     // #1 закреплённый док
-		`ldDeselect('Накладная')`,                                               // #1 закрытие дока
+		`id="yamlpane-Накладная"`,                                                            // #2 сворачиваемая панель
+		`ldToggleYaml('Накладная')`,                                                          // #2 кнопка сворачивания
+		`position:fixed;left:0;right:0;bottom:0;z-index:50`,                                  // #1 закреплённый док
+		`ldDeselect('Накладная')`,                                                            // #1 закрытие дока
 		`cfgImportPdfLayout('/bases/test-base/configurator/layout/import-pdf','Реализация')`, // #6 кнопка «Из PDF» в тулбаре (с привязкой к документу)
 		`{{Номер}}`, // #3 подсказка про интерполяцию
 		"Откроется во внешнем приложении",                      // #5 подсказка на кнопке PDF
@@ -227,11 +227,39 @@ func TestPrintFormNewDialog_KindChoice(t *testing.T) {
 		"function cfgNewPrintFormSubmit",
 		"'/new-layout'",
 		"'/new-printform'",
-		"_pdfDoc",                         // привязка к документу в диалоге импорта PDF
-		"fd.append('document', docVal)",   // document уходит на сервер импорта
+		"_pdfDoc",                       // привязка к документу в диалоге импорта PDF
+		"fd.append('document', docVal)", // document уходит на сервер импорта
 	} {
 		if !strings.Contains(js, sub) {
 			t.Errorf("в JS нет фрагмента: %q", sub)
+		}
+	}
+}
+
+// Регулируемая высота дока свойств ячейки: ручка сверху панели (drag по
+// вертикали), высота в --cfg-vprops-h + localStorage, сброс двойным кликом.
+func TestLayoutEditor_PropsPanelResize(t *testing.T) {
+	js := configuratorJS(t)
+	for _, sub := range []string{
+		"function ldPropsResizeStart", // drag ручки
+		"function ldPropsResizeReset", // сброс по dblclick
+		"--cfg-vprops-h",              // общая CSS-переменная высоты
+		"cfgVPropsH",                  // ключ localStorage (восстановление в initResizers)
+	} {
+		if !strings.Contains(js, sub) {
+			t.Errorf("в JS редактора нет фрагмента: %q", sub)
+		}
+	}
+
+	html := renderLayoutPanelTree(t)
+	for _, sub := range []string{
+		`class="vprops-grip"`,
+		`ldPropsResizeStart(event)`,
+		`ldPropsResizeReset()`,
+		`var(--cfg-vprops-h,44vh)`, // высота по умолчанию как раньше
+	} {
+		if !strings.Contains(html, sub) {
+			t.Errorf("в HTML панели редактора нет фрагмента: %q", sub)
 		}
 	}
 }

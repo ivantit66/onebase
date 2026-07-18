@@ -1136,9 +1136,52 @@ function cfgMakeResizer(target, opts){
 function cfgRestoreVar(cssVar,storeKey){
   try{var v=localStorage.getItem(storeKey);if(v)document.documentElement.style.setProperty(cssVar,v);}catch(_){}
 }
+// ── Высота дока свойств ячейки (редактор макетов печатных форм) ────────────
+// Панелей несколько (по одной на макет), высота общая: CSS-переменная
+// --cfg-vprops-h + localStorage — тот же приём, что у боковых панелей выше.
+// Ручка рендерится в шаблоне (.vprops-grip), обработчики — инлайновые.
+// Двойной клик ловим вручную по таймингу pointerdown: preventDefault на
+// pointerdown подавляет синтез mousedown/dblclick в Chromium, поэтому
+// ondblclick на ручке с мышью не срабатывает. Сброс — только если второе
+// нажатие отпущено без движения (иначе это обычное перетаскивание).
+var _vpropsLastDown=0;
+function ldPropsResizeStart(e){
+  e.preventDefault();
+  var grip=e.currentTarget;
+  var now=Date.now();
+  var maybeReset=(now-_vpropsLastDown<400);
+  _vpropsLastDown=now;
+  try{grip.setPointerCapture(e.pointerId);}catch(_){}
+  grip.classList.add('dragging');
+  document.body.classList.add('cfg-vresizing');
+  var startY=e.clientY;
+  function move(ev){
+    if(Math.abs(ev.clientY-startY)>4)maybeReset=false;
+    var h=window.innerHeight-ev.clientY;
+    h=Math.max(120,Math.min(Math.round(window.innerHeight*0.85),h));
+    document.documentElement.style.setProperty('--cfg-vprops-h',h+'px');
+  }
+  function up(){
+    grip.classList.remove('dragging');
+    document.body.classList.remove('cfg-vresizing');
+    grip.removeEventListener('pointermove',move);
+    grip.removeEventListener('pointerup',up);
+    if(maybeReset){_vpropsLastDown=0;ldPropsResizeReset();return;}
+    var cur=getComputedStyle(document.documentElement).getPropertyValue('--cfg-vprops-h').trim();
+    try{localStorage.setItem('cfgVPropsH',cur);}catch(_){}
+  }
+  grip.addEventListener('pointermove',move);
+  grip.addEventListener('pointerup',up);
+}
+// Двойной клик по ручке — сброс к высоте по умолчанию (44vh).
+function ldPropsResizeReset(){
+  document.documentElement.style.removeProperty('--cfg-vprops-h');
+  try{localStorage.removeItem('cfgVPropsH');}catch(_){}
+}
 function initResizers(){
   cfgRestoreVar('--cfg-left-w','cfgLeftW');
   cfgRestoreVar('--cfg-dbg-w','cfgDbgW');
+  cfgRestoreVar('--cfg-vprops-h','cfgVPropsH');
   var left=document.getElementById('cfg-sidebar');
   if(left&&!left._rsz){left._rsz=cfgMakeResizer(left,{side:'right',cssVar:'--cfg-left-w',storeKey:'cfgLeftW',min:150,max:600});}
   var dbg=document.getElementById('dbg-panel');

@@ -1005,8 +1005,11 @@ const cfgTabTree = `{{define "tab-tree"}}
       </div>
 
       {{/* Cell properties panel — закреплённый док снизу (не проматывает страницу
-           при выборе ячейки). На неактивной cfg-panel скрыт через display:none. */}}
-      <div id="vprops-{{.Name}}" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:50;max-height:44vh;overflow:auto;background:#f0f8ff;border-top:2px solid #b0d0f0;box-shadow:0 -4px 16px rgba(15,23,42,.18);padding:10px 14px">
+           при выборе ячейки). На неактивной cfg-panel скрыт через display:none.
+           Высота регулируется ручкой сверху (--cfg-vprops-h + localStorage). */}}
+      <div id="vprops-{{.Name}}" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:50;background:#f0f8ff;border-top:2px solid #b0d0f0;box-shadow:0 -4px 16px rgba(15,23,42,.18)">
+        <div class="vprops-grip" title="{{t $.Lang "Потяните, чтобы изменить высоту; двойной клик — сброс"}}" onpointerdown="ldPropsResizeStart(event)" ondblclick="ldPropsResizeReset()"></div>
+        <div style="max-height:calc(var(--cfg-vprops-h,44vh) - 10px);overflow:auto;padding:2px 14px 10px">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
           <span style="font-weight:bold;font-size:12px">{{t $.Lang "Свойства ячейки"}}</span>
           <span>
@@ -1086,6 +1089,7 @@ const cfgTabTree = `{{define "tab-tree"}}
           <div><label>{{t $.Lang "Объединить"}} (colspan)</label><br><input type="number" id="vp-colspan-{{.Name}}" min="1" max="20" style="width:100%;padding:3px" oninput="updateCellProp('{{.Name}}','colspan',parseInt(this.value)||0)"></div>
           <div><label>{{t $.Lang "Объединить"}} (rowspan)</label><br><input type="number" id="vp-rowspan-{{.Name}}" min="1" max="20" style="width:100%;padding:3px" oninput="updateCellProp('{{.Name}}','rowspan',parseInt(this.value)||0)"></div>
           <div></div>
+        </div>
         </div>
       </div>
       <div class="module-save-row">
