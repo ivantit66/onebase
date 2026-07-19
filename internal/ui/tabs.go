@@ -27,6 +27,9 @@ func (s *Server) appShell(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, target, http.StatusSeeOther)
 		return
 	}
+	if !s.requireSubsystemVisible(w, r) {
+		return
+	}
 	s.render(w, r, "page-app-shell", s.homeDashboardData(r))
 }
 

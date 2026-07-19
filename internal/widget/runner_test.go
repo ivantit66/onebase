@@ -167,6 +167,83 @@ func TestRunRecent_RowAccessFiltersHiddenRows(t *testing.T) {
 	}
 }
 
+// Отказ в доступе к источнику — не «ошибка виджета», а признак AccessDenied:
+// дашборд по нему прячет карточку, настоящие ошибки остаются видимыми.
+func TestRun_AccessDeniedSource_Flagged(t *testing.T) {
+	ctx, runner, _ := newRowAccessRunner(t)
+	// Пользователь вообще без прав (пустая непустая секция processors, чтобы
+	// не сработала opt-in семантика «нет секции — можно всё»).
+	runner.User = &auth.User{Login: "u", Roles: []*auth.Role{{
+		Permissions: auth.Permission{Processors: map[string][]string{}},
+	}}}
+	res := runner.Run(ctx, &metadata.Widget{
+		Name:  "Т",
+		Type:  metadata.WidgetTypeKPI,
+		Query: "ВЫБРАТЬ Наименование ИЗ Справочник.Товар",
+	})
+	if !res.AccessDenied {
+		t.Fatalf("ожидался AccessDenied, получено %+v", res)
+	}
+	if !strings.Contains(res.Error, "нет доступа") {
+		t.Fatalf("текст отказа должен сохраняться в Error, получено %q", res.Error)
+	}
+}
+
+func TestRun_CompileError_NotAccessDenied(t *testing.T) {
+	ctx, runner, _ := newRowAccessRunner(t)
+	res := runner.Run(ctx, &metadata.Widget{
+		Name:  "Битый",
+		Type:  metadata.WidgetTypeKPI,
+		Query: "ВЫБРАТЬ Наименование ИЗ", // синтаксически битый запрос
+	})
+	if res.Error == "" {
+		t.Fatal("ожидалась ошибка компиляции")
+	}
+	if res.AccessDenied {
+		t.Fatalf("ошибка компиляции не должна помечаться AccessDenied: %+v", res)
+	}
+}
+
+// Кнопки actions-виджета фильтруются по праву write; если правами скрыто всё —
+// карточка помечается AccessDenied и уходит с дашборда.
+func TestRunActions_FilteredByWriteRights(t *testing.T) {
+	ctx, runner, entity := newRowAccessRunner(t)
+	w := &metadata.Widget{
+		Name: "Создать",
+		Type: metadata.WidgetTypeActions,
+		Items: []metadata.WidgetAction{
+			{Label: "Товар", Entity: entity.Name},
+			{Label: "Ссылка", URL: "/ui/report/остатки"},
+		},
+	}
+
+	// read-only пользователь: кнопка создания скрыта, URL-ссылка остаётся.
+	res := runner.Run(ctx, w)
+	if res.AccessDenied {
+		t.Fatalf("частично доступный actions-виджет не должен прятаться: %+v", res)
+	}
+	if len(res.Actions) != 1 || res.Actions[0].Label != "Ссылка" {
+		t.Fatalf("ожидалась только URL-кнопка, получено %+v", res.Actions)
+	}
+
+	// Виджет только из недоступных кнопок → AccessDenied.
+	res = runner.Run(ctx, &metadata.Widget{
+		Name:  "ТолькоСоздание",
+		Type:  metadata.WidgetTypeActions,
+		Items: []metadata.WidgetAction{{Label: "Товар", Entity: entity.Name}},
+	})
+	if !res.AccessDenied || len(res.Actions) != 0 {
+		t.Fatalf("полностью отфильтрованный actions-виджет должен быть AccessDenied, получено %+v", res)
+	}
+
+	// Открытый деплой (без пользователя) — всё видно.
+	runner.User = nil
+	res = runner.Run(ctx, w)
+	if len(res.Actions) != 2 {
+		t.Fatalf("без пользователя должны быть обе кнопки, получено %+v", res.Actions)
+	}
+}
+
 func newRowAccessRunner(t *testing.T) (context.Context, *Runner, *metadata.Entity) {
 	t.Helper()
 

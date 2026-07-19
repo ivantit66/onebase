@@ -38,6 +38,26 @@ contents:
 	}
 }
 
+func TestLoadSubsystemFile_Roles(t *testing.T) {
+	dir := t.TempDir()
+	yaml := `name: Склад
+roles: [Кладовщик, Управленец]
+contents:
+  documents: [ПоступлениеТоваров]
+`
+	path := filepath.Join(dir, "склад.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadSubsystemFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Roles) != 2 || s.Roles[0] != "Кладовщик" || s.Roles[1] != "Управленец" {
+		t.Errorf("roles: got %v", s.Roles)
+	}
+}
+
 func TestLoadSubsystemDir_Order(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{

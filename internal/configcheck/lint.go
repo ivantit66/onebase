@@ -440,7 +440,7 @@ func journalYAMLSchema() *yamlLintSchema {
 
 func subsystemYAMLSchema() *yamlLintSchema {
 	contents := obj("documents", "catalogs", "reports", "inforegs", "registers", "processors", "journals", "pages")
-	return with(obj("name", "title", "icon", "order"), map[string]*yamlLintSchema{
+	return with(obj("name", "title", "icon", "order", "roles"), map[string]*yamlLintSchema{
 		"titles":    freeMap(),
 		"contents":  contents,
 		"home_page": homePageYAMLSchema(),
@@ -1353,7 +1353,43 @@ func CheckLintRoles(dir string, proj *project.Project, roles []*auth.Role) []Iss
 			}
 		}
 	}
+	issues = append(issues, checkLintUnknownRoleRefs(proj, roles)...)
 	issues = append(issues, CheckLintRowAccess(dir, proj, roles)...)
+	return issues
+}
+
+// checkLintUnknownRoleRefs ловит опечатки в whitelist-полях `roles:` подсистем
+// и страниц: роль, которой нет в roles/*.yaml, молча спрятала бы объект у всех
+// не-админов. Мягкий линт, а не жёсткая ошибка cross_refs, потому что роли
+// могут существовать и только в БД (созданы через админку) — тогда yaml-набор
+// заведомо неполный.
+func checkLintUnknownRoleRefs(proj *project.Project, roles []*auth.Role) []Issue {
+	known := map[string]bool{}
+	for _, role := range roles {
+		known[strings.ToLower(role.Name)] = true
+	}
+	var issues []Issue
+	check := func(file, object, kind string, refs []string) {
+		for _, name := range refs {
+			if strings.TrimSpace(name) == "" || known[strings.ToLower(strings.TrimSpace(name))] {
+				continue
+			}
+			issues = append(issues, Issue{
+				File:         file,
+				Object:       object,
+				Kind:         kind,
+				Code:         "rbac.unknown-role",
+				Message:      fmt.Sprintf("%s %q: роль %q из списка roles не найдена в roles/*.yaml", kind, object, name),
+				SuggestedFix: "Исправьте опечатку или создайте роль — иначе объект скрыт у всех, кроме админа (если роль есть только в БД, предупреждение можно игнорировать).",
+			})
+		}
+	}
+	for _, s := range proj.Subsystems {
+		check("subsystems/"+s.Name+".yaml", s.Name, "Подсистема", s.Roles)
+	}
+	for _, pg := range proj.Pages {
+		check("pages/"+pg.Name+".yaml", pg.Name, "Страница", pg.Roles)
+	}
 	return issues
 }
 

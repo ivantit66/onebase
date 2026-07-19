@@ -370,6 +370,53 @@ permissions:
 	}
 }
 
+// Опечатка в whitelist `roles:` подсистемы или страницы прячет объект у всех
+// не-админов — линт должен предупредить, но не валить check (роль может жить
+// только в БД).
+func TestLintRoles_UnknownRoleRefs(t *testing.T) {
+	dir := t.TempDir()
+	mkFile(t, filepath.Join(dir, "roles", "кладовщик.yaml"), `name: Кладовщик
+permissions:
+  catalogs:
+    Товар: [read]
+`)
+	mkFile(t, filepath.Join(dir, "catalogs", "товар.yaml"), `name: Товар
+fields:
+  - name: Наименование
+    type: string
+`)
+	mkFile(t, filepath.Join(dir, "subsystems", "склад.yaml"), `name: Склад
+roles: [Кладовщик, Упрвленец]
+contents:
+  catalogs: [Товар]
+`)
+	mkFile(t, filepath.Join(dir, "pages", "арм.yaml"), `name: АРМ
+title: АРМ
+roles: [НетТакойРоли]
+`)
+	mkFile(t, filepath.Join(dir, "src", "арм.page.os"), `Процедура ПриФормировании(Страница)
+КонецПроцедуры
+`)
+
+	res := RunFullWithOptions(dir, Options{Lint: true})
+	if !res.OK {
+		t.Fatalf("unknown-role warnings should not fail check: %+v", res.Issues)
+	}
+	var got []string
+	for _, w := range res.Warnings {
+		if w.Code == "rbac.unknown-role" {
+			got = append(got, w.Object+":"+w.Message)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 rbac.unknown-role warnings (подсистема + страница), got %v (all=%+v)", got, res.Warnings)
+	}
+	joined := strings.Join(got, "\n")
+	if !strings.Contains(joined, "Упрвленец") || !strings.Contains(joined, "НетТакойРоли") {
+		t.Fatalf("warnings should name the missing roles, got:\n%s", joined)
+	}
+}
+
 func TestLintRoles_RowAccessValid(t *testing.T) {
 	dir := t.TempDir()
 	mkFile(t, filepath.Join(dir, "catalogs", "клиент.yaml"), `name: Клиент
