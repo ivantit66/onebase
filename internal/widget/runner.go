@@ -4,6 +4,7 @@ package widget
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -27,6 +28,10 @@ type Result struct {
 	Title string
 	Span  int
 	Error string
+	// AccessDenied — у пользователя нет прав на источник данных виджета (или на
+	// все его кнопки-действия). Дашборд такие карточки не рендерит вовсе, в
+	// отличие от настоящих ошибок (compile/SQL), которые остаются видимыми.
+	AccessDenied bool
 
 	// kpi
 	KPI *KPIResult
@@ -188,7 +193,7 @@ func (r *Runner) runOnce(ctx context.Context, w *metadata.Widget) Result {
 func (r *Runner) runKPI(ctx context.Context, w *metadata.Widget, res *Result) {
 	rows, _, err := r.runQuery(ctx, w)
 	if err != nil {
-		res.Error = err.Error()
+		setResultError(res, err)
 		return
 	}
 	if len(rows) == 0 {
@@ -202,7 +207,7 @@ func (r *Runner) runKPI(ctx context.Context, w *metadata.Widget, res *Result) {
 func (r *Runner) runList(ctx context.Context, w *metadata.Widget, res *Result) {
 	rows, cols, err := r.runQuery(ctx, w)
 	if err != nil {
-		res.Error = err.Error()
+		setResultError(res, err)
 		return
 	}
 	if w.Limit > 0 && len(rows) > w.Limit {
@@ -216,7 +221,7 @@ func (r *Runner) runList(ctx context.Context, w *metadata.Widget, res *Result) {
 func (r *Runner) runChart(ctx context.Context, w *metadata.Widget, res *Result) {
 	rows, cols, err := r.runQuery(ctx, w)
 	if err != nil {
-		res.Error = err.Error()
+		setResultError(res, err)
 		return
 	}
 	x := resolveFieldName(cols, w.XField)
@@ -288,6 +293,7 @@ func resolveFieldName(cols []string, declared string) string {
 }
 
 func (r *Runner) runActions(w *metadata.Widget, res *Result) {
+	deniedSome := false
 	for _, item := range w.Items {
 		link := ActionLink{Label: item.Label}
 		switch {
@@ -298,11 +304,20 @@ func (r *Runner) runActions(w *metadata.Widget, res *Result) {
 			if ent == nil {
 				continue
 			}
+			// Кнопка создания видна только тем, кто может записать сущность.
+			if !r.canWrite(string(ent.Kind), ent.Name) {
+				deniedSome = true
+				continue
+			}
 			link.URL = "/ui/" + strings.ToLower(string(ent.Kind)) + "/" + ent.Name + "/new"
 		default:
 			continue
 		}
 		res.Actions = append(res.Actions, link)
+	}
+	// Все кнопки отфильтрованы правами → карточку целиком прячем с дашборда.
+	if len(res.Actions) == 0 && deniedSome {
+		res.AccessDenied = true
 	}
 }
 
@@ -466,13 +481,30 @@ func (r *Runner) runQuery(ctx context.Context, w *metadata.Widget) ([]map[string
 		return nil, nil, fmt.Errorf("compile: %w", err)
 	}
 	if denied := r.deniedQuerySource(compiled.Sources); denied != "" {
-		return nil, nil, fmt.Errorf("нет доступа к объекту: %s", denied)
+		return nil, nil, &accessDeniedError{object: denied}
 	}
 	return r.Store.RunQuery(ctx, compiled.SQL, compiled.Args)
 }
 
+// accessDeniedError сигналит, что источник запроса недоступен пользователю —
+// setResultError переводит его в Result.AccessDenied.
+type accessDeniedError struct{ object string }
+
+func (e *accessDeniedError) Error() string { return "нет доступа к объекту: " + e.object }
+
+// setResultError записывает ошибку в Result, помечая отказ в доступе.
+func setResultError(res *Result, err error) {
+	res.Error = err.Error()
+	var denied *accessDeniedError
+	res.AccessDenied = errors.As(err, &denied)
+}
+
 func (r *Runner) canRead(kind, name string) bool {
 	return r.User == nil || r.User.Has(kind, name, "read")
+}
+
+func (r *Runner) canWrite(kind, name string) bool {
+	return r.User == nil || r.User.Has(kind, name, "write")
 }
 
 func (r *Runner) rowAllowedID(ctx context.Context, entity *metadata.Entity, op string, id uuid.UUID) bool {

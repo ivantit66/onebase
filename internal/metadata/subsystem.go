@@ -15,6 +15,10 @@ type Subsystem struct {
 	Titles   map[string]string
 	Icon     string
 	Order    int
+	// Roles — необязательный whitelist ролей (как у страниц и HTTP-сервисов):
+	// непустой список показывает раздел только пользователям с одной из ролей
+	// (админ видит всегда). Пустой — видимость определяется правами на объекты.
+	Roles    []string
 	Contents SubsystemContents
 	HomePage *HomePage
 }
@@ -61,6 +65,7 @@ type rawSubsystem struct {
 	Titles   map[string]string `yaml:"titles"`
 	Icon     string            `yaml:"icon"`
 	Order    int               `yaml:"order"`
+	Roles    []string          `yaml:"roles"`
 	Contents struct {
 		Documents  []string `yaml:"documents"`
 		Catalogs   []string `yaml:"catalogs"`
@@ -95,6 +100,7 @@ func LoadSubsystemFile(path string) (*Subsystem, error) {
 		Titles: raw.Titles,
 		Icon:   raw.Icon,
 		Order:  raw.Order,
+		Roles:  raw.Roles,
 		Contents: SubsystemContents{
 			Documents:  raw.Contents.Documents,
 			Catalogs:   raw.Contents.Catalogs,

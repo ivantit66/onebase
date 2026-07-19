@@ -538,7 +538,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, dat
 		// подсвечено, активна «Главная», сайдбар плоский (см. buildNav).
 		sub := r.URL.Query().Get("subsystem")
 		data["Nav"] = s.buildNav(r, sub)
-		data["Subsystems"] = s.reg.Subsystems()
+		data["Subsystems"] = s.visibleSubsystems(r)
 		data["CurrentSubsystem"] = sub
 		// Скрытая глобальная «Главная» (issue #304): убрать ведущую ссылку из
 		// панели разделов на всех страницах.
