@@ -130,6 +130,7 @@ func (s *Server) ListenAndServe() error {
 	r.Post("/bases/{id}/delete", s.h.delete)
 	r.Post("/bases/{id}/move", s.h.move)
 	r.Post("/bases/{id}/start", s.h.start)
+	r.Post("/bases/{id}/start-native", s.h.startNative)
 	r.Post("/bases/{id}/start-isolated", s.h.startIsolated)
 	r.Post("/bases/{id}/profiles/clean", s.h.cleanProfiles)
 	r.Post("/bases/{id}/stop", s.h.stop)
