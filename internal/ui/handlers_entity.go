@@ -451,11 +451,15 @@ func (s *Server) parseSubmitForm(w http.ResponseWriter, r *http.Request, entity 
 		}
 		obj.TablePartRows = tpRows
 
-		// Auto-number: fill Номер if empty for new documents
+		// Auto-number: fill Номер if empty for new documents.
+		// ВАЖНО: значение читаем через obj.Get (регистронезависимо) — obj.Set выше
+		// нормализует ключи в нижний регистр ("номер"), поэтому прямое обращение
+		// obj.Fields["Номер"] всегда возвращало nil и автономер безусловно затирал
+		// введённый пользователем номер (issue #359).
 		if entity.Kind == metadata.KindDocument {
 			for _, f := range entity.Fields {
 				if f.Name == "Номер" && f.Type == metadata.FieldTypeString {
-					if v := fmt.Sprintf("%v", obj.Fields["Номер"]); v == "" || v == "<nil>" {
+					if v := fmt.Sprintf("%v", obj.Get("Номер")); v == "" || v == "<nil>" {
 						obj.Set("Номер", s.generateNumber(r.Context(), entity, obj.Fields))
 					}
 					break

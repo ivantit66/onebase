@@ -245,6 +245,45 @@ func TestSubmit_NewDocument_AutoNumber(t *testing.T) {
 	}
 }
 
+// Регрессия issue #359: введённый пользователем Номер нового документа не должен
+// затираться автономером. До фикса проверка emptiness читала obj.Fields["Номер"]
+// (PascalCase), тогда как obj.Set нормализует ключ в "номер" → значение всегда
+// выглядело пустым и автономер безусловно перезаписывал пользовательский ввод.
+func TestSubmit_NewDocument_UserNumberPreserved(t *testing.T) {
+	doc := &metadata.Entity{
+		Name: "Заявка",
+		Kind: metadata.KindDocument,
+		Fields: []metadata.Field{
+			{Name: "Номер", Type: metadata.FieldTypeString},
+		},
+	}
+	s, ctx := newSubmitTestServer(t, []*metadata.Entity{doc})
+
+	form := url.Values{"Номер": {"СН-2026-42"}} // осмысленный номер, введённый пользователем
+	r := reqWithChi("POST", "/ui/document/Заявка/new", form, map[string]string{"entity": "Заявка"})
+	w := httptest.NewRecorder()
+	s.submit(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("ожидался 303, получен %d: %s", w.Code, w.Body.String())
+	}
+
+	rows, err := s.store.List(ctx, "Заявка", doc, storage.ListParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ожидалась 1 запись, получено %d", len(rows))
+	}
+	num, _ := rows[0]["Номер"].(string)
+	if num == "" {
+		num, _ = rows[0]["номер"].(string)
+	}
+	if num != "СН-2026-42" {
+		t.Errorf("Номер = %q, ожидался «СН-2026-42» — автономер затёр пользовательский ввод (issue #359). Запись: %v", num, rows[0])
+	}
+}
+
 func TestSubmit_NewDocumentPostChecksRowPolicy(t *testing.T) {
 	doc := &metadata.Entity{
 		Name:    "Заявка",
