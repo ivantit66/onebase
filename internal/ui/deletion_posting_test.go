@@ -299,3 +299,117 @@ func TestFormEdit_MarkedDoc_HidesPostShowsUnmark(t *testing.T) {
 		t.Errorf("карточка помеченного документа НЕ должна содержать кнопку «Провести» (value=\"post\"); тело:\n%s", body)
 	}
 }
+
+// Регрессия #366 (баг 1): DSL Документы.X.ОтменитьПроведение(Ссылка) должно
+// запускать ОбработкаУдаленияПроведения (OnUnpost) — симметрично UI-кнопке и
+// REST, которые идут через entityservice.Unpost. Ошибка хука откатывает и снятие
+// проведения, и очистку движений. До фикса DSL-отмена чистила движения и снимала
+// posted напрямую, молча пропуская хук отката (ошибки бы не было вовсе).
+func TestDocProxyUnpost_DSL_RunsOnUnpostHook(t *testing.T) {
+	ctx, db, s, dp, doc := newPostingDoc(t)
+	w := postOne(t, dp)
+
+	program := mustParse(t, `Процедура ОбработкаУдаленияПроведения()
+  ВызватьИсключение("отмена из DSL запрещена");
+КонецПроцедуры`)
+	s.reg.Load(runtime.LoadOptions{
+		Entities:  []*metadata.Entity{doc},
+		Registers: s.reg.Registers(),
+		Programs:  map[string]*ast.Program{doc.Name: program},
+	})
+
+	err := dp.unpostRef(w.obj.ID.String())
+	if err == nil || !strings.Contains(err.Error(), "отмена из DSL запрещена") {
+		t.Fatalf("ожидалась ошибка OnUnpost при DSL-отмене, получили %v", err)
+	}
+
+	// Ошибка хука откатила транзакцию: проведение и движения остались на месте.
+	row, err := db.GetByID(ctx, doc.Name, w.obj.ID, doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !asBool(row["posted"]) {
+		t.Fatalf("ошибка OnUnpost не откатила posted: %#v", row)
+	}
+	var movements int
+	if err := db.QueryRow(ctx, "SELECT COUNT(*) FROM рег_остаткитоваров").Scan(&movements); err != nil {
+		t.Fatal(err)
+	}
+	if movements != 1 {
+		t.Fatalf("ошибка OnUnpost не откатила движения: осталось %d", movements)
+	}
+}
+
+// Регрессия #366 (баг 2): DSL Провести() должно персистить правки реквизитов
+// шапки, сделанные в ОбработкаПроведения (OnPost) — как entityservice.Save
+// (upsert после хука). До фикса post() не upsert'ил шапку после OnPost, поэтому
+// расчётные поля жили при проведении из UI/REST, но пропадали при DSL-проведении.
+func TestDocWriterPost_DSL_PersistsOnPostFieldEdits(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.ConnectSQLite(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	doc := &metadata.Entity{
+		Name:    "РасходТоваров",
+		Kind:    metadata.KindDocument,
+		Posting: true,
+		Fields: []metadata.Field{
+			{Name: "Номер", Type: metadata.FieldTypeString},
+			{Name: "СуммаДокумента", Type: metadata.FieldTypeNumber},
+		},
+		TableParts: []metadata.TablePart{{Name: "Товары", Fields: []metadata.Field{
+			{Name: "Номенклатура", Type: metadata.FieldTypeString},
+			{Name: "Сумма", Type: metadata.FieldTypeNumber},
+		}}},
+	}
+	if err := db.Migrate(ctx, []*metadata.Entity{doc}); err != nil {
+		t.Fatal(err)
+	}
+
+	// OnPost вычисляет СуммаДокумента из строк ТЧ и пишет её в шапку this.
+	onPostSrc := `Процедура ОбработкаПроведения()
+  Итого = 0;
+  Для Каждого Стр Из ЭтотОбъект.Товары Цикл
+    Итого = Итого + Стр.Сумма;
+  КонецЦикла;
+  ЭтотОбъект.СуммаДокумента = Итого;
+КонецПроцедуры`
+	registry := runtime.NewRegistry()
+	registry.Load(runtime.LoadOptions{
+		Entities: []*metadata.Entity{doc},
+		Programs: map[string]*ast.Program{doc.Name: mustParse(t, onPostSrc)},
+	})
+	interp := interpreter.New()
+	interp.LookupProc = registry.GetModuleProc
+	s := &Server{store: db, reg: registry, interp: interp, lockMgr: runtime.NewLockManager(), messages: NewMessageStore()}
+
+	dp := newDocsRoot(s, interpreter.NewTxState(ctx)).Get("РасходТоваров").(*docProxy)
+	w := dp.CallMethod("создать", nil).(*docWriter)
+	w.Set("Номер", "РАС-001")
+	tp := w.Get("Товары").(*tpProxy)
+	r1 := tp.CallMethod("добавить", nil).(*interpreter.MapThis)
+	r1.Set("Номенклатура", "Тумбочка")
+	r1.Set("Сумма", float64(300))
+	r2 := tp.CallMethod("добавить", nil).(*interpreter.MapThis)
+	r2.Set("Номенклатура", "Стол")
+	r2.Set("Сумма", float64(700))
+
+	w.CallMethod("провести", nil)
+
+	// СуммаДокумента, вычисленная в OnPost, должна оказаться в БД (300+700=1000).
+	var total float64
+	if err := db.QueryRow(ctx, "SELECT суммадокумента FROM расходтоваров LIMIT 1").Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total != 1000 {
+		t.Fatalf("СуммаДокумента из OnPost не персистилась: в БД %v, ожидалось 1000", total)
+	}
+	var posted bool
+	db.QueryRow(ctx, "SELECT posted FROM расходтоваров LIMIT 1").Scan(&posted)
+	if !posted {
+		t.Error("документ должен быть проведён после Провести()")
+	}
+}
