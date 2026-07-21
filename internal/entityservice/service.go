@@ -232,6 +232,19 @@ func (s *Service) Save(ctx context.Context, req SaveRequest) (SaveResult, error)
 
 	var msgs []string
 	if proc != nil {
+		// Для НОВОГО объекта записываем строку-шапку ДО запуска хука (issue #360).
+		// Хук может создать связанный объект со ссылкой обратно на текущий
+		// (Соб.Прибор = ЭтотОбъект.Ссылка; Соб.Записать() — reference:ЭтотЖе).
+		// Запись связанного объекта из DSL идёт своей автокоммит-транзакцией,
+		// мимо основной транзакции ниже, поэтому строка-родитель уже должна
+		// существовать в БД — иначе FOREIGN KEY constraint failed при попытке
+		// создать+провести новый документ одним действием (post_and_close/new).
+		// Для существующего объекта строка уже закоммичена — пропускаем.
+		if req.IsNew {
+			if err := s.Store.Upsert(ctx, req.Entity.Name, req.ID, obj.Fields, req.Entity); err != nil {
+				return SaveResult{}, err
+			}
+		}
 		var vars map[string]any
 		if s.BuildVars != nil {
 			vars = s.BuildVars(hookCtx, mc, &msgs)
@@ -244,6 +257,14 @@ func (s *Service) Save(ctx context.Context, req SaveRequest) (SaveResult, error)
 			// DSL-ошибка (бизнес-правило), а не технический сбой: отдаём текст
 			// в DSLError, БД не трогаем. И *interpreter.DSLError, и обычная
 			// ошибка форматируются одинаково через Error().
+			// Пред-запись шапки нового объекта откатываем, чтобы неудачное
+			// правило не оставляло черновик-сироту. Best-effort: если хук успел
+			// создать ссылающиеся строки, удаление шапки не пройдёт по FK — это
+			// тот же осиротевший результат, что и до фикса (см. issue #360:
+			// прерывание процедуры после ошибки builtin — отдельная задача).
+			if req.IsNew {
+				_ = s.Store.Delete(ctx, req.Entity.Name, req.ID)
+			}
 			return SaveResult{ID: req.ID, DSLError: err.Error(), DSLMessages: msgs, Movements: mc}, nil
 		}
 	}
