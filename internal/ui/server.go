@@ -223,6 +223,9 @@ func (s *Server) Mount(r chi.Router) {
 	r.Post("/ui/{kind}/{entity}/{id}/post", s.postDocument)
 	r.Post("/ui/{kind}/{entity}/{id}/unpost", s.unpostDocument)
 
+	// Раскрытие замаскированного поля ПДн под аудитом (план 88, CC-SEC-004)
+	r.Post("/ui/{kind}/{entity}/{id}/disclose", s.discloseField)
+
 	// Delete record / mark for deletion
 	r.Post("/ui/{kind}/{entity}/{id}/activity", s.setRecordActivity)
 	r.Post("/ui/{kind}/{entity}/{id}/delete", s.deleteRecord)

@@ -50,12 +50,14 @@ func (h *handler) mountV2(r chi.Router) {
 		r.Get("/catalog/{name}", h.listObjectsV2(metadata.KindCatalog))
 		r.Post("/catalog/{name}", h.createObjectV2(metadata.KindCatalog))
 		r.Get("/catalog/{name}/{id}", h.getObjectV2(metadata.KindCatalog))
+		r.Get("/catalog/{name}/{id}/field/{field}", h.discloseField(metadata.KindCatalog))
 		r.Put("/catalog/{name}/{id}", h.updateObjectV2(metadata.KindCatalog))
 		r.Delete("/catalog/{name}/{id}", h.deleteObjectV2(metadata.KindCatalog))
 
 		r.Get("/document/{name}", h.listObjectsV2(metadata.KindDocument))
 		r.Post("/document/{name}", h.createObjectV2(metadata.KindDocument))
 		r.Get("/document/{name}/{id}", h.getObjectV2(metadata.KindDocument))
+		r.Get("/document/{name}/{id}/field/{field}", h.discloseField(metadata.KindDocument))
 		r.Put("/document/{name}/{id}", h.updateObjectV2(metadata.KindDocument))
 		r.Delete("/document/{name}/{id}", h.deleteObjectV2(metadata.KindDocument))
 		r.Post("/document/{name}/{id}/post", h.postDocumentV2())
@@ -97,6 +99,7 @@ func (h *handler) listObjectsV2(kind metadata.Kind) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, err.Error(), "", 0)
 			return
 		}
+		h.maskRecords(r.Context(), entity, rows)
 		w.Header().Set("X-Total-Count", strconv.Itoa(total))
 		w.Header().Set("X-Limit", strconv.Itoa(params.Limit))
 		w.Header().Set("X-Offset", strconv.Itoa(params.Offset))
@@ -135,6 +138,7 @@ func (h *handler) getObjectV2(kind metadata.Kind) http.HandlerFunc {
 			writeError(w, http.StatusForbidden, "forbidden", "", 0)
 			return
 		}
+		h.maskRecord(r.Context(), entity, result)
 		writeJSONV2(w, http.StatusOK, restV2Envelope{Data: result})
 	}
 }
@@ -228,6 +232,12 @@ func (h *handler) updateObjectV2(kind metadata.Kind) http.HandlerFunc {
 			if v, perr := strconv.ParseInt(strings.Trim(ifMatch, `"`), 10, 64); perr == nil {
 				expectedVersion = &v
 			}
+		}
+
+		// План 88: масковый пользователь не перезаписывает реальное значение.
+		if err := h.protectMaskedFieldsOnWrite(r.Context(), entity, id, body.Fields); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error(), "", 0)
+			return
 		}
 
 		result, err := h.entitySvc.Save(r.Context(), entityservice.SaveRequest{
@@ -395,6 +405,12 @@ func (h *handler) runReportV2() http.HandlerFunc {
 		rows, cols, truncated, err := h.store.RunQueryLimit(r.Context(), compiled.SQL, compiled.Args, limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error(), "", 0)
+			return
+		}
+		// План 88D (fail-closed): отчёт non-admin с чувствительной колонкой в
+		// выводе не отдаётся, пока компилятор не маскирует проекцию (88E).
+		if denied := h.deniedMaskedColumn(r.Context(), compiled.Sources, cols); denied != "" {
+			writeError(w, http.StatusForbidden, "masked field: "+denied, "", 0)
 			return
 		}
 		if wantsReportComposition(r.URL.Query()) {

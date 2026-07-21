@@ -160,6 +160,9 @@ func (s *Server) referenceOptionsWithParams(ctx context.Context, refEntity *meta
 		return nil, err
 	}
 	rows = filterOutFolders(rows)
+	// План 88: picker маскирует чувствительные поля до вычисления подписи и до
+	// сериализации строк — иначе замаскированное поле утекло бы в JSON выбора.
+	s.maskRecords(ctx, refEntity, rows)
 	for _, row := range rows {
 		row["_label"] = firstStringField(row, refEntity)
 	}
@@ -373,6 +376,10 @@ func (s *Server) appendSelectedRefOptions(ctx context.Context, rows []map[string
 		if !s.rowAllowsSelected(ctx, refEntity, row) {
 			continue
 		}
+		// План 88: замаскировать догруженную (вне первой страницы) выбранную
+		// запись до вычисления подписи и сериализации — иначе ПДн из ссылки
+		// утекли бы в JSON опций (HTML/DevTools) в обход маски списка.
+		s.maskRecord(ctx, refEntity, row)
 		row["_label"] = firstStringField(row, refEntity)
 		rows = append(rows, row)
 		seen[idStr] = true

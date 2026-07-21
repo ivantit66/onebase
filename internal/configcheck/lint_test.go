@@ -447,6 +447,61 @@ permissions:
 	}
 }
 
+func TestLintRoles_FieldAccessDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	mkFile(t, filepath.Join(dir, "catalogs", "клиент.yaml"), `name: Клиент
+fields:
+  - name: Телефон
+    type: string
+  - name: Возраст
+    type: number
+`)
+	mkFile(t, filepath.Join(dir, "catalogs", "архив.yaml"), `name: Архив
+fields:
+  - name: Owner
+    type: string
+`)
+	mkFile(t, filepath.Join(dir, "catalogs", "секрет.yaml"), `name: Секрет
+fields:
+  - name: X
+    type: string
+`)
+	mkFile(t, filepath.Join(dir, "roles", "operator.yaml"), `name: Оператор
+permissions:
+  catalogs:
+    Клиент: [read]
+    Архив: [write]
+    Секрет: [disclose]
+  field_access:
+    catalogs:
+      Клиент:
+        Телефон: { read: mask_tail, keep: 4 }
+        НетТакогоПоля: { read: hide }
+        Возраст: { read: mask_city }
+      Архив:
+        Owner: { read: hide }
+      Несуществующий:
+        Owner: { read: hide }
+`)
+
+	res := RunFullWithOptions(dir, Options{Lint: true})
+	if !res.OK {
+		t.Fatalf("field_access lint warnings should not fail check: %+v", res.Issues)
+	}
+	got := map[string]int{}
+	for _, w := range res.Warnings {
+		got[w.Code]++
+	}
+	for _, code := range []string{"mask.invalid-policy", "mask.policy-without-permission", "mask.unknown-object", "mask.disclose-without-read"} {
+		if got[code] == 0 {
+			t.Fatalf("expected %s warning, got codes=%+v warnings=%+v", code, got, res.Warnings)
+		}
+	}
+	if got["mask.invalid-policy"] < 2 {
+		t.Fatalf("expected unknown-field and mask_city-type warnings, got codes=%+v", got)
+	}
+}
+
 func TestLintCrossScopeRead(t *testing.T) {
 	dir := t.TempDir()
 	mkFile(t, filepath.Join(dir, "processors", "касса.yaml"), `name: Касса

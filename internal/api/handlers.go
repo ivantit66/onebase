@@ -197,6 +197,7 @@ func (h *handler) getObject(kind metadata.Kind) http.HandlerFunc {
 			writeError(w, http.StatusForbidden, "forbidden", "", 0)
 			return
 		}
+		h.maskRecord(r.Context(), entity, result)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(result)
 	}
@@ -231,6 +232,7 @@ func (h *handler) listObjects(kind metadata.Kind) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, err.Error(), "", 0)
 			return
 		}
+		h.maskRecords(r.Context(), entity, rows)
 		w.Header().Set("X-Total-Count", strconv.Itoa(total))
 		w.Header().Set("X-Limit", strconv.Itoa(params.Limit))
 		w.Header().Set("X-Offset", strconv.Itoa(params.Offset))
@@ -280,6 +282,12 @@ func (h *handler) updateObject(kind metadata.Kind) http.HandlerFunc {
 			if v, perr := strconv.ParseInt(strings.Trim(ifMatch, `"`), 10, 64); perr == nil {
 				expectedVersion = &v
 			}
+		}
+
+		// План 88: масковый пользователь не перезаписывает реальное значение.
+		if err := h.protectMaskedFieldsOnWrite(r.Context(), entity, id, body.Fields); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error(), "", 0)
+			return
 		}
 
 		result, err := h.entitySvc.Save(r.Context(), entityservice.SaveRequest{

@@ -392,6 +392,7 @@ func roleYAMLSchema() *yamlLintSchema {
 		"reports":        freeMap(),
 		"processors":     freeMap(),
 		"row_access":     freeMap(),
+		"field_access":   freeMap(),
 	})
 	return with(obj("name", "description"), map[string]*yamlLintSchema{"permissions": perm})
 }
@@ -1355,6 +1356,7 @@ func CheckLintRoles(dir string, proj *project.Project, roles []*auth.Role) []Iss
 	}
 	issues = append(issues, checkLintUnknownRoleRefs(proj, roles)...)
 	issues = append(issues, CheckLintRowAccess(dir, proj, roles)...)
+	issues = append(issues, CheckLintFieldAccess(dir, proj, roles)...)
 	return issues
 }
 
@@ -1457,6 +1459,103 @@ func CheckLintRowAccess(dir string, proj *project.Project, roles []*auth.Role) [
 		addSection("register", "registers", role.Permissions.RowAccess.Registers)
 		addSection("inforeg", "inforegs", role.Permissions.RowAccess.InfoRegs)
 	}
+	return issues
+}
+
+// CheckLintFieldAccess validates field-level masking policies (план 88): unknown
+// object/field, unknown or type-inapplicable strategy, a policy without the
+// object-level `read` it depends on, and object-level `disclose` without `read`.
+func CheckLintFieldAccess(dir string, proj *project.Project, roles []*auth.Role) []Issue {
+	if proj == nil || len(roles) == 0 {
+		return nil
+	}
+	targets := rowAccessLintTargets(proj)
+	roleFiles := roleFileLabels(dir)
+	var issues []Issue
+	for _, role := range roles {
+		if role == nil {
+			continue
+		}
+		file := roleFiles[strings.ToLower(role.Name)]
+		if file == "" {
+			file = "roles"
+		}
+		issues = append(issues, lintDiscloseWithoutRead(role, file)...)
+		if role.Permissions.FieldAccess.IsZero() {
+			continue
+		}
+		addSection := func(kind, section string, policies map[string]auth.FieldPolicies) {
+			for object, fields := range policies {
+				target, ok := targets[rowAccessTargetKey(kind, object)]
+				if !ok {
+					issues = append(issues, Issue{
+						File:         file,
+						Object:       role.Name,
+						Kind:         "Роль",
+						Code:         "mask.unknown-object",
+						Message:      fmt.Sprintf("field_access.%s.%s в роли %q ссылается на несуществующий объект", section, object, role.Name),
+						SuggestedFix: "Исправьте имя объекта в permissions.field_access или удалите устаревшую policy.",
+					})
+					continue
+				}
+				if !auth.PermissionHas(role.Permissions, kind, object, "read") {
+					issues = append(issues, Issue{
+						File:         file,
+						Object:       role.Name,
+						Kind:         "Роль",
+						Code:         "mask.policy-without-permission",
+						Message:      fmt.Sprintf("field_access.%s.%s в роли %q не применяется: роль не даёт object-level право read на %s %q", section, object, role.Name, target.objectKind, target.name),
+						SuggestedFix: fmt.Sprintf("Добавьте `read` в permissions.%s.%s или удалите эту field_access policy.", section, object),
+					})
+				}
+				for field, pol := range fields {
+					if err := access.ValidateFieldPolicy(field, pol, target.meta); err != nil {
+						issues = append(issues, Issue{
+							File:         file,
+							Object:       role.Name,
+							Kind:         "Роль",
+							Code:         "mask.invalid-policy",
+							Message:      fmt.Sprintf("field_access.%s.%s.%s в роли %q невалидна: %v", section, object, field, role.Name, err),
+							SuggestedFix: "Стратегии: full | mask_tail (+keep) | mask_city | mask_all | hide; поле должно существовать в объекте.",
+						})
+					}
+				}
+			}
+		}
+		addSection("catalog", "catalogs", role.Permissions.FieldAccess.Catalogs)
+		addSection("document", "documents", role.Permissions.FieldAccess.Documents)
+		addSection("register", "registers", role.Permissions.FieldAccess.Registers)
+		addSection("inforeg", "inforegs", role.Permissions.FieldAccess.InfoRegs)
+	}
+	return issues
+}
+
+// lintDiscloseWithoutRead flags an object-level `disclose` right granted without
+// `read`: раскрывать поле, которое роль и так не читает, бессмысленно.
+func lintDiscloseWithoutRead(role *auth.Role, file string) []Issue {
+	var issues []Issue
+	check := func(kind, section string, m map[string][]string) {
+		for object := range m {
+			if !auth.PermissionHas(role.Permissions, kind, object, "disclose") {
+				continue
+			}
+			if auth.PermissionHas(role.Permissions, kind, object, "read") {
+				continue
+			}
+			issues = append(issues, Issue{
+				File:         file,
+				Object:       role.Name,
+				Kind:         "Роль",
+				Code:         "mask.disclose-without-read",
+				Message:      fmt.Sprintf("permissions.%s.%s в роли %q даёт `disclose` без `read` — раскрывать нечего", section, object, role.Name),
+				SuggestedFix: "Добавьте `read` к объекту или уберите `disclose`.",
+			})
+		}
+	}
+	check("catalog", "catalogs", role.Permissions.Catalogs)
+	check("document", "documents", role.Permissions.Documents)
+	check("register", "registers", role.Permissions.Registers)
+	check("inforeg", "inforegs", role.Permissions.InfoRegs)
 	return issues
 }
 

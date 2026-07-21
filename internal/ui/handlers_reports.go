@@ -202,6 +202,24 @@ func (s *Server) runReport(w http.ResponseWriter, r *http.Request, rep *reportpk
 		})
 		return
 	}
+	// План 88D (fail-closed): пока query-компилятор не маскирует проекцию в SQL,
+	// отчёт non-admin с чувствительной колонкой в выводе не отдаётся.
+	if denied := s.deniedMaskedColumn(opCtx, compiled.Sources, cols); denied != "" {
+		opStatus = "error"
+		s.render(w, r, "page-report", map[string]any{
+			"Report":             rep,
+			"QueryError":         s.tr(s.resolveLang(r), "Отчёт содержит защищённое поле и не может быть построен под текущей ролью") + ": " + denied,
+			"ParamValues":        paramValues,
+			"ReportParams":       reportParams,
+			"ActiveVariant":      variant,
+			"UserSettings":       settings,
+			"ReportSettingsJSON": settingsJSON,
+			"ReportPresets":      presets,
+			"ActivePresetID":     rs.ActivePresetID,
+			"ActivePreset":       activePreset,
+		})
+		return
+	}
 	detailLinkCol := ""
 	if comp != nil {
 		detailLinkCol = comp.DetailLink
@@ -576,6 +594,10 @@ func (s *Server) reportExportRowsWithContext(ctx context.Context, r *http.Reques
 	}
 	if truncated {
 		return nil, nil, newReportExportError(http.StatusRequestEntityTooLarge, "export limit", fmt.Errorf("результат выгрузки превышает export_max_rows"))
+	}
+	// План 88D (fail-closed): выгрузка отчёта с чувствительной колонкой запрещена.
+	if denied := s.deniedMaskedColumn(ctx, compiled.Sources, cols); denied != "" {
+		return nil, nil, newReportExportError(http.StatusForbidden, "masked field", fmt.Errorf("отчёт содержит защищённое поле: %s", denied))
 	}
 	detailLinkCol := ""
 	if comp != nil {
