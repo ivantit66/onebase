@@ -91,10 +91,10 @@ func TestPickProfileDir_ReusesFreeSkipsBusy(t *testing.T) {
 
 func TestCleanIsolatedProfiles(t *testing.T) {
 	root := t.TempDir()
-	free, _ := pickProfileDir(root)   // profile-1 — свободный
+	free, _ := pickProfileDir(root) // profile-1 — свободный
 	release := makeProfileBusy(t, free)
 	busyDir := free
-	free2, _ := pickProfileDir(root)  // profile-2 — свободный
+	free2, _ := pickProfileDir(root) // profile-2 — свободный
 	_ = free2
 
 	removed, err := cleanIsolatedProfiles(root)
@@ -290,5 +290,58 @@ func TestStartIsolated_UnknownBase(t *testing.T) {
 	}
 	if fb.calls != 0 {
 		t.Fatal("браузер не должен запускаться для неизвестной базы")
+	}
+}
+
+func startNativeReq(t *testing.T, h *handler, id string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/bases/"+id+"/start-native", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", id)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+	h.startNative(rec, req)
+	return rec
+}
+
+// «Предприятие» (startNative) открывает нативное окно на ОБЩЕМ профиле
+// (пустой каталог) в режиме native, на URL базы без суффикса /ui — единый
+// сеанс с лаунчером, а не изолированный вход как у «Нового окна».
+func TestStartNative_SharedProfile(t *testing.T) {
+	fb := &fakeBrowser{}
+	h, b := newIsolatedFixture(t, fb)
+
+	rec := startNativeReq(t, h, b.ID)
+	if rec.Code != 200 {
+		t.Fatalf("код ответа %d: %s", rec.Code, rec.Body.String())
+	}
+	if fb.calls != 1 {
+		t.Fatalf("нативное окно должно открыться один раз, вызовов: %d", fb.calls)
+	}
+	if fb.mode != isolatedModeNative {
+		t.Errorf("режим окна: %q, ожидался %q", fb.mode, isolatedModeNative)
+	}
+	if fb.dir != "" {
+		t.Errorf("общий профиль = пустой каталог, получен %q", fb.dir)
+	}
+	wantURL := fmt.Sprintf("http://localhost:%d", b.Port)
+	if fb.url != wantURL {
+		t.Errorf("URL окна: %q, ожидался %q", fb.url, wantURL)
+	}
+}
+
+// В не-GUI-сборке реальный systemBrowser вернул бы ошибку native-режима, но
+// ответ обработчика приходит из isoBrowser — проверяем, что ошибка Open
+// пробрасывается как 500 (UI на этот путь не ходит, но контракт честный).
+func TestStartNative_OpenError(t *testing.T) {
+	fb := &fakeBrowser{err: fmt.Errorf("нативные окна доступны только в GUI-сборке")}
+	h, b := newIsolatedFixture(t, fb)
+
+	rec := startNativeReq(t, h, b.ID)
+	if rec.Code != 500 {
+		t.Fatalf("ожидался код 500, получен %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "GUI") {
+		t.Errorf("ошибка Open должна пробрасываться в ответ: %s", rec.Body.String())
 	}
 }

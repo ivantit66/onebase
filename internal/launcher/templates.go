@@ -197,6 +197,10 @@ const tplIndex = `
 
 <script>
 var _sel = '{{if .Selected}}{{.Selected.ID}}{{end}}';
+// GUI-сборка под Windows умеет нативные WebView2-окна — «Предприятие»
+// открывается в таком окне (без адресной строки), а не через window.open,
+// который в WebView2 убегает во внешний браузер. В остальных сборках — браузер.
+var _nativeOK = {{if .NativeOK}}true{{else}}false{{end}};
 function selectBase(id) {
   if (_sel === id) return;
   window.location.href = '/?sel=' + id;
@@ -268,6 +272,7 @@ function showStartError(win, msg) {
   alert('Ошибка запуска:\n' + text);
 }
 function startBase(el, id) {
+  if (_nativeOK) return startBaseNative(el, id);
   el.preventDefault ? el.preventDefault() : (el.returnValue = false);
   var btn = el.target || el;
   var origText = btn.textContent || '';
@@ -295,6 +300,30 @@ function startBase(el, id) {
     .catch(function(e){
       showStartError(win, e);
       if (btn.innerHTML) btn.innerHTML = origText;
+    });
+  return false;
+}
+// startBaseNative открывает базу в нативном WebView2-окне (сервер запускает его
+// сам, без window.open — иначе WebView2 отдал бы URL внешнему браузеру с
+// адресной строкой). Окно на общем профиле = обычный сеанс Предприятия.
+function startBaseNative(el, id) {
+  el.preventDefault ? el.preventDefault() : (el.returnValue = false);
+  var btn = el.target || el;
+  var origHTML = btn.innerHTML;
+  if (btn.innerHTML) btn.innerHTML = '⏳ Запуск...';
+  fetch('/bases/' + id + '/start-native', {method:'POST'})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d && d.error) {
+        alert('Ошибка запуска:\n' + d.error);
+        if (btn.innerHTML) btn.innerHTML = origHTML;
+      } else {
+        setTimeout(function(){ window.location.href = '/?sel=' + id; }, 500);
+      }
+    })
+    .catch(function(e){
+      alert('Ошибка запуска: ' + e);
+      if (btn.innerHTML) btn.innerHTML = origHTML;
     });
   return false;
 }

@@ -353,36 +353,65 @@ func (h *handler) baseRunning(b *Base) bool {
 	return !portFree(b.Port) && h.runner.Healthy(b)
 }
 
+// ensureBaseReady запускает базу, если она ещё не запущена, и ждёт готовности
+// её сервера. Общий пролог обработчиков start / startIsolated / startNative:
+// при ошибке пишет JSON-ответ и возвращает false.
+func (h *handler) ensureBaseReady(w http.ResponseWriter, r *http.Request, b *Base, lang string) bool {
+	if !h.baseRunning(b) {
+		if b.DBType != "sqlite" {
+			if err := storage.EnsureDatabase(r.Context(), b.DB); err != nil {
+				writeJSON(w, 500, map[string]any{"error": tr(lang, "Не удалось создать БД") + ": " + err.Error()})
+				return false
+			}
+		}
+		if err := h.runner.Start(b); err != nil {
+			writeJSON(w, 500, map[string]any{"error": errText(r, err)})
+			return false
+		}
+		b.LastOpened = time.Now()
+		h.store.Update(b)
+	}
+	// Wait until the base server is ready before handing the URL to the client.
+	if err := h.runner.WaitReady(b, 15*time.Second); err != nil {
+		writeJSON(w, 500, map[string]any{"error": errText(r, err)})
+		return false
+	}
+	return true
+}
+
 func (h *handler) start(w http.ResponseWriter, r *http.Request) {
 	b, err := h.store.Get(chi.URLParam(r, "id"))
 	if err != nil {
 		writeJSON(w, 404, map[string]any{"error": "not found"})
 		return
 	}
-	lang := resolveLang(r)
-
-	if !h.baseRunning(b) {
-		if b.DBType != "sqlite" {
-			if err := storage.EnsureDatabase(r.Context(), b.DB); err != nil {
-				writeJSON(w, 500, map[string]any{"error": tr(lang, "Не удалось создать БД") + ": " + err.Error()})
-				return
-			}
-		}
-		if err := h.runner.Start(b); err != nil {
-			writeJSON(w, 500, map[string]any{"error": errText(r, err)})
-			return
-		}
-		b.LastOpened = time.Now()
-		h.store.Update(b)
+	if !h.ensureBaseReady(w, r, b, resolveLang(r)) {
+		return
 	}
+	writeJSON(w, 200, map[string]any{"url": h.runner.BaseURL(b)})
+}
 
-	// Wait until the base server is ready before handing the URL to the browser
-	if err := h.runner.WaitReady(b, 15*time.Second); err != nil {
+// startNative (кнопка «Предприятие» в GUI-сборке под Windows): запускает базу и
+// открывает её в нативном WebView2-окне на ОБЩЕМ профиле — окно без адресной
+// строки, в отличие от window.open, который в WebView2 убегает во внешний
+// браузер. Пустой профиль (не изолированный) = единый cookie-jar с лаунчером,
+// т.е. обычный сеанс Предприятия, а не свежий вход под другим пользователем
+// («Новое окно»). В не-GUI-сборках isoBrowser.Open вернёт понятную ошибку, но
+// UI туда и не ходит — при NativeOK=false кнопка открывает браузер.
+func (h *handler) startNative(w http.ResponseWriter, r *http.Request) {
+	b, err := h.store.Get(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, 404, map[string]any{"error": "not found"})
+		return
+	}
+	if !h.ensureBaseReady(w, r, b, resolveLang(r)) {
+		return
+	}
+	if err := h.isoBrowser.Open("", h.runner.BaseURL(b), isolatedModeNative); err != nil {
 		writeJSON(w, 500, map[string]any{"error": errText(r, err)})
 		return
 	}
-
-	writeJSON(w, 200, map[string]any{"url": h.runner.BaseURL(b)})
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 // startIsolated (план 78, фаза 3): запускает базу (если нужно) и открывает
@@ -395,24 +424,7 @@ func (h *handler) startIsolated(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]any{"error": "not found"})
 		return
 	}
-	lang := resolveLang(r)
-
-	if !h.baseRunning(b) {
-		if b.DBType != "sqlite" {
-			if err := storage.EnsureDatabase(r.Context(), b.DB); err != nil {
-				writeJSON(w, 500, map[string]any{"error": tr(lang, "Не удалось создать БД") + ": " + err.Error()})
-				return
-			}
-		}
-		if err := h.runner.Start(b); err != nil {
-			writeJSON(w, 500, map[string]any{"error": errText(r, err)})
-			return
-		}
-		b.LastOpened = time.Now()
-		h.store.Update(b)
-	}
-	if err := h.runner.WaitReady(b, 15*time.Second); err != nil {
-		writeJSON(w, 500, map[string]any{"error": errText(r, err)})
+	if !h.ensureBaseReady(w, r, b, resolveLang(r)) {
 		return
 	}
 
