@@ -41,8 +41,8 @@ func (s *Server) fieldMaskRestricted(ctx context.Context, entity *metadata.Entit
 	return len(s.fieldDecisions(ctx, entity)) > 0
 }
 
-// deniedMaskedColumn is the fail-closed report/AI gate (план 88D): returns a
-// masked output column the user may not receive via a query, or "".
+// deniedMaskedColumn is the fail-closed report/AI gate (план 88D): cols are
+// logical fields from query.Result.ProjectionFields, before output aliases.
 func (s *Server) deniedMaskedColumn(ctx context.Context, sources []query.SourceRef, cols []string) string {
 	return access.DeniedMaskedColumn(auth.UserFromContext(ctx), sources, cols, s.sourceMeta)
 }
@@ -63,22 +63,6 @@ func (s *Server) sourceMeta(kind, name string) *metadata.Entity {
 		return storage.AccountRegisterPredicateEntity(ar)
 	}
 	return nil
-}
-
-// queryColumns returns the union of column names across result rows (для AI-пути,
-// где QueryAll не отдаёт список колонок отдельно).
-func queryColumns(rows []map[string]any) []string {
-	seen := map[string]bool{}
-	var cols []string
-	for _, row := range rows {
-		for k := range row {
-			if !seen[k] {
-				seen[k] = true
-				cols = append(cols, k)
-			}
-		}
-	}
-	return cols
 }
 
 // protectMaskedFieldsOnWrite restores the real stored value for any field masked

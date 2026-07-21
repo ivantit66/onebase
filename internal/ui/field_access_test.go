@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -36,6 +37,34 @@ func uiMaskUser(ops []string, fields auth.FieldPolicies) *auth.User {
 				FieldAccess: auth.FieldAccess{Catalogs: map[string]auth.FieldPolicies{"Клиент": fields}},
 			},
 		}},
+	}
+}
+
+func TestUI_QueryProjectionMaskGateRejectsAliasAndExpression(t *testing.T) {
+	cat := uiClientEntity()
+	s, _ := newSubmitTestServer(t, []*metadata.Entity{cat})
+	user := uiMaskUser([]string{"read"}, auth.FieldPolicies{"Телефон": {Read: "mask_all"}})
+	ctx := auth.ContextWithUser(context.Background(), user)
+
+	for _, text := range []string{
+		`ВЫБРАТЬ Телефон КАК Контакт ИЗ Справочник.Клиент`,
+		`ВЫБРАТЬ Строка(Телефон) КАК Контакт ИЗ Справочник.Клиент`,
+		`ВЫБРАТЬ * ИЗ Справочник.Клиент`,
+	} {
+		compiled, err := s.compileQueryWithRowAccess(ctx, text, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if denied := s.deniedMaskedColumn(ctx, compiled.Sources, compiled.ProjectionFields); denied == "" {
+			t.Fatalf("masked projection was allowed: %s (%v)", text, compiled.ProjectionFields)
+		}
+	}
+	compiled, err := s.compileQueryWithRowAccess(ctx, `ВЫБРАТЬ Наименование ИЗ Справочник.Клиент ГДЕ Телефон <> ""`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if denied := s.deniedMaskedColumn(ctx, compiled.Sources, compiled.ProjectionFields); denied != "" {
+		t.Fatalf("safe output projection denied as %q", denied)
 	}
 }
 

@@ -43,6 +43,12 @@ type Result struct {
 	// Имя — исходное имя сущности/регистра; Kind — секция прав ("catalog"|
 	// "document"|"register"|"inforeg"; "" — для неизвестных типов).
 	Sources []SourceRef
+	// ProjectionFields перечисляет логические поля, прочитанные выражениями
+	// SELECT до применения SQL-алиасов. Поле используется security-gate отчётов,
+	// AI и виджетов: сравнение с результирующими именами колонок позволяло
+	// обойти masking через `Телефон КАК Контакт` или функцию над полем.
+	// Значение "*" означает wildcard-проекцию.
+	ProjectionFields []string
 }
 
 // SourceRef — объект-источник запроса (для проверки прав доступа).
@@ -2167,10 +2173,124 @@ func preScanMainTable(tokens []tok) string {
 	return ""
 }
 
+// projectionFieldNames extracts identifiers used by SELECT expressions before
+// aliases are applied. It deliberately errs on the safe side: qualifiers and
+// otherwise harmless identifiers may be included, but an underlying field must
+// never be omitted merely because it is wrapped in an expression or renamed.
+func projectionFieldNames(tokens []tok) []string {
+	type selectFrame struct {
+		depth  int
+		active bool
+	}
+	var frames []selectFrame
+	depth := 0
+	seen := map[string]bool{}
+	var out []string
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		key := strings.ToLower(name)
+		if name == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, name)
+	}
+	projectionActive := func() bool {
+		for i := len(frames) - 1; i >= 0; i-- {
+			if frames[i].active {
+				return true
+			}
+		}
+		return false
+	}
+
+	for i, t := range tokens {
+		switch t.kind {
+		case tLParen:
+			depth++
+			continue
+		case tRParen:
+			for len(frames) > 0 && frames[len(frames)-1].depth >= depth {
+				frames = frames[:len(frames)-1]
+			}
+			if depth > 0 {
+				depth--
+			}
+			continue
+		}
+		if t.kind == tIdent {
+			kw, isKW := sqlKW(t.val)
+			switch kw {
+			case "SELECT":
+				frames = append(frames, selectFrame{depth: depth, active: true})
+				continue
+			case "FROM":
+				for j := len(frames) - 1; j >= 0; j-- {
+					if frames[j].depth == depth && frames[j].active {
+						frames[j].active = false
+						break
+					}
+				}
+				continue
+			}
+			if !projectionActive() || isKW {
+				continue
+			}
+			if i > 0 && tokens[i-1].kind == tIdent {
+				prev := strings.ToUpper(tokens[i-1].val)
+				if prev == "КАК" || prev == "AS" {
+					continue // output alias, not a source field
+				}
+			}
+			if i+1 < len(tokens) && tokens[i+1].kind == tLParen {
+				continue // function name; its arguments are inspected separately
+			}
+			add(t.val)
+			continue
+		}
+		if t.kind == tStar && projectionActive() {
+			add("*")
+		}
+	}
+	return out
+}
+
+func expandReferenceProjection(fields []string, dims []refDimInfo) []string {
+	out := append([]string(nil), fields...)
+	contains := func(name string) bool {
+		for _, field := range fields {
+			if strings.EqualFold(field, name) {
+				return true
+			}
+		}
+		return false
+	}
+	appendUnique := func(name string) {
+		for _, field := range out {
+			if strings.EqualFold(field, name) {
+				return
+			}
+		}
+		out = append(out, name)
+	}
+	for _, dim := range dims {
+		if !contains(dim.fieldName) {
+			continue
+		}
+		if dim.refIsDoc {
+			appendUnique("Номер")
+		} else {
+			appendUnique("Наименование")
+		}
+	}
+	return out
+}
+
 func translate(tokens []tok, opts CompileOpts) (Result, error) {
 	if opts.Params == nil {
 		opts.Params = map[string]any{}
 	}
+	projectionFields := projectionFieldNames(tokens)
 	// расширяем НачалоДня/Год/Месяц/ОКР/АБС/ЦЕЛ/... в SQL-эквиваленты
 	// до основной трансляции, чтобы остальные шаги ничего не знали о них.
 	tokens = rewriteScalarFuncs(tokens, dialectName(opts.Dialect))
@@ -2536,7 +2656,12 @@ func translate(tokens []tok, opts CompileOpts) (Result, error) {
 	if err := tr.assertRowFiltersApplied(); err != nil {
 		return Result{}, err
 	}
-	return Result{SQL: tr.build(), Args: tr.args, Sources: tr.sources}, nil
+	return Result{
+		SQL:              tr.build(),
+		Args:             tr.args,
+		Sources:          tr.sources,
+		ProjectionFields: expandReferenceProjection(projectionFields, tr.refDims),
+	}, nil
 }
 
 // dialectName возвращает строковое имя диалекта SQL для opts.Dialect; nil → "pg"
