@@ -12,7 +12,17 @@ permissions:
   documents:
     Звонок: [read, write]
     Заявка: [read, write]
+    Задача: [read, write]
     ПубликацияПравила: [read, write, post, unpost]
+  # «Мои задачи»: супервизор видит только адресованные/взятые/инициированные им задачи
+  row_access:
+    documents:
+      Задача:
+        read:
+          any:
+            - { field: Адресат, op: eq, value: { user: login } }
+            - { field: Исполнитель, op: eq, value: { user: login } }
+            - { field: Инициатор, op: eq, value: { user: login } }
   inforegs:
     СтатусОператора: [read, write]
     ДействующиеПравила: [read]

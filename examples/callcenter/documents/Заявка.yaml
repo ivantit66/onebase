@@ -12,6 +12,9 @@ fields:
     type: string
   - name: Дата
     type: date
+  - name: Состояние
+    type: enum:СостояниеЗаявки
+    label: Состояние согласования (пусто/Черновик → НаСогласовании → Утверждена/Отклонена)
   - name: Клиент
     type: reference:Клиент
   - name: Улица
