@@ -316,9 +316,12 @@ func (p *docProxy) DeleteRef(uuidStr string) error {
 	})
 }
 
-// unpostRef отменяет проведение документа: чистит движения по всем регистрам и
-// снимает posted (аналог UI-хендлера unpostDocument). Использует живой ctx (как
-// DeleteRef) — участвует в открытой DSL-транзакции, если она есть.
+// unpostRef отменяет проведение документа через entityservice.Unpost — тем же
+// путём, что UI-кнопка «Отменить проведение» и REST unpost: чистит движения,
+// снимает posted и запускает ОбработкаУдаленияПроведения (OnUnpost) в одной
+// транзакции (ошибка хука откатывает и движения, и признак проведения). Раньше
+// DSL чистил движения и снимал posted напрямую, молча пропуская хук отката.
+// WithTxIfNeeded внутри Unpost переиспользует открытую DSL-транзакцию, если она есть.
 func (p *docProxy) unpostRef(uuidStr string) error {
 	id, err := uuid.Parse(uuidStr)
 	if err != nil {
@@ -328,12 +331,14 @@ func (p *docProxy) unpostRef(uuidStr string) error {
 	if err := p.s.checkDSLRowAccess(ctx, p.entity, "unpost", id, nil); err != nil {
 		return err
 	}
-	if p.entity.Posting {
-		if err := p.s.clearMovements(ctx, p.entity.Name, id); err != nil {
-			return fmt.Errorf("очистка движений: %w", err)
-		}
+	result, err := p.s.entitySvc.Unpost(ctx, p.entity, id)
+	if err != nil {
+		return err
 	}
-	return p.s.store.SetPosted(ctx, p.entity.Name, id, false)
+	if result.DSLError != "" {
+		return fmt.Errorf("%s", result.DSLError)
+	}
+	return nil
 }
 
 // markRef помечает/снимает пометку на удаление (с авто-отменой проведения при
@@ -649,10 +654,20 @@ func (w *docWriter) post() error {
 	if errMsg, _ := w.s.runOnPostCtx(ctx, w.obj, mc); errMsg != "" {
 		return fmt.Errorf("%s", errMsg)
 	}
-	if err := w.s.saveMovements(ctx, w.entity.Name, w.obj.ID, mc); err != nil {
-		return err
-	}
-	return w.s.store.SetPosted(ctx, w.entity.Name, w.obj.ID, true)
+	// OnPost мог изменить реквизиты шапки (расчётные поля) — персистим их upsert'ом
+	// после хука, как это делает entityservice.Save при проведении. Без этого правки
+	// this в ОбработкаПроведения жили бы только в UI/REST, но пропадали при DSL
+	// Провести(). Upsert шапки + движения + признак проведения — одной транзакцией;
+	// повторную регистрацию обмена не делаем — её уже выполнил write() (иначе эхо).
+	return w.s.store.WithTxIfNeeded(ctx, func(ctx context.Context) error {
+		if err := w.s.store.Upsert(ctx, w.entity.Name, w.obj.ID, w.obj.Fields, w.entity); err != nil {
+			return err
+		}
+		if err := w.s.saveMovements(ctx, w.entity.Name, w.obj.ID, mc); err != nil {
+			return err
+		}
+		return w.s.store.SetPosted(ctx, w.entity.Name, w.obj.ID, true)
+	})
 }
 
 // ensureSelfRef устанавливает псевдо-реквизит «Ссылка» самого документа, чтобы
