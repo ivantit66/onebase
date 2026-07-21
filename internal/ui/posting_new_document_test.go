@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -101,6 +102,9 @@ func TestSaveNewDocument_PostWithSelfReference(t *testing.T) {
 	if !asBool(row["posted"]) {
 		t.Errorf("документ не помечен проведённым: %v", row["posted"])
 	}
+	if got := fmt.Sprint(row["_version"]); got != "1" {
+		t.Errorf("новый объект после atomic hook имеет _version=%s, want 1", got)
+	}
 
 	// Связанный объект создан и ссылается на документ.
 	events, err := db.List(ctx, "СобытиеПрибора", cat, storage.ListParams{})
@@ -112,6 +116,42 @@ func TestSaveNewDocument_PostWithSelfReference(t *testing.T) {
 	}
 	if ref := refValueString(events[0]["Прибор"]); ref != docID.String() {
 		t.Errorf("СобытиеПрибора.Прибор = %q, ожидался %q", ref, docID.String())
+	}
+}
+
+func TestSaveNewDocument_HookChildAndFailureRollBackTogether(t *testing.T) {
+	ctx, db, s, doc, cat := newSelfRefPostingServer(t)
+	failing := `Процедура ОбработкаПроведения()
+  Соб = Справочники.СобытиеПрибора.Создать();
+  Соб.Прибор = ЭтотОбъект.Ссылка;
+  Соб.Записать();
+  ВызватьИсключение("откатить всё");
+КонецПроцедуры`
+	s.reg.Load(runtime.LoadOptions{
+		Entities: []*metadata.Entity{doc, cat},
+		Programs: map[string]*ast.Program{"Прибор": mustParse(t, failing)},
+	})
+
+	res, err := s.entitySvc.Save(ctx, entityservice.SaveRequest{
+		Entity: doc, ID: uuid.New(), IsNew: true,
+		Fields: map[string]any{"Номер": "П-ROLLBACK"}, Action: "post",
+	})
+	if err != nil {
+		t.Fatalf("Save technical error: %v", err)
+	}
+	if res.DSLError == "" {
+		t.Fatal("expected hook DSLError")
+	}
+	parents, err := db.List(ctx, doc.Name, doc, storage.ListParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	children, err := db.List(ctx, cat.Name, cat, storage.ListParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parents) != 0 || len(children) != 0 {
+		t.Fatalf("atomic rollback left parent=%d child=%d", len(parents), len(children))
 	}
 }
 

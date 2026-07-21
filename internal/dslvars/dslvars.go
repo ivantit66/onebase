@@ -26,10 +26,13 @@ import (
 
 // Common — параметры базовой DSL-карты. Заполните поля и вызовите Build().
 type Common struct {
-	Ctx    context.Context
-	Reg    *runtime.Registry
-	Store  *storage.DB
-	Mailer interpreter.EmailSender // nil допустим — email-функции запаникуют при вызове, не при сборке
+	Ctx context.Context
+	// CtxSource, when set, supplies the current DSL transaction context to
+	// write-capable common objects. nil wraps Ctx as a static source.
+	CtxSource interpreter.CtxSource
+	Reg       *runtime.Registry
+	Store     *storage.DB
+	Mailer    interpreter.EmailSender // nil допустим — email-функции запаникуют при вызове, не при сборке
 	// EmailFileResolver authorizes paths used as email attachments. UI supplies
 	// an RLS-aware resolver for files from attachment storage; nil keeps the
 	// ordinary DSL file-sandbox behavior.
@@ -200,7 +203,11 @@ func (c Common) Build() map[string]any {
 	// создания записи. Нужен объектам, создаваемым из обработок/заданий, которые
 	// идут мимо автонумерации хендлеров.
 	if c.Store != nil && c.Reg != nil {
-		numerators := interpreter.NewNumeratorsRoot(c.Ctx, c.Store, c.Reg)
+		ctxSource := c.CtxSource
+		if ctxSource == nil {
+			ctxSource = interpreter.NewStaticCtx(c.Ctx)
+		}
+		numerators := interpreter.NewNumeratorsRoot(ctxSource, c.Store, c.Reg)
 		vars["Нумераторы"] = numerators
 		vars["Numerators"] = numerators
 	}

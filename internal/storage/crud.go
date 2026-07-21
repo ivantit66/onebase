@@ -38,6 +38,19 @@ type FilterValue struct {
 
 // Upsert inserts or updates the object fields.
 func (db *DB) Upsert(ctx context.Context, entityName string, id uuid.UUID, fields map[string]any, entity *metadata.Entity) error {
+	return db.upsert(ctx, entityName, id, fields, entity, true)
+}
+
+// UpsertPreserveVersion updates fields without advancing _version on conflict.
+// It is intentionally narrow: entityservice uses it only for the final write of
+// a new row provisionally inserted earlier in the SAME transaction so a hook can
+// create FK children. The externally visible committed object still starts at
+// version 1. Ordinary callers must use Upsert.
+func (db *DB) UpsertPreserveVersion(ctx context.Context, entityName string, id uuid.UUID, fields map[string]any, entity *metadata.Entity) error {
+	return db.upsert(ctx, entityName, id, fields, entity, false)
+}
+
+func (db *DB) upsert(ctx context.Context, entityName string, id uuid.UUID, fields map[string]any, entity *metadata.Entity, bumpVersion bool) error {
 	d := db.dialect
 	// Read old value for audit diff (best-effort, ignore errors)
 	var oldRow map[string]any
@@ -110,7 +123,9 @@ func (db *DB) Upsert(ctx context.Context, entityName string, id uuid.UUID, field
 	// Оптимистическая блокировка: на каждом UPDATE инкрементируем _version.
 	// На INSERT — DEFAULT 1 из DDL. См. UpsertVersioned для проверки ожидаемой
 	// ревизии перед записью.
-	updates = append(updates, "_version = "+table+"._version + 1")
+	if bumpVersion {
+		updates = append(updates, "_version = "+table+"._version + 1")
+	}
 
 	var sql string
 	if len(updates) == 0 {

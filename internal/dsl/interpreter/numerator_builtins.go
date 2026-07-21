@@ -40,13 +40,13 @@ type NumeratorRegistry interface {
 
 // NumeratorsRoot — корневой DSL-объект Нумераторы.
 type NumeratorsRoot struct {
-	ctx   context.Context
+	ctx   CtxSource
 	store NumeratorStore
 	reg   NumeratorRegistry
 }
 
 // NewNumeratorsRoot создаёт объект для инжекции как DSL extraVar «Нумераторы».
-func NewNumeratorsRoot(ctx context.Context, store NumeratorStore, reg NumeratorRegistry) *NumeratorsRoot {
+func NewNumeratorsRoot(ctx CtxSource, store NumeratorStore, reg NumeratorRegistry) *NumeratorsRoot {
 	return &NumeratorsRoot{ctx: ctx, store: store, reg: reg}
 }
 
@@ -67,9 +67,9 @@ func (r *NumeratorsRoot) CallMethod(method string, args []any) any {
 // простая сквозная последовательность (legacy fallback) в формате 000001.
 //
 //	СледующийНомер("Сущность")        — период по текущей дате;
-//	СледующийНомер("Сущность", Дата)  — период по указанной дате (для numerator
-//	                                    с period: year/month, напр. номер задним
-//	                                    числом в бакете прошлого месяца).
+//	СледующийНомер("Сущность", Дата)  — период по указанной дате;
+//	СледующийНомер("Сущность", Поля)  — дата и scope из map/Структура;
+//	СледующийНомер("Сущность", Дата, Область) — явный scope.
 func (r *NumeratorsRoot) nextNumber(args []any) any {
 	if len(args) < 1 || args[0] == nil {
 		panic(userError{Msg: `СледующийНомер: укажите имя сущности, напр. СледующийНомер("Договоры")`})
@@ -80,21 +80,56 @@ func (r *NumeratorsRoot) nextNumber(args []any) any {
 		panic(userError{Msg: fmt.Sprintf("СледующийНомер: сущность %q не найдена", name)})
 	}
 	fields := map[string]any{}
+	var explicitScope any
 	if len(args) >= 2 {
-		if d, ok := args[1].(time.Time); ok {
+		switch v := args[1].(type) {
+		case time.Time:
+			d := v
 			fields["дата"] = d
+		case map[string]any:
+			for k, value := range v {
+				fields[k] = unwrapRef(value)
+			}
+		case *MapThis:
+			if v != nil {
+				for k, value := range v.M {
+					fields[k] = unwrapRef(value)
+				}
+			}
+		default:
+			explicitScope = unwrapRef(v)
 		}
 	}
 	if entity.Numerator != nil {
 		num := entity.Numerator
+		if len(args) >= 3 {
+			explicitScope = unwrapRef(args[2])
+		}
+		if num.Scope != "" {
+			hasScope := false
+			for field, value := range fields {
+				if strings.EqualFold(field, num.Scope) && value != nil && strings.TrimSpace(fmt.Sprint(value)) != "" {
+					fields[num.Scope] = value
+					hasScope = true
+					break
+				}
+			}
+			if !hasScope && explicitScope != nil && strings.TrimSpace(fmt.Sprint(explicitScope)) != "" {
+				fields[num.Scope] = explicitScope
+				hasScope = true
+			}
+			if !hasScope {
+				panic(userError{Msg: fmt.Sprintf("СледующийНомер: для %s требуется область нумерации %s", entity.Name, num.Scope)})
+			}
+		}
 		periodKey := storage.ComputePeriodKey(num, fields)
-		n, err := r.store.NextNumber(r.ctx, entity.Name, periodKey)
+		n, err := r.store.NextNumber(r.ctx.Ctx(), entity.Name, periodKey)
 		if err != nil {
 			panic(userError{Msg: "СледующийНомер: " + err.Error()})
 		}
 		return storage.FormatNumber(num.Prefix, num.Length, n)
 	}
-	n, err := r.store.NextNum(r.ctx, entity.Name)
+	n, err := r.store.NextNum(r.ctx.Ctx(), entity.Name)
 	if err != nil {
 		panic(userError{Msg: "СледующийНомер: " + err.Error()})
 	}

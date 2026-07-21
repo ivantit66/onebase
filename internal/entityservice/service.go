@@ -170,7 +170,6 @@ func (s *Service) Save(ctx context.Context, req SaveRequest) (SaveResult, error)
 	mc := runtime.NewMovementsCollector(req.Entity.Name, req.ID)
 	SetPeriodFromFields(mc, req.Entity, req.Fields)
 	lockCollector := runtime.NewLockCollector()
-	hookCtx := runtime.ContextWithLockCollector(ctx, lockCollector)
 	defer lockCollector.ReleaseAll()
 
 	obj := &runtime.Object{
@@ -231,55 +230,52 @@ func (s *Service) Save(ctx context.Context, req SaveRequest) (SaveResult, error)
 	proc := s.Reg.GetProcedure(req.Entity.Name, hookName)
 
 	var msgs []string
-	if proc != nil {
-		// Для НОВОГО объекта записываем строку-шапку ДО запуска хука (issue #360).
-		// Хук может создать связанный объект со ссылкой обратно на текущий
-		// (Соб.Прибор = ЭтотОбъект.Ссылка; Соб.Записать() — reference:ЭтотЖе).
-		// Запись связанного объекта из DSL идёт своей автокоммит-транзакцией,
-		// мимо основной транзакции ниже, поэтому строка-родитель уже должна
-		// существовать в БД — иначе FOREIGN KEY constraint failed при попытке
-		// создать+провести новый документ одним действием (post_and_close/new).
-		// Для существующего объекта строка уже закоммичена — пропускаем.
-		if req.IsNew {
-			if err := s.Store.Upsert(ctx, req.Entity.Name, req.ID, obj.Fields, req.Entity); err != nil {
-				return SaveResult{}, err
-			}
-		}
-		var vars map[string]any
-		if s.BuildVars != nil {
-			vars = s.BuildVars(hookCtx, mc, &msgs)
-		}
-		var thisVal interpreter.This = obj
-		if s.MakeThis != nil {
-			thisVal = s.MakeThis(hookCtx, obj, req.Entity)
-		}
-		if err := s.Interp.Run(proc, thisVal, vars); err != nil {
-			// DSL-ошибка (бизнес-правило), а не технический сбой: отдаём текст
-			// в DSLError, БД не трогаем. И *interpreter.DSLError, и обычная
-			// ошибка форматируются одинаково через Error().
-			// Пред-запись шапки нового объекта откатываем, чтобы неудачное
-			// правило не оставляло черновик-сироту. Best-effort: если хук успел
-			// создать ссылающиеся строки, удаление шапки не пройдёт по FK — это
-			// тот же осиротевший результат, что и до фикса (см. issue #360:
-			// прерывание процедуры после ошибки builtin — отдельная задача).
+	// Хук и все его DB-побочные записи выполняются в той же транзакции, что
+	// шапка, ТЧ, движения и проведение. Для нового объекта сначала вставляется
+	// полноценная шапка: FK-ссылки из создаваемых хуком объектов уже валидны, но
+	// при любой последующей ошибке откатываются вместе с родителем.
+	err := s.Store.WithTxIfNeeded(ctx, func(txCtx context.Context) error {
+		if proc != nil {
 			if req.IsNew {
-				_ = s.Store.Delete(ctx, req.Entity.Name, req.ID)
+				if err := s.Store.Upsert(txCtx, req.Entity.Name, req.ID, obj.Fields, req.Entity); err != nil {
+					return err
+				}
 			}
-			return SaveResult{ID: req.ID, DSLError: err.Error(), DSLMessages: msgs, Movements: mc}, nil
+			txHookCtx := runtime.ContextWithLockCollector(txCtx, lockCollector)
+			var vars map[string]any
+			if s.BuildVars != nil {
+				vars = s.BuildVars(txHookCtx, mc, &msgs)
+			}
+			var thisVal interpreter.This = obj
+			if s.MakeThis != nil {
+				thisVal = s.MakeThis(txHookCtx, obj, req.Entity)
+			}
+			if err := s.Interp.Run(proc, thisVal, vars); err != nil {
+				return &hookRunError{err: err}
+			}
 		}
-	}
 
-	// Транзакция: upsert + ТЧ + движения + проведение.
-	err := s.Store.WithTxIfNeeded(ctx, func(ctx context.Context) error {
-		if err := s.Store.AdvisoryXactLock(ctx, lockCollector.Keys()); err != nil {
+		if err := s.Store.AdvisoryXactLock(txCtx, lockCollector.Keys()); err != nil {
 			return err
 		}
-		if req.IsNew || req.ExpectedVersion == nil {
-			if err := s.Store.Upsert(ctx, req.Entity.Name, req.ID, obj.Fields, req.Entity); err != nil {
+		if req.IsNew {
+			var err error
+			if proc != nil {
+				// Строка уже вставлена перед hook. Обновляем изменённые hook-поля,
+				// сохраняя стартовую _version=1.
+				err = s.Store.UpsertPreserveVersion(txCtx, req.Entity.Name, req.ID, obj.Fields, req.Entity)
+			} else {
+				err = s.Store.Upsert(txCtx, req.Entity.Name, req.ID, obj.Fields, req.Entity)
+			}
+			if err != nil {
+				return err
+			}
+		} else if req.ExpectedVersion == nil {
+			if err := s.Store.Upsert(txCtx, req.Entity.Name, req.ID, obj.Fields, req.Entity); err != nil {
 				return err
 			}
 		} else {
-			if err := s.Store.UpsertVersioned(ctx, req.Entity.Name, req.ID, obj.Fields, req.Entity, req.ExpectedVersion); err != nil {
+			if err := s.Store.UpsertVersioned(txCtx, req.Entity.Name, req.ID, obj.Fields, req.Entity, req.ExpectedVersion); err != nil {
 				return err
 			}
 		}
@@ -298,22 +294,22 @@ func (s *Service) Save(ctx context.Context, req SaveRequest) (SaveResult, error)
 			if rows == nil {
 				rows = []map[string]any{}
 			}
-			if err := s.Store.UpsertTablePartRows(ctx, req.Entity.Name, tp.Name, req.ID, rows, tp); err != nil {
+			if err := s.Store.UpsertTablePartRows(txCtx, req.Entity.Name, tp.Name, req.ID, rows, tp); err != nil {
 				return err
 			}
 		}
-		if err := s.writeMovements(ctx, req.Entity.Name, req.ID, mc); err != nil {
+		if err := s.writeMovements(txCtx, req.Entity.Name, req.ID, mc); err != nil {
 			return err
 		}
 		// Регистрация изменения для планов обмена (план 86): объект из состава
 		// плана → строки очереди каждому узлу-получателю. В той же транзакции —
 		// регистрация атомарна с записью объекта.
-		if err := s.registerExchange(ctx, req.Entity, req.ID, false); err != nil {
+		if err := s.registerExchange(txCtx, req.Entity, req.ID, false); err != nil {
 			return err
 		}
 		if req.Entity.Posting {
 			if isPosting {
-				return s.Store.SetPosted(ctx, req.Entity.Name, req.ID, true)
+				return s.Store.SetPosted(txCtx, req.Entity.Name, req.ID, true)
 			}
 			// «Записать» для уже проведённого документа (только при редактировании,
 			// при IsNew проведения нет в принципе) — сбрасываем движения по ВСЕМ
@@ -322,26 +318,30 @@ func (s *Service) Save(ctx context.Context, req SaveRequest) (SaveResult, error)
 			// движения бухгалтерии/сведений оставались осиротевшими.
 			if !req.IsNew {
 				for _, reg := range s.Reg.Registers() {
-					if err := s.Store.WriteMovements(ctx, reg.Name, req.Entity.Name, req.ID, nil, reg, nil); err != nil {
+					if err := s.Store.WriteMovements(txCtx, reg.Name, req.Entity.Name, req.ID, nil, reg, nil); err != nil {
 						return err
 					}
 				}
 				for _, ar := range s.Reg.AccountRegisters() {
-					if err := s.Store.WriteAccountMovements(ctx, ar.Name, req.Entity.Name, req.ID, nil, ar, nil); err != nil {
+					if err := s.Store.WriteAccountMovements(txCtx, ar.Name, req.Entity.Name, req.ID, nil, ar, nil); err != nil {
 						return err
 					}
 				}
 				for _, ir := range s.Reg.InfoRegisters() {
-					if err := s.Store.WriteInfoMovements(ctx, ir.Name, req.Entity.Name, req.ID, nil, ir, nil); err != nil {
+					if err := s.Store.WriteInfoMovements(txCtx, ir.Name, req.Entity.Name, req.ID, nil, ir, nil); err != nil {
 						return err
 					}
 				}
-				return s.Store.SetPosted(ctx, req.Entity.Name, req.ID, false)
+				return s.Store.SetPosted(txCtx, req.Entity.Name, req.ID, false)
 			}
 		}
 		return nil
 	})
 	if err != nil {
+		var hookErr *hookRunError
+		if errors.As(err, &hookErr) {
+			return SaveResult{ID: req.ID, DSLError: hookErr.err.Error(), DSLMessages: msgs, Movements: mc}, nil
+		}
 		return SaveResult{}, err
 	}
 
