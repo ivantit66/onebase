@@ -376,6 +376,10 @@ func (s *Server) appendSelectedRefOptions(ctx context.Context, rows []map[string
 		if !s.rowAllowsSelected(ctx, refEntity, row) {
 			continue
 		}
+		// План 88: замаскировать догруженную (вне первой страницы) выбранную
+		// запись до вычисления подписи и сериализации — иначе ПДн из ссылки
+		// утекли бы в JSON опций (HTML/DevTools) в обход маски списка.
+		s.maskRecord(ctx, refEntity, row)
 		row["_label"] = firstStringField(row, refEntity)
 		rows = append(rows, row)
 		seen[idStr] = true

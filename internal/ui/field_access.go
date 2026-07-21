@@ -150,7 +150,12 @@ func (s *Server) discloseField(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "reason required", http.StatusBadRequest)
 			return
 		}
-		_ = s.store.LogDisclose(r.Context(), string(entity.Kind), entity.Name, id.String(), field.Name, reason)
+		// Fail-closed (CC-SEC-004): раскрытие ПДн без успешной записи в аудит
+		// недопустимо — если журнал недоступен, значение клиенту не выдаём.
+		if err := s.store.LogDisclose(r.Context(), string(entity.Kind), entity.Name, id.String(), field.Name, reason); err != nil {
+			http.Error(w, "audit failed", http.StatusInternalServerError)
+			return
+		}
 	}
 	full, _ := maskCIKeyValue(row, field.Name)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -125,5 +126,103 @@ func TestUI_DiscloseField(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("disclose audit entry missing")
+	}
+}
+
+// LEAK A регресс (план 88): выбранная ссылка, догруженная ВНЕ первой страницы
+// пикера (appendSelectedRefOptions → store.GetByID), должна маскироваться так же,
+// как строки списка — иначе ПДн утекли бы в JSON опций выбора (HTML/DevTools).
+func TestUI_AppendSelectedRefOptions_MasksPII(t *testing.T) {
+	cat := uiClientEntity()
+	s, ctx := newSubmitTestServer(t, []*metadata.Entity{cat})
+	id := uuid.New()
+	if err := s.store.Upsert(ctx, "Клиент", id, map[string]any{
+		"Наименование": "Иванов", "Телефон": "+79161234455",
+	}, cat); err != nil {
+		t.Fatal(err)
+	}
+	user := uiMaskUser([]string{"read"}, auth.FieldPolicies{"Телефон": {Read: "mask_tail", Keep: 4}})
+	uctx := auth.ContextWithUser(ctx, user)
+
+	// rows пуст → выбранный id идёт через GetByID — путь, который раньше не
+	// маскировался.
+	rows := s.appendSelectedRefOptions(uctx, nil, cat, []string{id.String()})
+	if len(rows) != 1 {
+		t.Fatalf("ожидалась 1 выбранная опция, получено %d", len(rows))
+	}
+	phone, _ := rows[0]["Телефон"].(string)
+	if phone == "+79161234455" {
+		t.Fatalf("ПДн утекли в опции выбора: %q", phone)
+	}
+	if !strings.HasSuffix(phone, "4455") || !strings.Contains(phone, "•") {
+		t.Fatalf("Телефон должен быть замаскирован (mask_tail keep=4), получено %q", phone)
+	}
+	if rows[0]["_label"] != "Иванов" {
+		t.Fatalf("подпись опции должна остаться видимой, получено %v", rows[0]["_label"])
+	}
+}
+
+// LEAK B+C регресс (план 88): buildPrintRefs разрешает связанные записи для
+// печатной формы (декларативный и DSL-пути) и обязан маскировать их ПДн —
+// иначе полное значение поля ссылки утекло бы в готовый PDF.
+func TestUI_BuildPrintRefs_MasksPII(t *testing.T) {
+	client := uiClientEntity()
+	s, ctx := newSubmitTestServer(t, []*metadata.Entity{client})
+	clientID := uuid.New()
+	if err := s.store.Upsert(ctx, "Клиент", clientID, map[string]any{
+		"Наименование": "Иванов", "Телефон": "+79161234455",
+	}, client); err != nil {
+		t.Fatal(err)
+	}
+	// Документ с полем-ссылкой на Клиента; сам документ в реестр не нужен —
+	// buildPrintRefs берёт метаданные ссылки из реестра (Клиент зарегистрирован).
+	doc := &metadata.Entity{
+		Name: "Звонок", Kind: metadata.KindDocument,
+		Fields: []metadata.Field{{Name: "Клиент", RefEntity: "Клиент"}},
+	}
+	user := uiMaskUser([]string{"read"}, auth.FieldPolicies{"Телефон": {Read: "mask_tail", Keep: 4}})
+	uctx := auth.ContextWithUser(ctx, user)
+
+	refs := s.buildPrintRefs(uctx, map[string]any{"Клиент": clientID.String()}, doc, nil)
+	ref := refs[clientID.String()]
+	if ref == nil {
+		t.Fatal("ссылка на клиента не разрешена")
+	}
+	phone, _ := ref["Телефон"].(string)
+	if phone == "+79161234455" {
+		t.Fatalf("ПДн утекли в связанные записи печати: %q", phone)
+	}
+	if !strings.HasSuffix(phone, "4455") || !strings.Contains(phone, "•") {
+		t.Fatalf("Телефон ссылки должен быть замаскирован, получено %q", phone)
+	}
+}
+
+// Fail-closed регресс (CC-SEC-004): если запись в аудит раскрытия не удалась,
+// значение ПДн НЕ выдаётся клиенту. Схему аудита намеренно не создаём, поэтому
+// LogDisclose падает — раскрытие должно вернуть 500 без значения.
+func TestUI_DiscloseField_FailClosedWhenAuditFails(t *testing.T) {
+	cat := uiClientEntity()
+	s, ctx := newSubmitTestServer(t, []*metadata.Entity{cat})
+	// НАМЕРЕННО не вызываем EnsureAuditSchema → LogDisclose вернёт ошибку.
+	id := uuid.New()
+	if err := s.store.Upsert(ctx, "Клиент", id, map[string]any{"Телефон": "+79161234455"}, cat); err != nil {
+		t.Fatal(err)
+	}
+	user := uiMaskUser([]string{"read", "disclose"}, auth.FieldPolicies{"Телефон": {Read: "mask_tail", Keep: 4}})
+
+	form := url.Values{"field": {"Телефон"}, "reason": {"звонок клиента"}}
+	r := reqWithChi("POST", "/ui/catalog/Клиент/"+id.String()+"/disclose", form,
+		map[string]string{"kind": "catalog", "entity": "Клиент", "id": id.String()})
+	rctx := auth.ContextWithUser(r.Context(), user)
+	rctx = storage.WithAuditUser(rctx, user.ID, user.Login)
+	r = r.WithContext(rctx)
+	w := httptest.NewRecorder()
+	s.discloseField(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("ожидался 500 при отказе аудита, получено %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "+79161234455") {
+		t.Fatal("ПДн не должны раскрываться при отказе записи в аудит")
 	}
 }

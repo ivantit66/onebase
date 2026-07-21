@@ -206,6 +206,10 @@ func (s *Server) buildPrintRefs(ctx context.Context, row map[string]any, entity 
 		if err != nil {
 			return
 		}
+		// План 88: маскировать ПДн в связанных записях до попадания в печатную
+		// форму/PDF (декларативный и DSL-пути) — иначе полное значение поля
+		// ссылки утекло бы в готовый документ в обход маски основной записи.
+		s.maskRecord(ctx, refEntity, refRow)
 		refs[idStr] = refRow
 	}
 	for _, f := range entity.Fields {

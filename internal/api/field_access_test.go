@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -179,6 +180,32 @@ func TestAPI_FieldDisclose(t *testing.T) {
 	_ = json.Unmarshal(rec2.Body.Bytes(), &env2)
 	if env2.Data.Value != "••••••••4455" {
 		t.Fatalf("plain field fetch must be masked: %q", env2.Data.Value)
+	}
+}
+
+// Fail-closed регресс (CC-SEC-004): при отказе записи в аудит REST-раскрытие не
+// выдаёт значение ПДн. Схему аудита намеренно не создаём — LogDisclose падает,
+// раскрытие должно вернуть 500 без значения.
+func TestAPI_FieldDisclose_FailClosedWhenAuditFails(t *testing.T) {
+	cat := clientEntityAPI()
+	h, ctx := newAPITestHandler(t, []*metadata.Entity{cat}, nil)
+	// НАМЕРЕННО без EnsureAuditSchema → LogDisclose вернёт ошибку.
+	id := uuid.New()
+	if err := h.store.Upsert(ctx, "Клиент", id, map[string]any{"Телефон": "+79161234455"}, cat); err != nil {
+		t.Fatal(err)
+	}
+	discloser := maskUser([]string{"read", "disclose"}, auth.FieldPolicies{"Телефон": {Read: "mask_tail", Keep: 4}})
+	target := "/catalogs/Клиент/" + id.String() + "/field/Телефон?disclose=1&reason=" + url.QueryEscape("звонок клиента")
+	req := withUser(reqWithEntity("GET", target, nil,
+		map[string]string{"name": "Клиент", "id": id.String(), "field": "Телефон"}, nil), discloser)
+	rec := httptest.NewRecorder()
+	h.discloseField(metadata.KindCatalog).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("ожидался 500 при отказе аудита, получено %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "+79161234455") {
+		t.Fatal("ПДн не должны раскрываться при отказе записи в аудит")
 	}
 }
 

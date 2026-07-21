@@ -392,6 +392,7 @@ func roleYAMLSchema() *yamlLintSchema {
 		"reports":        freeMap(),
 		"processors":     freeMap(),
 		"row_access":     freeMap(),
+		"field_access":   freeMap(),
 	})
 	return with(obj("name", "description"), map[string]*yamlLintSchema{"permissions": perm})
 }

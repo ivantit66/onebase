@@ -146,7 +146,12 @@ func (h *handler) discloseField(kind metadata.Kind) http.HandlerFunc {
 					writeError(w, http.StatusBadRequest, "reason required for disclosure", "", 0)
 					return
 				}
-				_ = h.store.LogDisclose(r.Context(), string(kind), entityName, id.String(), field.Name, reason)
+				// Fail-closed (CC-SEC-004): без успешной записи в аудит раскрытие
+				// ПДн не выдаём — журнал недоступен ⇒ 500, значение не уходит.
+				if err := h.store.LogDisclose(r.Context(), string(kind), entityName, id.String(), field.Name, reason); err != nil {
+					writeError(w, http.StatusInternalServerError, "audit failed", "", 0)
+					return
+				}
 			}
 			writeJSONV2(w, http.StatusOK, restV2Envelope{Data: map[string]any{
 				"field": field.Name, "value": full, "disclosed": masked,
