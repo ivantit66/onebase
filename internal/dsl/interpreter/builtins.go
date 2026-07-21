@@ -443,6 +443,7 @@ func KnownBuiltinNames() map[string]struct{} {
 		"документы", "documents",
 		"регистрынакопления", "accumulationregisters",
 		"предопределённыезначения", "predefinedvalues",
+		"нумераторы", "numerators",
 		"значениереквизитаобъекта", "objectattributevalue",
 		"значенияреквизитовобъектов", "objectattributevalues",
 		"выполнитькоманду", "executecommand",
