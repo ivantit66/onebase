@@ -1,6 +1,7 @@
 package query_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ivantit66/onebase/internal/metadata"
@@ -123,5 +124,53 @@ func TestCompile_Sources_RefDimToDocument(t *testing.T) {
 	}
 	if !hasSource(res.Sources, "document", "Заказ") {
 		t.Fatalf("связанный документ Заказ должен попасть в Sources как document, среди %+v", res.Sources)
+	}
+}
+
+func TestCompile_ProjectionFieldsPreserveProvenance(t *testing.T) {
+	entity := &metadata.Entity{
+		Name: "Клиент",
+		Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{
+			{Name: "Телефон", Type: metadata.FieldTypeString},
+			{Name: "Наименование", Type: metadata.FieldTypeString},
+		},
+	}
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{"alias", `ВЫБРАТЬ К.Телефон КАК Контакт ИЗ Справочник.Клиент КАК К`, []string{"Телефон"}},
+		{"expression", `ВЫБРАТЬ Строка(Телефон) КАК Контакт ИЗ Справочник.Клиент`, []string{"Телефон"}},
+		{"wildcard", `ВЫБРАТЬ * ИЗ Справочник.Клиент`, []string{"*"}},
+		{"where is not projection", `ВЫБРАТЬ Наименование ИЗ Справочник.Клиент ГДЕ Телефон <> ""`, []string{"Наименование"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := query.Compile(tc.text, query.CompileOpts{Entities: []*metadata.Entity{entity}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range tc.want {
+				found := false
+				for _, got := range res.ProjectionFields {
+					if strings.EqualFold(got, want) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("projection %v does not contain %q", res.ProjectionFields, want)
+				}
+			}
+			if tc.name == "where is not projection" {
+				for _, got := range res.ProjectionFields {
+					if strings.EqualFold(got, "Телефон") {
+						t.Fatalf("WHERE-only field leaked into projection: %v", res.ProjectionFields)
+					}
+				}
+			}
+		})
 	}
 }

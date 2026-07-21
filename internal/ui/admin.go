@@ -777,6 +777,7 @@ func (s *Server) adminUserRolesUpdate(w http.ResponseWriter, r *http.Request) {
 			s.authRepo.UnassignRole(r.Context(), userID, role.ID)
 		}
 	}
+	s.InvalidateWidgetCache()
 	http.Redirect(w, r, "/ui/admin/users", http.StatusFound)
 }
 

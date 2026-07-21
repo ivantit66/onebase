@@ -140,7 +140,7 @@ type Runner struct {
 	Store       *storage.DB
 	CurrentUser string // login of the user looking at the dashboard (for recent.scope=current_user)
 	User        *auth.User
-	Cache       *Cache // optional — when set, results are cached by widget name + user
+	Cache       *Cache // optional — key includes widget, user and authorization fingerprint
 }
 
 // New creates a Runner. The Resolve hook is optional — when non-nil it is
@@ -156,7 +156,11 @@ func New(reg *runtime.Registry, store *storage.DB) *Runner {
 // "actions" widget type is purely declarative so it skips the cache.
 func (r *Runner) Run(ctx context.Context, w *metadata.Widget) Result {
 	if r.Cache != nil && w.Type != metadata.WidgetTypeActions {
-		key := cacheKey(w.Name, r.CurrentUser)
+		security, cacheable := securityFingerprint(r.User)
+		if !cacheable {
+			return r.runOnce(ctx, w)
+		}
+		key := cacheKey(w.Name, r.CurrentUser, security)
 		if cached, ok := r.Cache.get(key); ok {
 			return cached
 		}
@@ -483,14 +487,12 @@ func (r *Runner) runQuery(ctx context.Context, w *metadata.Widget) ([]map[string
 	if denied := r.deniedQuerySource(compiled.Sources); denied != "" {
 		return nil, nil, &accessDeniedError{object: denied}
 	}
+	if denied := access.DeniedMaskedColumn(r.User, compiled.Sources, compiled.ProjectionFields, r.sourceMeta); denied != "" {
+		return nil, nil, &accessDeniedError{object: "поле «" + denied + "»"}
+	}
 	rows, cols, err := r.Store.RunQuery(ctx, compiled.SQL, compiled.Args)
 	if err != nil {
 		return rows, cols, err
-	}
-	// План 88D (fail-closed): виджет non-admin с чувствительной колонкой в выводе
-	// не строится, пока компилятор не маскирует проекцию в SQL (88E).
-	if denied := access.DeniedMaskedColumn(r.User, compiled.Sources, cols, r.sourceMeta); denied != "" {
-		return nil, nil, &accessDeniedError{object: "поле «" + denied + "»"}
 	}
 	return rows, cols, nil
 }
@@ -515,7 +517,9 @@ func (r *Runner) sourceMeta(kind, name string) *metadata.Entity {
 // setResultError переводит его в Result.AccessDenied.
 type accessDeniedError struct{ object string }
 
-func (e *accessDeniedError) Error() string { return "нет доступа к объекту: " + e.object }
+func (e *accessDeniedError) Error() string {
+	return "нет доступа к объекту: " + e.object
+}
 
 // setResultError записывает ошибку в Result, помечая отказ в доступе.
 func setResultError(res *Result, err error) {

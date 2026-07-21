@@ -148,6 +148,35 @@ func TestAIActions_StageCreate_Errors(t *testing.T) {
 	}
 }
 
+func TestAIActions_ReferenceLabelsHonorFieldMasking(t *testing.T) {
+	ents := aiActionsEntities()
+	s, ctx := newSubmitTestServer(t, ents)
+	contraID := uuid.New()
+	if err := s.store.Upsert(ctx, "Контрагенты", contraID, map[string]any{"Наименование": "Ромашка"}, ents[0]); err != nil {
+		t.Fatal(err)
+	}
+	user := &auth.User{Login: "masked", Roles: []*auth.Role{{Permissions: auth.Permission{
+		Catalogs: map[string][]string{"Контрагенты": {"read"}},
+		FieldAccess: auth.FieldAccess{Catalogs: map[string]auth.FieldPolicies{
+			"Контрагенты": {"Наименование": {Read: "mask_all"}},
+		}},
+	}}}}
+	userCtx := auth.ContextWithUser(ctx, user)
+
+	display, ok := s.aiRefDisplay(userCtx, ents[0], contraID)
+	if !ok || display != "••••••" {
+		t.Fatalf("masked reference display = %q, %v", display, ok)
+	}
+	refField := ents[1].Fields[2]
+	if _, _, err := s.aiNormalizeValue(userCtx, refField, "Ромашка"); err == nil || !strings.Contains(err.Error(), "защищённому полю") {
+		t.Fatalf("name lookup over protected field must fail closed, got %v", err)
+	}
+	value, label, err := s.aiNormalizeValue(userCtx, refField, contraID.String())
+	if err != nil || fmt.Sprint(value) != contraID.String() || label != "••••••" {
+		t.Fatalf("UUID lookup must return masked label: value=%v label=%q err=%v", value, label, err)
+	}
+}
+
 func TestAIActionRun_CreatesDraft(t *testing.T) {
 	ents := aiActionsEntities()
 	s, ctx := newSubmitTestServer(t, ents)

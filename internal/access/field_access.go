@@ -135,15 +135,13 @@ func HasFieldPolicy(u *auth.User, kind, entity string, meta *metadata.Entity) bo
 	return len(FieldDecisions(u, kind, entity, meta)) > 0
 }
 
-// DeniedMaskedColumn is the fail-closed gate for reports/AI (план 88D). Until the
-// query compiler can mask projections in SQL (этап 88E), a non-admin query that
-// outputs a column masked or hidden for the user is refused: it returns the first
-// such output column, or "" if the projection is safe. Because it inspects the
-// executed result columns, unrelated reports over the same object (that do not
-// select the sensitive field) are not blocked. lookup resolves a source object's
-// metadata and may return nil.
+// DeniedMaskedColumn is the fail-closed gate for reports/AI (план 88D). cols are
+// logical source fields from query.Result.ProjectionFields, not SQL result column
+// names: aliases and expressions must not erase the protected-field provenance.
+// A wildcard is denied whenever at least one source field is masked or hidden.
+// lookup resolves a source object's metadata and may return nil.
 func DeniedMaskedColumn(u *auth.User, sources []query.SourceRef, cols []string, lookup func(kind, name string) *metadata.Entity) string {
-	if u == nil || u.IsAdmin {
+	if u == nil || (u.IsAdmin && !MaskAdmin()) {
 		return ""
 	}
 	masked := map[string]bool{}
@@ -160,6 +158,9 @@ func DeniedMaskedColumn(u *auth.User, sources []query.SourceRef, cols []string, 
 		return ""
 	}
 	for _, c := range cols {
+		if strings.TrimSpace(c) == "*" {
+			return c
+		}
 		if masked[strings.ToLower(strings.TrimSpace(c))] {
 			return c
 		}
