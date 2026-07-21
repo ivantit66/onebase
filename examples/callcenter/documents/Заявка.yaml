@@ -1,0 +1,22 @@
+name: Заявка
+title: Заявка
+# Демонстрационный объект плана 89: заявка проверяется управляемыми правилами
+# при записи (хук ПриЗаписи в src/Заявка.os). Непроводимый документ — каждая
+# запись идёт через OnWrite, где применяются действующие правила валидации.
+numerator:
+  prefix: "ЗАЯ-"
+  length: 6
+  period: year
+fields:
+  - name: Номер
+    type: string
+  - name: Дата
+    type: date
+  - name: Клиент
+    type: reference:Клиент
+  - name: Улица
+    type: string
+  - name: Телефон
+    type: string
+  - name: Комментарий
+    type: string
