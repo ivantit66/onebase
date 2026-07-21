@@ -194,5 +194,15 @@ func (c Common) Build() map[string]any {
 		vars["ПланыОбмена"] = exchangeRoot
 		vars["ExchangePlans"] = exchangeRoot
 	}
+
+	// Нумераторы (issue #358): Нумераторы.СледующийНомер("Сущность"[, Дата]) —
+	// доступ из DSL к тому же атомарному счётчику автонумерации, что и REST/UI-путь
+	// создания записи. Нужен объектам, создаваемым из обработок/заданий, которые
+	// идут мимо автонумерации хендлеров.
+	if c.Store != nil && c.Reg != nil {
+		numerators := interpreter.NewNumeratorsRoot(c.Ctx, c.Store, c.Reg)
+		vars["Нумераторы"] = numerators
+		vars["Numerators"] = numerators
+	}
 	return vars
 }
