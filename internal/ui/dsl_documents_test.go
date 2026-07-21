@@ -12,6 +12,7 @@ import (
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
 	"github.com/ivantit66/onebase/internal/dsl/lexer"
 	"github.com/ivantit66/onebase/internal/dsl/parser"
+	"github.com/ivantit66/onebase/internal/exchange"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/runtime"
 	"github.com/ivantit66/onebase/internal/storage"
@@ -56,6 +57,17 @@ func TestDocsRoot_CreateWritePost(t *testing.T) {
 	if err := db.MigrateRegisters(ctx, []*metadata.Register{reg}); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.EnsureExchangeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	plan := &metadata.ExchangePlan{
+		Name: "Документы", Content: []string{"Документ.ПоступлениеТоваров"},
+		Nodes: []metadata.ExchangeNode{{Code: "center"}, {Code: "fil01"}},
+	}
+	plan.Normalize()
+	if err := db.SaveExchangeThisNode(ctx, plan.Name, "center"); err != nil {
+		t.Fatal(err)
+	}
 
 	// OnPost: пишем приход в регистр по строкам ТЧ.
 	onPostSrc := `Процедура ОбработкаПроведения()
@@ -74,6 +86,7 @@ func TestDocsRoot_CreateWritePost(t *testing.T) {
 		Programs:  map[string]*ast.Program{"ПоступлениеТоваров": prog},
 		Registers: []*metadata.Register{reg},
 	})
+	registry.LoadExchangePlans([]*metadata.ExchangePlan{plan})
 
 	interp := interpreter.New()
 	interp.LookupProc = registry.GetModuleProc
@@ -148,6 +161,31 @@ func TestDocsRoot_CreateWritePost(t *testing.T) {
 	db.QueryRow(ctx, "SELECT posted FROM поступлениетоваров LIMIT 1").Scan(&posted)
 	if !posted {
 		t.Error("документ не помечен проведённым")
+	}
+
+	// Финальный Upsert после OnPost повышает версию. Очередь должна содержать
+	// именно её, иначе BuildPackage пропустит документ как stale change.
+	version, err := db.EntityVersion(ctx, doc.Name, w.obj.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes, err := db.PendingExchangeChanges(ctx, plan.Name, "fil01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 || changes[0].Version != version {
+		t.Fatalf("очередь=%+v, финальная версия=%d", changes, version)
+	}
+	data, err := exchange.BuildPackage(ctx, db, registry, plan, "fil01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := exchange.ParsePackage(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pkg.Objects) != 1 || !pkg.Objects[0].Posted || pkg.Objects[0].Version != version {
+		t.Fatalf("DSL-проведение не попало в пакет: %+v", pkg.Objects)
 	}
 }
 

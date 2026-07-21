@@ -69,11 +69,7 @@ func (s *Server) exchangeAuthedPlan(w http.ResponseWriter, r *http.Request) *met
 	return plan
 }
 
-func (s *Server) exchangePair(w http.ResponseWriter, r *http.Request, plan *metadata.ExchangePlan) (thisNode, peerNode string, ok bool) {
-	if len(plan.Nodes) != 2 {
-		http.Error(w, "онлайн-обмен поддерживает только планы из двух узлов", http.StatusConflict)
-		return "", "", false
-	}
+func (s *Server) exchangePair(w http.ResponseWriter, r *http.Request, plan *metadata.ExchangePlan, requestedPeer string) (thisNode, peerNode string, ok bool) {
 	thisNode, err := s.store.GetExchangeThisNode(r.Context(), plan.Name)
 	if err != nil {
 		http.Error(w, "не удалось прочитать текущий узел", http.StatusInternalServerError)
@@ -85,13 +81,27 @@ func (s *Server) exchangePair(w http.ResponseWriter, r *http.Request, plan *meta
 		return "", "", false
 	}
 	thisNode = thisDef.Code
-	for _, node := range plan.Nodes {
-		if !strings.EqualFold(node.Code, thisNode) {
-			return thisNode, node.Code, true
-		}
+	peerDef := plan.Node(strings.TrimSpace(requestedPeer))
+	if peerDef == nil || strings.EqualFold(peerDef.Code, thisNode) {
+		http.Error(w, "узел-партнёр не найден или совпадает с текущим", http.StatusForbidden)
+		return "", "", false
 	}
-	http.Error(w, "партнёр плана не найден", http.StatusConflict)
-	return "", "", false
+	// Допустимо только ребро топологии. Для пары/плоского плана это любой другой
+	// узел; для звезды — только hub↔spoke. Проверяем обе стороны, чтобы helper
+	// оставался корректным при будущей направленной топологии.
+	allowed := func(from, to string) bool {
+		for _, target := range plan.RegistrationTargets(from) {
+			if strings.EqualFold(target, to) {
+				return true
+			}
+		}
+		return false
+	}
+	if !allowed(thisNode, peerDef.Code) || !allowed(peerDef.Code, thisNode) {
+		http.Error(w, "обмен между указанными узлами запрещён топологией плана", http.StatusForbidden)
+		return "", "", false
+	}
+	return thisNode, peerDef.Code, true
 }
 
 func (s *Server) exchangePush(w http.ResponseWriter, r *http.Request) {
@@ -109,13 +119,13 @@ func (s *Server) exchangePush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "тело пакета: "+err.Error(), status)
 		return
 	}
-	thisNode, peerNode, ok := s.exchangePair(w, r, plan)
-	if !ok {
-		return
-	}
 	pkg, err := exchange.ParsePackage(body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	thisNode, peerNode, ok := s.exchangePair(w, r, plan, pkg.FromNode)
+	if !ok {
 		return
 	}
 	if !strings.EqualFold(pkg.FromNode, peerNode) || !strings.EqualFold(pkg.ToNode, thisNode) {
@@ -136,16 +146,12 @@ func (s *Server) exchangePull(w http.ResponseWriter, r *http.Request) {
 	if plan == nil {
 		return
 	}
-	_, peerNode, ok := s.exchangePair(w, r, plan)
+	toNode := strings.TrimSpace(r.URL.Query().Get("to"))
+	_, peerNode, ok := s.exchangePair(w, r, plan, toNode)
 	if !ok {
 		return
 	}
-	toNode := strings.TrimSpace(r.URL.Query().Get("to"))
-	if toNode == "" || !strings.EqualFold(toNode, peerNode) {
-		http.Error(w, "пакет можно получить только для узла-партнёра", http.StatusForbidden)
-		return
-	}
-	data, err := exchange.BuildPackage(r.Context(), s.store, s.reg, plan, toNode)
+	data, err := exchange.BuildPackage(r.Context(), s.store, s.reg, plan, peerNode)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
