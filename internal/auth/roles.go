@@ -25,6 +25,7 @@ type Permission struct {
 	Reports      map[string][]string `yaml:"reports"`
 	Processors   map[string][]string `yaml:"processors"`
 	RowAccess    RowAccess           `yaml:"row_access"`
+	FieldAccess  FieldAccess         `yaml:"field_access"`
 }
 
 // Role is a named set of permissions.
@@ -140,6 +141,7 @@ func normalizePermission(p Permission) Permission {
 		Reports:      normalizePermissionMap(p.Reports),
 		Processors:   normalizePermissionMap(p.Processors),
 		RowAccess:    normalizeRowAccess(p.RowAccess),
+		FieldAccess:  normalizeFieldAccess(p.FieldAccess),
 	}
 }
 
@@ -174,6 +176,7 @@ func mergePermissions(dst, src Permission) Permission {
 	dst.Reports = mergePermissionMap(dst.Reports, src.Reports)
 	dst.Processors = mergePermissionMap(dst.Processors, src.Processors)
 	dst.RowAccess = mergeRowAccess(dst.RowAccess, src.RowAccess)
+	dst.FieldAccess = mergeFieldAccess(dst.FieldAccess, src.FieldAccess)
 	return normalizePermission(dst)
 }
 
@@ -209,6 +212,11 @@ func permissionFromYAMLMap(node *yaml.Node) Permission {
 			var ra RowAccess
 			if err := value.Decode(&ra); err == nil {
 				p.RowAccess = mergeRowAccess(p.RowAccess, ra)
+			}
+		case fieldAccessKey(key):
+			var fa FieldAccess
+			if err := value.Decode(&fa); err == nil {
+				p.FieldAccess = mergeFieldAccess(p.FieldAccess, fa)
 			}
 		default:
 			if kind := permissionKindFromKey(key); kind != "" {
@@ -486,6 +494,7 @@ func marshalPermissions(p Permission) (string, error) {
 		Reports      map[string][]string `json:"reports,omitempty"`
 		Processors   map[string][]string `json:"processors"`
 		RowAccess    RowAccess           `json:"row_access,omitempty"`
+		FieldAccess  FieldAccess         `json:"field_access,omitempty"`
 	}
 	b, err := jsonMarshal(permJSON{
 		AIDataAccess: p.AIDataAccess,
@@ -496,6 +505,7 @@ func marshalPermissions(p Permission) (string, error) {
 		Reports:      p.Reports,
 		Processors:   p.Processors,
 		RowAccess:    p.RowAccess,
+		FieldAccess:  p.FieldAccess,
 	})
 	if err != nil {
 		return "{}", err
@@ -533,6 +543,11 @@ func permissionFromJSONMap(raw map[string]json.RawMessage) Permission {
 			var ra RowAccess
 			if err := json.Unmarshal(value, &ra); err == nil {
 				p.RowAccess = mergeRowAccess(p.RowAccess, ra)
+			}
+		case fieldAccessKey(key):
+			var fa FieldAccess
+			if err := json.Unmarshal(value, &fa); err == nil {
+				p.FieldAccess = mergeFieldAccess(p.FieldAccess, fa)
 			}
 		default:
 			if kind := permissionKindFromKey(key); kind != "" {

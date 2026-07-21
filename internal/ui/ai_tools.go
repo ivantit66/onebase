@@ -191,6 +191,11 @@ func (s *Server) aiRunQuery(ctx context.Context, call llm.ToolCall) llm.ToolResu
 	if err != nil {
 		return llm.ToolResult{ID: call.ID, Content: "ошибка выполнения: " + err.Error(), IsError: true}
 	}
+	// План 88D (fail-closed): модель не получает чувствительное поле через запрос,
+	// пока компилятор не маскирует проекцию в SQL.
+	if denied := s.deniedMaskedColumn(ctx, res.Sources, queryColumns(rows)); denied != "" {
+		return llm.ToolResult{ID: call.ID, Content: "нет доступа к защищённому полю: " + denied, IsError: true}
+	}
 	truncated := false
 	if len(rows) > aiQueryRowLimit {
 		rows = rows[:aiQueryRowLimit]

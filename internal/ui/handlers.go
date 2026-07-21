@@ -160,6 +160,9 @@ func (s *Server) referenceOptionsWithParams(ctx context.Context, refEntity *meta
 		return nil, err
 	}
 	rows = filterOutFolders(rows)
+	// План 88: picker маскирует чувствительные поля до вычисления подписи и до
+	// сериализации строк — иначе замаскированное поле утекло бы в JSON выбора.
+	s.maskRecords(ctx, refEntity, rows)
 	for _, row := range rows {
 		row["_label"] = firstStringField(row, refEntity)
 	}

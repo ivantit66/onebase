@@ -51,7 +51,10 @@ type AuditEntry struct {
 	OldValue   any
 	NewValue   any
 	IP         string
-	At         time.Time
+	// Reason — обоснование действия (план 88): заполняется при action=disclose
+	// (раскрытие замаскированного поля ПДн). Для остальных действий пустое.
+	Reason string
+	At     time.Time
 }
 
 // AuditFilter for querying audit log.
@@ -80,12 +83,16 @@ func (db *DB) EnsureAuditSchema(ctx context.Context) error {
 			old_value %s,
 			new_value %s,
 			ip TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
 			at %s NOT NULL DEFAULT %s
 		)`, d.TypeUUID(), d.TypeUUID(), d.TypeUUID(), d.TypeJSON(), d.TypeJSON(),
 		d.TypeTimestamp(), d.CurrentTimestampTZ())
 	if _, err := db.Exec(ctx, ddl); err != nil {
 		return fmt.Errorf("audit: create _audit: %w", err)
 	}
+	// reason — колонка добавлена планом 88; для баз, созданных раньше, дотягиваем
+	// её ALTER-ом (existing rows → NULL, читаем через COALESCE).
+	_ = db.AddColumnIfMissing(ctx, "_audit", "reason", "TEXT")
 	_, _ = db.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_audit_record ON _audit (entity_name, record_id)`)
 	_, _ = db.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_audit_user ON _audit (user_id, at DESC)`)
 	_, _ = db.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_audit_at ON _audit (at DESC)`)
@@ -122,15 +129,15 @@ func (db *DB) Log(ctx context.Context, e *AuditEntry) error {
 	}
 
 	q := fmt.Sprintf(`
-		INSERT INTO _audit (id, user_id, user_login, action, entity_kind, entity_name, record_id, field, old_value, new_value, ip)
-		VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s%s, %s%s, %s)`,
+		INSERT INTO _audit (id, user_id, user_login, action, entity_kind, entity_name, record_id, field, old_value, new_value, ip, reason)
+		VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s%s, %s%s, %s, %s)`,
 		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4),
 		d.Placeholder(5), d.Placeholder(6), d.Placeholder(7), d.Placeholder(8),
-		d.Placeholder(9), d.JSONCast(), d.Placeholder(10), d.JSONCast(), d.Placeholder(11))
+		d.Placeholder(9), d.JSONCast(), d.Placeholder(10), d.JSONCast(), d.Placeholder(11), d.Placeholder(12))
 	err := db.execAudit(ctx, q,
 		uuid.NewString(),
 		userID, e.UserLogin, e.Action, e.EntityKind, e.EntityName, recordID, e.Field,
-		oldVal, newVal, e.IP)
+		oldVal, newVal, e.IP, e.Reason)
 	return err
 }
 
@@ -138,7 +145,7 @@ func (db *DB) Log(ctx context.Context, e *AuditEntry) error {
 func (db *DB) AuditByRecord(ctx context.Context, entityName string, recordID uuid.UUID) ([]*AuditEntry, error) {
 	d := db.dialect
 	q := fmt.Sprintf(`
-		SELECT id, user_id, user_login, action, entity_kind, entity_name, record_id, field, old_value, new_value, ip, at
+		SELECT id, user_id, user_login, action, entity_kind, entity_name, record_id, field, old_value, new_value, ip, COALESCE(reason,''), at
 		FROM _audit
 		WHERE entity_name = %s AND record_id = %s
 		ORDER BY at DESC`, d.Placeholder(1), d.Placeholder(2))
@@ -187,7 +194,7 @@ func (db *DB) AuditSearch(ctx context.Context, filter AuditFilter, limit, offset
 		idx++
 	}
 
-	q := `SELECT id, user_id, user_login, action, entity_kind, entity_name, record_id, field, old_value, new_value, ip, at FROM _audit`
+	q := `SELECT id, user_id, user_login, action, entity_kind, entity_name, record_id, field, old_value, new_value, ip, COALESCE(reason,''), at FROM _audit`
 	if len(where) > 0 {
 		q += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -304,6 +311,26 @@ func (db *DB) LogAction(ctx context.Context, action, kind, entityName, recordID,
 	})
 }
 
+// LogDisclose records a field disclosure (план 88, CC-SEC-004). Пишется
+// БЕЗУСЛОВНО, независимо от настроек журнала: раскрытие замаскированного ПДн —
+// привилегированное действие, которое должно оставаться прослеживаемым даже у
+// администратора. Само раскрытое значение НЕ сохраняется (CC-DATA-111) —
+// new_value фиксировано «(раскрыто)», а обоснование пишется в reason.
+func (db *DB) LogDisclose(ctx context.Context, kind, entityName, recordID, field, reason string) error {
+	u, _ := auditUserFromCtx(ctx)
+	return db.Log(ctx, &AuditEntry{
+		UserID:     u.UserID,
+		UserLogin:  u.UserLogin,
+		Action:     "disclose",
+		EntityKind: kind,
+		EntityName: entityName,
+		RecordID:   recordID,
+		Field:      field,
+		NewValue:   "(раскрыто)",
+		Reason:     reason,
+	})
+}
+
 type auditRowsScanner interface {
 	Next() bool
 	Scan(dest ...any) error
@@ -327,7 +354,7 @@ func scanAuditRows(rows auditRowsScanner) ([]*AuditEntry, error) {
 		if err := rows.Scan(
 			&auditID, &userID, &e.UserLogin, &e.Action,
 			&e.EntityKind, &e.EntityName, &recordID,
-			&e.Field, &oldVal, &newVal, &e.IP, &at,
+			&e.Field, &oldVal, &newVal, &e.IP, &e.Reason, &at,
 		); err != nil {
 			return nil, err
 		}

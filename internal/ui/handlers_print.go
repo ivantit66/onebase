@@ -119,6 +119,8 @@ func (s *Server) loadPrintContext(r *http.Request, entity *metadata.Entity, id u
 	if err != nil {
 		return nil, err
 	}
+	// План 88: маска ПДн применяется до генерации печатной формы/PDF.
+	s.maskRecord(r.Context(), entity, row)
 	tpRows := make(map[string][]map[string]any)
 	for _, tp := range entity.TableParts {
 		rows, _ := s.store.GetTablePartRows(r.Context(), entity.Name, tp.Name, id, tp)
@@ -405,6 +407,9 @@ func (s *Server) buildDSLPF(w http.ResponseWriter, r *http.Request, entity *meta
 		http.Error(w, s.errText(r, err), 404)
 		return nil, false
 	}
+	// План 88: маска ПДн применяется и в DSL-печати — иначе печатная форма стала
+	// бы каналом обхода маскирования для оператора.
+	s.maskRecord(r.Context(), entity, row)
 
 	tpRows := make(map[string][]map[string]any)
 	for _, tp := range entity.TableParts {

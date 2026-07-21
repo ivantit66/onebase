@@ -483,7 +483,32 @@ func (r *Runner) runQuery(ctx context.Context, w *metadata.Widget) ([]map[string
 	if denied := r.deniedQuerySource(compiled.Sources); denied != "" {
 		return nil, nil, &accessDeniedError{object: denied}
 	}
-	return r.Store.RunQuery(ctx, compiled.SQL, compiled.Args)
+	rows, cols, err := r.Store.RunQuery(ctx, compiled.SQL, compiled.Args)
+	if err != nil {
+		return rows, cols, err
+	}
+	// План 88D (fail-closed): виджет non-admin с чувствительной колонкой в выводе
+	// не строится, пока компилятор не маскирует проекцию в SQL (88E).
+	if denied := access.DeniedMaskedColumn(r.User, compiled.Sources, cols, r.sourceMeta); denied != "" {
+		return nil, nil, &accessDeniedError{object: "поле «" + denied + "»"}
+	}
+	return rows, cols, nil
+}
+
+func (r *Runner) sourceMeta(kind, name string) *metadata.Entity {
+	if e := r.Reg.GetEntity(name); e != nil {
+		return e
+	}
+	if reg := r.Reg.GetRegister(name); reg != nil {
+		return storage.RegisterPredicateEntity(reg)
+	}
+	if ir := r.Reg.GetInfoRegister(name); ir != nil {
+		return storage.InfoRegisterPredicateEntity(ir)
+	}
+	if ar := r.Reg.GetAccountRegister(name); ar != nil {
+		return storage.AccountRegisterPredicateEntity(ar)
+	}
+	return nil
 }
 
 // accessDeniedError сигналит, что источник запроса недоступен пользователю —

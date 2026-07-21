@@ -31,6 +31,8 @@ func (s *Server) listExcel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, s.errText(r, err), 500)
 		return
 	}
+	// План 88: маска ПДн применяется до выгрузки в Excel.
+	s.maskRecords(r.Context(), entity, rows)
 	s.resolveRefs(r.Context(), entity, rows)
 
 	cols := make([]string, 0, len(entity.Fields))

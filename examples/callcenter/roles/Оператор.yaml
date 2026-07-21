@@ -2,7 +2,7 @@ name: Оператор
 description: Доступ к панели телефонии, клиентам и журналу звонков
 permissions:
   catalogs:
-    Клиент: [read, write]
+    Клиент: [read, write, disclose]
     Оператор: [read]
     Очередь: [read]
   documents:
@@ -12,3 +12,12 @@ permissions:
   processors:
     ЗаполнитьДемоданные: [run]
     ТестВходящийЗвонок: [run]
+  # План 88 — маскирование ПДн клиента: оператор КЦ видит телефон/почту частично,
+  # полное значение раскрывается по кнопке «Раскрыть» под аудитом (право disclose,
+  # CC-SEC-003/004). Роль без field_access видела бы значения целиком.
+  field_access:
+    catalogs:
+      Клиент:
+        Телефон: { read: mask_tail, keep: 4 }
+        МобильныйТелефон: { read: mask_tail, keep: 4 }
+        Email: { read: mask_all }
