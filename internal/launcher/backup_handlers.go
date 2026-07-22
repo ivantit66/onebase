@@ -587,6 +587,10 @@ func (h *handler) backupFullImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+	exchangeRestoreMode := backup.ExchangeRestoreDisasterRecovery
+	if strings.EqualFold(strings.TrimSpace(r.FormValue("exchange_mode")), string(backup.ExchangeRestoreClone)) {
+		exchangeRestoreMode = backup.ExchangeRestoreClone
+	}
 
 	archiveSize, err := file.Seek(0, io.SeekEnd)
 	if err != nil {
@@ -702,11 +706,12 @@ func (h *handler) backupFullImport(w http.ResponseWriter, r *http.Request) {
 		}
 		cfgFileDir := b.Path
 
-		report, importErr := backup.ImportUniversal(
+		report, importErr := backup.ImportUniversalWithOptions(
 			r.Context(), db,
 			configDest, cfgFileDir,
 			db.FilesDir(),
 			file, archiveSize,
+			backup.ImportOptions{ExchangeMode: exchangeRestoreMode},
 		)
 
 		if importErr == nil {
