@@ -61,10 +61,10 @@ func (f *formObjectThis) Get(name string) any {
 	v := f.obj.Get(name)
 	if ref, ok := v.(*interpreter.Ref); ok && f.refResolver != nil {
 		if fd := entityField(f.entity, name); fd != nil && fd.RefEntity != "" {
-			return f.refResolver.attachRef(ref, fd.RefEntity)
+			return f.refResolver.bindRefToContext(ref, fd.RefEntity)
 		}
 		if f.entity != nil && (strings.EqualFold(name, "Ссылка") || strings.EqualFold(name, "Reference")) {
-			return f.refResolver.attachRef(ref, f.entity.Name)
+			return f.refResolver.bindRefToContext(ref, f.entity.Name)
 		}
 	}
 	// Дефолты по типу: пустой numeric → 0, иначе `Объект.Сумма + 100` в DSL

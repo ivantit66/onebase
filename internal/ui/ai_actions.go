@@ -142,6 +142,10 @@ func (s *Server) aiRefDisplay(ctx context.Context, entity *metadata.Entity, id u
 	if err != nil || !s.rowAllowsSelected(ctx, entity, row) {
 		return "", false
 	}
+	// Подпись ссылки уходит в tool result и затем модели, поэтому к ней применимы
+	// те же field policies, что к карточке и REST. Hidden lookup исчезнет из row,
+	// masked lookup вернётся только в замаскированном виде.
+	s.maskRecord(ctx, entity, row)
 	field := aiRefLookupField(entity)
 	if field == "" {
 		return id.String(), true
@@ -235,6 +239,11 @@ func (s *Server) aiNormalizeValue(ctx context.Context, f metadata.Field, raw any
 		lookup := aiRefLookupField(refEntity)
 		if lookup == "" {
 			return nil, "", fmt.Errorf("поле %s: у %s нет строкового реквизита для поиска по имени — передай UUID", f.Name, refEntity.Name)
+		}
+		for protected := range s.fieldDecisions(ctx, refEntity) {
+			if strings.EqualFold(protected, lookup) {
+				return nil, "", fmt.Errorf("поле %s: поиск %s по защищённому полю %s запрещён — передай UUID", f.Name, refEntity.Name, lookup)
+			}
 		}
 		id, display, count, err := s.store.MatchCatalogByField(ctx, refEntity, lookup, str)
 		if err != nil {

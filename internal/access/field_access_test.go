@@ -6,6 +6,7 @@ import (
 	"github.com/ivantit66/onebase/internal/access"
 	"github.com/ivantit66/onebase/internal/auth"
 	"github.com/ivantit66/onebase/internal/metadata"
+	"github.com/ivantit66/onebase/internal/query"
 )
 
 func clientEntity() *metadata.Entity {
@@ -79,6 +80,35 @@ func TestFieldDecisions_NilUserAndAdmin(t *testing.T) {
 	d := access.FieldDecisions(admin, "catalog", "Клиент", meta)
 	if got, ok := d["Телефон"]; !ok || got.Strategy != access.FieldMaskTail {
 		t.Fatalf("mask_admin must subject admin to masking, got %v", d)
+	}
+}
+
+func TestDeniedMaskedColumn_ProjectionAndMaskAdmin(t *testing.T) {
+	meta := clientEntity()
+	u := &auth.User{Roles: []*auth.Role{
+		catRole([]string{"read"}, auth.FieldPolicies{"Телефон": {Read: "mask_all"}}),
+	}}
+	sources := []query.SourceRef{{Kind: "catalog", Name: "Клиент"}}
+	lookup := func(_, _ string) *metadata.Entity { return meta }
+
+	if got := access.DeniedMaskedColumn(u, sources, []string{"Телефон"}, lookup); got != "Телефон" {
+		t.Fatalf("protected projection got %q", got)
+	}
+	if got := access.DeniedMaskedColumn(u, sources, []string{"Наименование"}, lookup); got != "" {
+		t.Fatalf("safe projection denied as %q", got)
+	}
+	if got := access.DeniedMaskedColumn(u, sources, []string{"*"}, lookup); got != "*" {
+		t.Fatalf("wildcard must fail closed, got %q", got)
+	}
+
+	admin := &auth.User{IsAdmin: true, Roles: u.Roles}
+	if got := access.DeniedMaskedColumn(admin, sources, []string{"Телефон"}, lookup); got != "" {
+		t.Fatalf("unmasked admin denied as %q", got)
+	}
+	access.SetMaskAdmin(true)
+	defer access.SetMaskAdmin(false)
+	if got := access.DeniedMaskedColumn(admin, sources, []string{"Телефон"}, lookup); got != "Телефон" {
+		t.Fatalf("mask_admin projection got %q", got)
 	}
 }
 

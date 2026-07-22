@@ -655,10 +655,9 @@ func (w *docWriter) post() error {
 		return fmt.Errorf("%s", errMsg)
 	}
 	// OnPost мог изменить реквизиты шапки (расчётные поля) — персистим их upsert'ом
-	// после хука, как это делает entityservice.Save при проведении. Без этого правки
-	// this в ОбработкаПроведения жили бы только в UI/REST, но пропадали при DSL
-	// Провести(). Upsert шапки + движения + признак проведения — одной транзакцией;
-	// повторную регистрацию обмена не делаем — её уже выполнил write() (иначе эхо).
+	// после хука, как это делает entityservice.Save при проведении. Финальный Upsert
+	// повышает _version, поэтому очередь обмена обязательно перерегистрируется в
+	// этой же транзакции: RegisterExchangeChange — idempotent upsert, это не эхо.
 	return w.s.store.WithTxIfNeeded(ctx, func(ctx context.Context) error {
 		if err := w.s.store.Upsert(ctx, w.entity.Name, w.obj.ID, w.obj.Fields, w.entity); err != nil {
 			return err
@@ -666,7 +665,10 @@ func (w *docWriter) post() error {
 		if err := w.s.saveMovements(ctx, w.entity.Name, w.obj.ID, mc); err != nil {
 			return err
 		}
-		return w.s.store.SetPosted(ctx, w.entity.Name, w.obj.ID, true)
+		if err := w.s.store.SetPosted(ctx, w.entity.Name, w.obj.ID, true); err != nil {
+			return err
+		}
+		return exchange.RegisterOnSave(ctx, w.s.store, w.s.reg.ExchangePlans(), w.entity, w.obj.ID, false)
 	})
 }
 

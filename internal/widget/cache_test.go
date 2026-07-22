@@ -3,6 +3,9 @@ package widget
 import (
 	"testing"
 	"time"
+
+	"github.com/ivantit66/onebase/internal/access"
+	"github.com/ivantit66/onebase/internal/auth"
 )
 
 func TestCache_GetPut(t *testing.T) {
@@ -49,10 +52,36 @@ func TestCache_NilSafe(t *testing.T) {
 }
 
 func TestCacheKey(t *testing.T) {
-	if cacheKey("A", "u1") == cacheKey("A", "u2") {
+	if cacheKey("A", "u1", "s") == cacheKey("A", "u2", "s") {
 		t.Fatal("different users must produce different keys")
 	}
-	if cacheKey("A", "u1") != cacheKey("A", "u1") {
+	if cacheKey("A", "u1", "s") != cacheKey("A", "u1", "s") {
 		t.Fatal("same inputs must produce same key")
+	}
+}
+
+func TestSecurityFingerprintChangesWithPermissions(t *testing.T) {
+	user := &auth.User{Login: "u", Roles: []*auth.Role{{Name: "reader", Permissions: auth.Permission{
+		Catalogs: map[string][]string{"Товар": {"read"}},
+	}}}}
+	one, ok := securityFingerprint(user)
+	if !ok {
+		t.Fatal("ordinary auth state must be cacheable")
+	}
+	user.Roles[0].Permissions.Catalogs["Товар"] = []string{"read", "write"}
+	two, ok := securityFingerprint(user)
+	if !ok || one == two {
+		t.Fatal("permission change must alter fingerprint")
+	}
+	access.SetMaskAdmin(true)
+	defer access.SetMaskAdmin(false)
+	three, ok := securityFingerprint(user)
+	if !ok || two == three {
+		t.Fatal("mask_admin change must alter fingerprint")
+	}
+
+	user.Attrs = map[string]any{"unsupported": make(chan int)}
+	if _, ok := securityFingerprint(user); ok {
+		t.Fatal("unsupported attributes must disable caching")
 	}
 }

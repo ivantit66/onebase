@@ -2,8 +2,10 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/ivantit66/onebase/internal/dsl/ast"
@@ -101,6 +103,9 @@ func TestSaveNewDocument_PostWithSelfReference(t *testing.T) {
 	if !asBool(row["posted"]) {
 		t.Errorf("документ не помечен проведённым: %v", row["posted"])
 	}
+	if got := fmt.Sprint(row["_version"]); got != "1" {
+		t.Errorf("новый объект после atomic hook имеет _version=%s, want 1", got)
+	}
 
 	// Связанный объект создан и ссылается на документ.
 	events, err := db.List(ctx, "СобытиеПрибора", cat, storage.ListParams{})
@@ -112,6 +117,123 @@ func TestSaveNewDocument_PostWithSelfReference(t *testing.T) {
 	}
 	if ref := refValueString(events[0]["Прибор"]); ref != docID.String() {
 		t.Errorf("СобытиеПрибора.Прибор = %q, ожидался %q", ref, docID.String())
+	}
+}
+
+func TestSaveNewDocument_HookChildAndFailureRollBackTogether(t *testing.T) {
+	ctx, db, s, doc, cat := newSelfRefPostingServer(t)
+	failing := `Процедура ОбработкаПроведения()
+  Соб = Справочники.СобытиеПрибора.Создать();
+  Соб.Прибор = ЭтотОбъект.Ссылка;
+  Соб.Записать();
+  ВызватьИсключение("откатить всё");
+КонецПроцедуры`
+	s.reg.Load(runtime.LoadOptions{
+		Entities: []*metadata.Entity{doc, cat},
+		Programs: map[string]*ast.Program{"Прибор": mustParse(t, failing)},
+	})
+
+	res, err := s.entitySvc.Save(ctx, entityservice.SaveRequest{
+		Entity: doc, ID: uuid.New(), IsNew: true,
+		Fields: map[string]any{"Номер": "П-ROLLBACK"}, Action: "post",
+	})
+	if err != nil {
+		t.Fatalf("Save technical error: %v", err)
+	}
+	if res.DSLError == "" {
+		t.Fatal("expected hook DSLError")
+	}
+	parents, err := db.List(ctx, doc.Name, doc, storage.ListParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	children, err := db.List(ctx, cat.Name, cat, storage.ListParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parents) != 0 || len(children) != 0 {
+		t.Fatalf("atomic rollback left parent=%d child=%d", len(parents), len(children))
+	}
+}
+
+// Регрессия issue #381: ссылка в шапке обогащалась до открытия транзакции
+// проведения и сохраняла нетранзакционный context. Поэтому
+// this.Счётчик.ПолучитьОбъект().Записать() из OnPost пытался открыть вторую
+// транзакцию и навсегда ждал первую (на SQLite — единственное соединение).
+func TestSaveNewDocument_OnPostUpdatesExistingReferencedCatalog(t *testing.T) {
+	baseCtx := context.Background()
+	db, err := storage.ConnectSQLite(baseCtx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	counter := &metadata.Entity{
+		Name: "Счётчик",
+		Kind: metadata.KindCatalog,
+		Fields: []metadata.Field{
+			{Name: "Наименование", Type: metadata.FieldTypeString},
+			{Name: "Статус", Type: metadata.FieldTypeString},
+		},
+	}
+	dismantling := &metadata.Entity{
+		Name:    "ДемонтажСчётчика",
+		Kind:    metadata.KindDocument,
+		Posting: true,
+		Fields: []metadata.Field{
+			{Name: "Номер", Type: metadata.FieldTypeString},
+			{Name: "Счётчик", Type: "reference:Счётчик", RefEntity: counter.Name},
+		},
+	}
+	if err := db.Migrate(baseCtx, []*metadata.Entity{counter, dismantling}); err != nil {
+		t.Fatal(err)
+	}
+
+	counterID := uuid.New()
+	if err := db.Upsert(baseCtx, counter.Name, counterID, map[string]any{
+		"Наименование": "Счётчик №1",
+		"Статус":       "Установлен",
+	}, counter); err != nil {
+		t.Fatal(err)
+	}
+
+	onPostSrc := `Процедура ОбработкаПроведения()
+  СчётчикОбъект = this.Счётчик.ПолучитьОбъект();
+  СчётчикОбъект.Статус = "Демонтирован";
+  СчётчикОбъект.Записать();
+КонецПроцедуры`
+	registry := runtime.NewRegistry()
+	registry.Load(runtime.LoadOptions{
+		Entities: []*metadata.Entity{counter, dismantling},
+		Programs: map[string]*ast.Program{dismantling.Name: mustParse(t, onPostSrc)},
+	})
+	interp := interpreter.New()
+	interp.LookupProc = registry.GetModuleProc
+	s := &Server{store: db, reg: registry, interp: interp, lockMgr: runtime.NewLockManager(), messages: NewMessageStore()}
+	s.entitySvc = s.newEntityService(nil)
+
+	ctx, cancel := context.WithTimeout(baseCtx, 2*time.Second)
+	defer cancel()
+	result, err := s.entitySvc.Save(ctx, entityservice.SaveRequest{
+		Entity: dismantling,
+		ID:     uuid.New(),
+		IsNew:  true,
+		Fields: map[string]any{"Номер": "ДС-001", "Счётчик": counterID.String()},
+		Action: "post",
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if result.DSLError != "" {
+		t.Fatalf("OnPost: %s", result.DSLError)
+	}
+
+	row, err := db.GetByID(baseCtx, counter.Name, counterID, counter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(row["Статус"]); got != "Демонтирован" {
+		t.Fatalf("Счётчик.Статус = %q, ожидался %q", got, "Демонтирован")
 	}
 }
 

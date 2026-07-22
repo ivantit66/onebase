@@ -66,6 +66,10 @@ func (s *Server) queryConsoleExec(w http.ResponseWriter, r *http.Request) {
 		jsonResp(w, 200, map[string]any{"error": "Ошибка запроса: " + err.Error()})
 		return
 	}
+	if denied := s.deniedMaskedColumn(r.Context(), res.Sources, res.ProjectionFields); denied != "" {
+		jsonResp(w, http.StatusForbidden, map[string]any{"error": "Нет доступа к защищённому полю: " + denied})
+		return
+	}
 
 	start := time.Now()
 	rows, err := s.store.QueryAll(r.Context(), res.SQL, res.Args...)

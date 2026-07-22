@@ -33,6 +33,19 @@ func exchPlan() *metadata.ExchangePlan {
 	return p
 }
 
+func exchHubPlan() *metadata.ExchangePlan {
+	p := &metadata.ExchangePlan{
+		Name: "Обмен", Content: []string{"Справочник.Товар"},
+		Nodes: []metadata.ExchangeNode{
+			{Code: "center", Role: metadata.RoleHub},
+			{Code: "fil01", Role: metadata.RoleSpoke},
+			{Code: "fil02", Role: metadata.RoleSpoke},
+		},
+	}
+	p.Normalize()
+	return p
+}
+
 func newExchangeBaseDB(t *testing.T) (*storage.DB, *runtime.Registry, context.Context, *metadata.Entity) {
 	t.Helper()
 	ctx := context.Background()
@@ -128,4 +141,35 @@ func TestExchangeHTTPPushPull(t *testing.T) {
 	if _, err := exchange.PushPackage(ctx, ts.URL, "Обмен", "s3cret", forgedData); err == nil || !strings.Contains(err.Error(), "403") {
 		t.Fatalf("push с неверной парой узлов должен быть отклонён, got %v", err)
 	}
+}
+
+func TestExchangeHTTPPairHonorsHubTopology(t *testing.T) {
+	db, reg, ctx, _ := newExchangeBaseDB(t)
+	plan := exchHubPlan()
+	reg.LoadExchangePlans([]*metadata.ExchangePlan{plan})
+	s := &Server{store: db, reg: reg}
+	req := httptest.NewRequest("GET", "/api/exchange/Обмен/pull", nil)
+
+	check := func(thisNode, peer string, wantOK bool) {
+		t.Helper()
+		if err := db.SaveExchangeThisNode(ctx, plan.Name, thisNode); err != nil {
+			t.Fatal(err)
+		}
+		rr := httptest.NewRecorder()
+		gotThis, gotPeer, ok := s.exchangePair(rr, req, plan, peer)
+		if ok != wantOK {
+			t.Fatalf("%s↔%s: ok=%v status=%d body=%q", thisNode, peer, ok, rr.Code, rr.Body.String())
+		}
+		if wantOK && (!strings.EqualFold(gotThis, thisNode) || !strings.EqualFold(gotPeer, peer)) {
+			t.Fatalf("%s↔%s canonical pair = %s↔%s", thisNode, peer, gotThis, gotPeer)
+		}
+		if !wantOK && rr.Code != 403 {
+			t.Fatalf("%s↔%s: status=%d, want 403", thisNode, peer, rr.Code)
+		}
+	}
+
+	check("center", "fil01", true)
+	check("fil01", "center", true)
+	check("fil01", "fil02", false)
+	check("fil01", "unknown", false)
 }

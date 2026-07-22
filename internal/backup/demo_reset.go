@@ -154,7 +154,7 @@ func DemoReset(ctx context.Context, db *storage.DB, backupPath string) (*ImportR
 
 	settingsFile := filepath.Join(tmpDir, "settings", "safe.jsonl")
 	if _, err := os.Stat(settingsFile); err == nil {
-		n, err := importSafeSettings(ctx, db, settingsFile)
+		n, err := importSafeSettings(ctx, db, settingsFile, false)
 		if err != nil {
 			return report, fmt.Errorf("demo reset settings: %w", err)
 		}

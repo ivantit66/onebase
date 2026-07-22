@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -140,4 +141,39 @@ func TestTx_NoExplicit_AutoCommit(t *testing.T) {
 	КонецПроцедуры`
 	require.NoError(t, runTxProc(t, db, state, src))
 	assert.Equal(t, 2, countTxItems(t, db, ctx))
+}
+
+func TestTx_BorrowedOuterTransactionUsesSavepointSQLite(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.ConnectSQLite(ctx, filepath.Join(t.TempDir(), "tx.db"))
+	require.NoError(t, err)
+	defer db.Close()
+	_, err = db.Exec(ctx, `CREATE TABLE _tx_test_items (id INTEGER PRIMARY KEY, name TEXT NOT NULL)`)
+	require.NoError(t, err)
+
+	err = db.WithTx(ctx, func(txCtx context.Context) error {
+		_, execErr := db.Exec(txCtx, `INSERT INTO _tx_test_items(name) VALUES (?)`, "outer")
+		if execErr != nil {
+			return execErr
+		}
+		state := interpreter.NewTxState(txCtx)
+		src := `Процедура Тест()
+			НачатьТранзакцию();
+			Создать("items", "inner");
+			ОтменитьТранзакцию();
+		КонецПроцедуры`
+		if runErr := runTxProc(t, db, state, src); runErr != nil {
+			return runErr
+		}
+		var count int
+		if scanErr := db.QueryRow(txCtx, `SELECT COUNT(*) FROM _tx_test_items`).Scan(&count); scanErr != nil {
+			return scanErr
+		}
+		if count != 1 {
+			return fmt.Errorf("borrowed savepoint rollback left %d rows", count)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, countTxItems(t, db, ctx))
 }

@@ -1,8 +1,14 @@
 package widget
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/ivantit66/onebase/internal/access"
+	"github.com/ivantit66/onebase/internal/auth"
 )
 
 // Cache stores widget execution results for a fixed TTL. Dashboard requests
@@ -73,6 +79,30 @@ func (c *Cache) Invalidate() {
 	c.mu.Unlock()
 }
 
-func cacheKey(widgetName, user string) string {
-	return widgetName + "\x00" + user
+func cacheKey(widgetName, user, security string) string {
+	return widgetName + "\x00" + user + "\x00" + security
+}
+
+// securityFingerprint makes cached output follow the complete authorization
+// state, not merely a login. Role/row/field-policy changes therefore produce a
+// cache miss immediately. Unsupported host attributes disable caching rather
+// than risking reuse under an incomplete fingerprint.
+func securityFingerprint(user *auth.User) (string, bool) {
+	payload := struct {
+		IsAdmin   bool
+		Attrs     map[string]any
+		Roles     []*auth.Role
+		MaskAdmin bool
+	}{MaskAdmin: access.MaskAdmin()}
+	if user != nil {
+		payload.IsAdmin = user.IsAdmin
+		payload.Attrs = user.Attrs
+		payload.Roles = user.Roles
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return "", false
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), true
 }
