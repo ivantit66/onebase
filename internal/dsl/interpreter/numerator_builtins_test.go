@@ -2,6 +2,7 @@ package interpreter
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/ivantit66/onebase/internal/dsl/parser"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/runtime"
+	"github.com/ivantit66/onebase/internal/storage"
 )
 
 type fakeNumStore struct {
@@ -41,7 +43,7 @@ func TestNumeratorsRoot_NextNumber(t *testing.T) {
 		"Договоры": {Name: "Договоры", Kind: metadata.KindCatalog, Numerator: &metadata.Numerator{Prefix: "Д-", Length: 6, Period: "none"}},
 		"Простой":  {Name: "Простой", Kind: metadata.KindCatalog},
 	}}
-	root := NewNumeratorsRoot(context.Background(), &fakeNumStore{}, reg)
+	root := NewNumeratorsRoot(NewStaticCtx(context.Background()), &fakeNumStore{}, reg)
 
 	// numerator: с префиксом и паддингом — последовательные номера.
 	if got := root.CallMethod("СледующийНомер", []any{"Договоры"}); got != "Д-000001" {
@@ -61,7 +63,7 @@ func TestNumeratorsRoot_PeriodByDate(t *testing.T) {
 	reg := &fakeNumReg{ents: map[string]*metadata.Entity{
 		"Заявка": {Name: "Заявка", Numerator: &metadata.Numerator{Length: 5, Period: "year"}},
 	}}
-	root := NewNumeratorsRoot(context.Background(), &fakeNumStore{}, reg)
+	root := NewNumeratorsRoot(NewStaticCtx(context.Background()), &fakeNumStore{}, reg)
 
 	y2025 := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
 	y2026 := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
@@ -77,9 +79,59 @@ func TestNumeratorsRoot_PeriodByDate(t *testing.T) {
 	}
 }
 
+func TestNumeratorsRoot_ScopeRequiredAndSeparated(t *testing.T) {
+	store := &fakeNumStore{}
+	reg := &fakeNumReg{ents: map[string]*metadata.Entity{
+		"Заявка": {Name: "Заявка", Numerator: &metadata.Numerator{Length: 4, Period: "year", Scope: "Организация"}},
+	}}
+	root := NewNumeratorsRoot(NewStaticCtx(context.Background()), store, reg)
+	y2026 := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+
+	assertPanics(t, "scope обязателен", func() {
+		root.CallMethod("СледующийНомер", []any{"Заявка", y2026})
+	})
+	if got := root.CallMethod("СледующийНомер", []any{"Заявка", y2026, "org-a"}); got != "0001" {
+		t.Fatalf("org-a first = %v", got)
+	}
+	if got := root.CallMethod("СледующийНомер", []any{"Заявка", &MapThis{M: map[string]any{"Дата": y2026, "организация": "org-b"}}}); got != "0001" {
+		t.Fatalf("org-b first = %v", got)
+	}
+	if got := root.CallMethod("СледующийНомер", []any{"Заявка", y2026, "org-a"}); got != "0002" {
+		t.Fatalf("org-a second = %v", got)
+	}
+}
+
+func TestNumeratorsRoot_UsesLiveTransactionContext(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	db, err := storage.ConnectSQLite(ctx, filepath.Join(t.TempDir(), "numerator.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.EnsureNumeratorSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	reg := &fakeNumReg{ents: map[string]*metadata.Entity{
+		"Договоры": {Name: "Договоры", Numerator: &metadata.Numerator{Length: 4, Period: "none"}},
+	}}
+	state := NewTxState(ctx)
+	state.begin(db)
+	root := NewNumeratorsRoot(state, db, reg)
+	if got := root.CallMethod("СледующийНомер", []any{"Договоры"}); got != "0001" {
+		t.Fatalf("number in transaction = %v", got)
+	}
+	state.rollback()
+
+	// Счётчик участвовал в DSL-транзакции и откатился вместе с ней.
+	if got := root.CallMethod("СледующийНомер", []any{"Договоры"}); got != "0001" {
+		t.Fatalf("number after rollback = %v, want reused 0001", got)
+	}
+}
+
 func TestNumeratorsRoot_Errors(t *testing.T) {
 	reg := &fakeNumReg{ents: map[string]*metadata.Entity{}}
-	root := NewNumeratorsRoot(context.Background(), &fakeNumStore{}, reg)
+	root := NewNumeratorsRoot(NewStaticCtx(context.Background()), &fakeNumStore{}, reg)
 
 	assertPanics(t, "без аргумента", func() { root.CallMethod("СледующийНомер", nil) })
 	assertPanics(t, "неизвестная сущность", func() { root.CallMethod("СледующийНомер", []any{"НетТакой"}) })
@@ -92,7 +144,7 @@ func TestNumeratorsRoot_FromDSLSource(t *testing.T) {
 	reg := &fakeNumReg{ents: map[string]*metadata.Entity{
 		"Договоры": {Name: "Договоры", Numerator: &metadata.Numerator{Prefix: "Д-", Length: 6, Period: "none"}},
 	}}
-	root := NewNumeratorsRoot(context.Background(), &fakeNumStore{}, reg)
+	root := NewNumeratorsRoot(NewStaticCtx(context.Background()), &fakeNumStore{}, reg)
 
 	src := `Процедура Выполнить()
   this.Рез = Нумераторы.СледующийНомер("Договоры");

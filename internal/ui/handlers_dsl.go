@@ -67,7 +67,7 @@ func (s *Server) buildDSLVars(ctx context.Context, mc *runtime.MovementsCollecto
 	// Базовый набор (Перечисления, Константы, Запрос, Предопределённые,
 	// Движения, HTTP, Email) — общий с scheduler, см. internal/dslvars.
 	vars := dslvars.Common{
-		Ctx: ctx, Reg: s.reg, Store: s.store, Mailer: s.mailer, Movements: mc,
+		Ctx: ctx, CtxSource: txState, Reg: s.reg, Store: s.store, Mailer: s.mailer, Movements: mc,
 		NetGuard:          s.netGuard(ctx),
 		ExecGuard:         s.execGuard(ctx),
 		Notifier:          s.notifier(),
