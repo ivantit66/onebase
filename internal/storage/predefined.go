@@ -42,6 +42,34 @@ func (db *DB) EnsurePredefinedColumns(ctx context.Context, entities []*metadata.
 	return nil
 }
 
+// isPredefinedRecord reports whether id belongs to a predefined catalog item.
+// Most entity tables (including every document table) do not have the optional
+// _is_predefined column, so its presence must be checked before querying it.
+// In PostgreSQL an ignored "column does not exist" error aborts the surrounding
+// transaction and makes every subsequent statement fail.
+func (db *DB) isPredefinedRecord(ctx context.Context, table string, id uuid.UUID) (bool, error) {
+	exists, err := db.dialect.ColumnExists(ctx, db, table, "_is_predefined")
+	if err != nil {
+		return false, fmt.Errorf("check %s._is_predefined: %w", table, err)
+	}
+	if !exists {
+		return false, nil
+	}
+
+	var isPredefined bool
+	err = db.QueryRow(ctx,
+		fmt.Sprintf("SELECT _is_predefined FROM %s WHERE id = %s", table, db.dialect.Placeholder(1)),
+		idArg(db.dialect, id),
+	).Scan(&isPredefined)
+	if IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read %s._is_predefined: %w", table, err)
+	}
+	return isPredefined, nil
+}
+
 // SyncAllPredefined синхронизирует predefined-элементы всех справочников в
 // порядке зависимостей (orderByDependency): справочник, на predefined которого
 // ссылаются cross-ref поля, синхронизируется раньше ссылающегося — иначе

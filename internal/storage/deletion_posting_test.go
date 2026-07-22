@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -62,5 +63,42 @@ func TestIsMarkedForDeletionAndPostingGuard(t *testing.T) {
 	// SetPosted(false) (отмена проведения) на помеченном всё ещё работает.
 	if err := db.SetPosted(ctx, doc.Name, id, false); err != nil {
 		t.Fatalf("SetPosted(false) на помеченном должен работать: %v", err)
+	}
+}
+
+func TestPredefinedRecordCannotBeMarkedOrDeleted(t *testing.T) {
+	ctx := context.Background()
+	db, err := ConnectSQLite(ctx, filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	catalog := &metadata.Entity{
+		Name:   "Валюты",
+		Kind:   metadata.KindCatalog,
+		Fields: []metadata.Field{{Name: "Наименование", Type: metadata.FieldTypeString}},
+		Predefined: []*metadata.PredefinedItem{{
+			Name: "Рубль", Fields: map[string]any{"Наименование": "Российский рубль"},
+		}},
+	}
+	if err := db.Migrate(ctx, []*metadata.Entity{catalog}); err != nil {
+		t.Fatal(err)
+	}
+	id, err := db.GetPredefinedID(ctx, catalog.Name, "Рубль")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = db.MarkForDeletion(ctx, catalog.Name, id, true)
+	if err == nil || !strings.Contains(err.Error(), "предопределённый") {
+		t.Fatalf("MarkForDeletion error = %v, want predefined-item rejection", err)
+	}
+	err = db.Delete(ctx, catalog.Name, id)
+	if err == nil || !strings.Contains(err.Error(), "предопределённый") {
+		t.Fatalf("Delete error = %v, want predefined-item rejection", err)
+	}
+	if _, err := db.GetPredefinedID(ctx, catalog.Name, "Рубль"); err != nil {
+		t.Fatalf("predefined record disappeared after rejected operations: %v", err)
 	}
 }

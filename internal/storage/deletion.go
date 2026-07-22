@@ -55,11 +55,11 @@ func (db *DB) MarkForDeletion(ctx context.Context, entityName string, id uuid.UU
 	d := db.dialect
 	table := metadata.TableName(entityName)
 	if mark {
-		var isPredefined bool
-		if err := db.QueryRow(ctx,
-			fmt.Sprintf("SELECT _is_predefined FROM %s WHERE id = %s", table, d.Placeholder(1)),
-			idArg(d, id),
-		).Scan(&isPredefined); err == nil && isPredefined {
+		isPredefined, err := db.isPredefinedRecord(ctx, table, id)
+		if err != nil {
+			return err
+		}
+		if isPredefined {
 			return i18nerr.Errorf("нельзя пометить предопределённый элемент %s на удаление", entityName)
 		}
 	}
