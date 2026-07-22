@@ -93,6 +93,28 @@ func (f *validationFixture) entity(name string) *metadata.Entity {
 	return e
 }
 
+func (f *validationFixture) documentRef(vars map[string]any, entityName string, id uuid.UUID) *interpreter.Ref {
+	f.t.Helper()
+	root, ok := vars["Документы"].(*docsRoot)
+	if !ok {
+		f.t.Fatalf("Документы: %T, want *docsRoot", vars["Документы"])
+	}
+	manager, ok := root.Get(entityName).(*docProxy)
+	if !ok {
+		f.t.Fatalf("Документы.%s: %T, want *docProxy", entityName, root.Get(entityName))
+	}
+	return &interpreter.Ref{UUID: id.String(), Name: entityName, Type: entityName, Manager: manager}
+}
+
+func (f *validationFixture) callApproval(vars map[string]any, name string, args ...any) (any, error) {
+	f.t.Helper()
+	proc := f.server.reg.GetModuleNamespacedProc("Согласование", name)
+	if proc == nil {
+		f.t.Fatalf("Согласование.%s not found", name)
+	}
+	return f.server.interp.Call(proc, nil, args, vars)
+}
+
 func (f *validationFixture) seedRules() {
 	f.t.Helper()
 	_, runErr, err := RunProcessorOffline(f.ctx, f.proj, f.db, "ЗаполнитьПравилаВалидации", nil, nil)
@@ -291,4 +313,147 @@ func TestCallcenterValidation_PublishedVersionsAreImmutable(t *testing.T) {
 		t.Fatal("rejected mutations must leave original publication posted")
 	}
 
+}
+
+func TestCallcenterApproval_SubmitAndApprove(t *testing.T) {
+	f := newValidationFixture(t)
+	request := f.saveRequest(time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC), "Тверская", "79990000000", "")
+	if request.DSLError != "" {
+		t.Fatalf("create request: %s", request.DSLError)
+	}
+
+	vars := f.server.buildDSLVars(f.ctx, nil)
+	requestRef := f.documentRef(vars, "Заявка", request.ID)
+	taskValue, err := f.callApproval(vars, "ОтправитьНаСогласование", requestRef, "operator", "supervisor")
+	if err != nil {
+		t.Fatalf("submit for approval: %v", err)
+	}
+	taskRef, ok := taskValue.(*interpreter.Ref)
+	if !ok {
+		t.Fatalf("approval task: %T, want *interpreter.Ref", taskValue)
+	}
+
+	requestRow, err := f.db.GetByID(f.ctx, "Заявка", request.ID, f.entity("Заявка"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := requestRow["Состояние"]; got != "НаСогласовании" {
+		t.Fatalf("Заявка.Состояние = %v, want НаСогласовании", got)
+	}
+	taskID, err := uuid.Parse(taskRef.UUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskRow, err := f.db.GetByID(f.ctx, "Задача", taskID, f.entity("Задача"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if taskRow["Состояние"] != "Открыта" || taskRow["Адресат"] != "supervisor" {
+		t.Fatalf("approval task fields: %#v", taskRow)
+	}
+
+	if _, err := f.callApproval(vars, "ВыполнитьЗадачу", taskRef, "supervisor", "Утверждено", "ok"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	requestRow, err = f.db.GetByID(f.ctx, "Заявка", request.ID, f.entity("Заявка"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskRow, err = f.db.GetByID(f.ctx, "Задача", taskID, f.entity("Задача"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requestRow["Состояние"] != "Утверждена" || taskRow["Состояние"] != "Выполнена" {
+		t.Fatalf("approved route: request=%#v task=%#v", requestRow, taskRow)
+	}
+}
+
+func TestCallcenterApproval_RejectCreatesReworkTask(t *testing.T) {
+	f := newValidationFixture(t)
+	request := f.saveRequest(time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC), "Тверская", "79990000000", "")
+	if request.DSLError != "" {
+		t.Fatalf("create request: %s", request.DSLError)
+	}
+
+	vars := f.server.buildDSLVars(f.ctx, nil)
+	requestRef := f.documentRef(vars, "Заявка", request.ID)
+	taskValue, err := f.callApproval(vars, "ОтправитьНаСогласование", requestRef, "operator", "supervisor")
+	if err != nil {
+		t.Fatalf("submit for approval: %v", err)
+	}
+	taskRef := taskValue.(*interpreter.Ref)
+
+	if _, err := f.callApproval(vars, "ВыполнитьЗадачу", taskRef, "supervisor", "unknown", ""); err == nil {
+		t.Fatal("invalid result must be rejected")
+	}
+	reworkValue, err := f.callApproval(vars, "ВыполнитьЗадачу", taskRef, "supervisor", "Отклонено", "needs changes")
+	if err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+	reworkRef, ok := reworkValue.(*interpreter.Ref)
+	if !ok {
+		t.Fatalf("rework task: %T, want *interpreter.Ref", reworkValue)
+	}
+
+	requestRow, err := f.db.GetByID(f.ctx, "Заявка", request.ID, f.entity("Заявка"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reworkID, err := uuid.Parse(reworkRef.UUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reworkRow, err := f.db.GetByID(f.ctx, "Задача", reworkID, f.entity("Задача"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requestRow["Состояние"] != "Отклонена" || reworkRow["Тип"] != "Доработка" || reworkRow["Адресат"] != "operator" || reworkRow["Состояние"] != "Открыта" {
+		t.Fatalf("rejected route: request=%#v rework=%#v", requestRow, reworkRow)
+	}
+}
+
+func TestCallcenterApproval_TaskAndRequestRollbackTogether(t *testing.T) {
+	f := newValidationFixture(t)
+	f.seedRules()
+
+	requestID := uuid.New()
+	if err := f.db.Upsert(f.ctx, "Заявка", requestID, map[string]any{
+		"Номер":     "ROLLBACK",
+		"Дата":      time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC),
+		"Состояние": "НаСогласовании",
+		"Улица":     "", // active REQ-STREET rule makes the second route write fail
+		"Телефон":   "79990000000",
+	}, f.entity("Заявка")); err != nil {
+		t.Fatal(err)
+	}
+	taskID := uuid.New()
+	if err := f.db.Upsert(f.ctx, "Задача", taskID, map[string]any{
+		"Номер":     "TASK-ROLLBACK",
+		"Дата":      time.Now(),
+		"Тип":       "Согласование",
+		"Инициатор": "operator",
+		"Основание": requestID.String(),
+		"Адресат":   "supervisor",
+		"Состояние": "Открыта",
+	}, f.entity("Задача")); err != nil {
+		t.Fatal(err)
+	}
+
+	vars := f.server.buildDSLVars(f.ctx, nil)
+	taskRef := f.documentRef(vars, "Задача", taskID)
+	if _, err := f.callApproval(vars, "ВыполнитьЗадачу", taskRef, "supervisor", "Утверждено", "ok"); err == nil || !strings.Contains(err.Error(), "REQ-STREET") {
+		t.Fatalf("expected request validation error, got %v", err)
+	}
+
+	requestRow, err := f.db.GetByID(f.ctx, "Заявка", requestID, f.entity("Заявка"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskRow, err := f.db.GetByID(f.ctx, "Задача", taskID, f.entity("Задача"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requestRow["Состояние"] != "НаСогласовании" || taskRow["Состояние"] != "Открыта" {
+		t.Fatalf("route rollback failed: request=%#v task=%#v", requestRow, taskRow)
+	}
 }
