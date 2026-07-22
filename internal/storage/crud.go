@@ -674,26 +674,34 @@ func (db *DB) UpsertTablePartRows(ctx context.Context, entityName, tpName string
 func (db *DB) Delete(ctx context.Context, entityName string, id uuid.UUID) error {
 	d := db.dialect
 	tbl := metadata.TableName(entityName)
-	// Check if this is a predefined record (column may not exist — ignore error)
-	var isPredefined bool
-	if err := db.QueryRow(ctx,
-		fmt.Sprintf("SELECT _is_predefined FROM %s WHERE id = %s", tbl, d.Placeholder(1)),
-		idArg(d, id),
-	).Scan(&isPredefined); err == nil && isPredefined {
+	isPredefined, err := db.isPredefinedRecord(ctx, tbl, id)
+	if err != nil {
+		return err
+	}
+	if isPredefined {
 		return i18nerr.Errorf("нельзя удалить предопределённый элемент %s", entityName)
 	}
 
-	// For hierarchical catalogs, prevent deleting non-empty folders
-	var childCount int
-	if err := db.QueryRow(ctx,
-		fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE parent_id = %s AND deletion_mark = %s",
-			tbl, d.Placeholder(1), boolFalseLit(d)),
-		idArg(d, id),
-	).Scan(&childCount); err == nil && childCount > 0 {
-		return i18nerr.Errorf("нельзя удалить группу: в ней есть элементы (%d шт.)", childCount)
+	// Only hierarchical catalogs have parent_id. Probing the optional column
+	// with a failing SELECT would abort a PostgreSQL transaction.
+	hasParent, err := d.ColumnExists(ctx, db, tbl, "parent_id")
+	if err != nil {
+		return fmt.Errorf("check %s.parent_id: %w", tbl, err)
+	}
+	if hasParent {
+		var childCount int
+		if err := db.QueryRow(ctx,
+			fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE parent_id = %s AND deletion_mark = %s",
+				tbl, d.Placeholder(1), boolFalseLit(d)),
+			idArg(d, id),
+		).Scan(&childCount); err != nil {
+			return fmt.Errorf("count children of %s: %w", entityName, err)
+		} else if childCount > 0 {
+			return i18nerr.Errorf("нельзя удалить группу: в ней есть элементы (%d шт.)", childCount)
+		}
 	}
 
-	err := db.exec(ctx,
+	err = db.exec(ctx,
 		fmt.Sprintf("DELETE FROM %s WHERE id = %s", tbl, d.Placeholder(1)), idArg(d, id))
 	if err == nil {
 		if s := db.GetAuditSettings(ctx); s.Enabled && s.Delete {
