@@ -129,6 +129,27 @@ func (r *dslRefAttrResolver) attachRef(ref *interpreter.Ref, entityName string) 
 	return ref
 }
 
+// bindRefToContext returns a hook-local copy whose manager uses the resolver's
+// context. References stored in runtime.Object may have been enriched before
+// entityservice opened its transaction, so reusing their manager from OnPost
+// would make ПолучитьОбъект()/Записать() use a second connection and deadlock
+// against the transaction currently running the hook. A copy keeps the object
+// value reusable after the hook instead of leaving it bound to a completed tx.
+func (r *dslRefAttrResolver) bindRefToContext(ref *interpreter.Ref, entityName string) *interpreter.Ref {
+	if r == nil || ref == nil {
+		return ref
+	}
+	bound := *ref
+	if bound.Type == "" {
+		bound.Type = entityName
+	}
+	if r.s != nil {
+		bound.Manager = r.s.refManagerFor(r.s.reg.GetEntity(bound.Type), r.ctx)
+	}
+	bound.AttrResolver = r
+	return &bound
+}
+
 func (r *dslRefAttrResolver) preloadBatch(batch map[string]map[string]uuid.UUID) {
 	for entityName, idsByString := range batch {
 		entity := r.s.reg.GetEntity(entityName)
@@ -254,7 +275,7 @@ func (m *refAwareMapThis) wrapValue(name string, v any) any {
 		return v
 	}
 	if ref, ok := v.(*interpreter.Ref); ok {
-		return m.resolver.attachRef(ref, fd.RefEntity)
+		return m.resolver.bindRefToContext(ref, fd.RefEntity)
 	}
 	idStr, _, ok := uuidFromValue(v)
 	if !ok {
