@@ -50,6 +50,14 @@ var systemTables = []string{
 	"_report_presets",
 }
 
+// exchangeTables are exported separately so restore can distinguish a safe
+// clone from disaster recovery of the same node.
+var exchangeTables = []string{
+	"_exchange_changes",
+	"_exchange_peers",
+	"_exchange_applied",
+}
+
 // safeSettingKeys are non-secret _settings values that may travel in a
 // universal .obz. Do not add secret-bearing keys such as llm.config here.
 var safeSettingKeys = map[string]bool{
@@ -119,6 +127,22 @@ func ExportUniversal(
 			manifest[entryName] = n
 		}
 	}
+	// Exchange queues/watermarks are non-secret and required for lossless DR.
+	// Clone restore ignores this directory and resets its local node identity.
+	hasExchangeState := false
+	for _, tbl := range exchangeTables {
+		entryName := "exchange/" + tbl + ".jsonl"
+		fw, err := zw.Create(entryName)
+		if err != nil {
+			zw.Close()
+			return err
+		}
+		n, err := dumpTableJSONL(ctx, db, tbl, fw)
+		if err == nil {
+			manifest[entryName] = n
+			hasExchangeState = true
+		}
+	}
 
 	// --- 3. SAFE SETTINGS -----------------------------------------------------
 	if n, err := exportSafeSettings(ctx, db, zw); err != nil {
@@ -154,8 +178,8 @@ func ExportUniversal(
 	// --- 7. META.txt ----------------------------------------------------------
 	dbType := db.Dialect().Name()
 	meta := fmt.Sprintf(
-		"onebase_full_export\nversion=2\nformat=universal\nsource_db_type=%s\nsource_base=%s\ndate=%s\nhas_attachments=%v\n",
-		dbType, baseName, time.Now().UTC().Format(time.RFC3339), hasAttachments,
+		"onebase_full_export\nversion=2\nformat=universal\nsource_db_type=%s\nsource_base=%s\ndate=%s\nhas_attachments=%v\nhas_exchange_state=%v\n",
+		dbType, baseName, time.Now().UTC().Format(time.RFC3339), hasAttachments, hasExchangeState,
 	)
 	mfw, _ := zw.Create("META.txt")
 	mfw.Write([]byte(meta))
@@ -598,7 +622,7 @@ func exportSafeSettings(ctx context.Context, db *storage.DB, zw *zip.Writer) (in
 		if err := rows.Scan(&key, &value); err != nil {
 			continue
 		}
-		if safeSettingKeys[key] {
+		if safeSettingKeys[key] || strings.HasPrefix(strings.ToLower(key), "exchange.this_node.") {
 			selected = append(selected, map[string]string{"key": key, "value": value})
 		}
 	}
@@ -680,10 +704,22 @@ func sqliteQuote(name string) string {
 // Import
 // ----------------------------------------------------------------------------
 
-// ImportUniversal restores a universal v2 .obz archive into db.
-// configDest: "database" → store config in _onebase_config table;
-//
-//	"file"     → write config YAML files to cfgFileDir on disk.
+// ExchangeRestoreMode controls whether a universal archive restores the local
+// replication identity/state or creates an isolated clone.
+type ExchangeRestoreMode string
+
+const (
+	ExchangeRestoreClone            ExchangeRestoreMode = "clone"
+	ExchangeRestoreDisasterRecovery ExchangeRestoreMode = "disaster_recovery"
+)
+
+type ImportOptions struct {
+	ExchangeMode ExchangeRestoreMode
+}
+
+// ImportUniversal restores an isolated clone. It is the safe compatibility
+// default for programmatic callers: exchange node identity, tokens and queues
+// are cleared. Use ImportUniversalWithOptions for same-node disaster recovery.
 func ImportUniversal(
 	ctx context.Context,
 	db *storage.DB,
@@ -692,6 +728,28 @@ func ImportUniversal(
 	r io.ReaderAt,
 	size int64,
 ) (*ImportReport, error) {
+	return ImportUniversalWithOptions(ctx, db, configDest, cfgFileDir, attachmentsDir, r, size, ImportOptions{ExchangeMode: ExchangeRestoreClone})
+}
+
+// ImportUniversalWithOptions restores a universal v2 .obz archive into db.
+// configDest: "database" → store config in _onebase_config table;
+//
+//	"file"     → write config YAML files to cfgFileDir on disk.
+func ImportUniversalWithOptions(
+	ctx context.Context,
+	db *storage.DB,
+	configDest, cfgFileDir string,
+	attachmentsDir string,
+	r io.ReaderAt,
+	size int64,
+	opts ImportOptions,
+) (*ImportReport, error) {
+	if opts.ExchangeMode == "" {
+		opts.ExchangeMode = ExchangeRestoreClone
+	}
+	if opts.ExchangeMode != ExchangeRestoreClone && opts.ExchangeMode != ExchangeRestoreDisasterRecovery {
+		return nil, fmt.Errorf("import: неизвестный режим восстановления обмена %q", opts.ExchangeMode)
+	}
 	zr, err := zip.NewReader(r, size)
 	if err != nil {
 		return nil, fmt.Errorf("import: open zip: %w", err)
@@ -708,6 +766,7 @@ func ImportUniversal(
 	if meta["format"] != "universal" {
 		return nil, ErrLegacyFormat
 	}
+	archiveHasExchangeState := strings.EqualFold(meta["has_exchange_state"], "true")
 
 	// --- 2. Extract all entries to a temp directory ---------------------------
 	tmpDir, err := os.MkdirTemp("", "onebase-univ-import-*")
@@ -782,15 +841,34 @@ func ImportUniversal(
 			}
 		}
 
+		if opts.ExchangeMode == ExchangeRestoreDisasterRecovery && archiveHasExchangeState {
+			exchangeDir := filepath.Join(tmpDir, "exchange")
+			if _, err := os.Stat(exchangeDir); err == nil {
+				if err := importDir(txCtx, db, exchangeDir, report, nil); err != nil {
+					return fmt.Errorf("import exchange state: %w", err)
+				}
+			}
+		}
+
 		settingsFile := filepath.Join(tmpDir, "settings", "safe.jsonl")
 		if _, err := os.Stat(settingsFile); err == nil {
-			n, err := importSafeSettings(txCtx, db, settingsFile)
+			n, err := importSafeSettings(txCtx, db, settingsFile, opts.ExchangeMode == ExchangeRestoreDisasterRecovery && archiveHasExchangeState)
 			if err != nil {
 				return fmt.Errorf("import settings: %w", err)
 			}
 			if n > 0 {
 				report.Tables["_settings"] = n
 			}
+		}
+		effectiveExchangeMode := opts.ExchangeMode
+		if effectiveExchangeMode == ExchangeRestoreDisasterRecovery && !archiveHasExchangeState {
+			// Old universal archives cannot safely reconstruct replication state;
+			// restore them as isolated clones instead of retaining stale target
+			// queues/node identity.
+			effectiveExchangeMode = ExchangeRestoreClone
+		}
+		if err := resetExchangeSecretsAndCloneState(txCtx, db, effectiveExchangeMode); err != nil {
+			return fmt.Errorf("import: сброс состояния обмена: %w", err)
 		}
 
 		// Restored copies must not silently contact production systems or run OS
@@ -867,7 +945,7 @@ func validateUniversalArchive(zr *zip.Reader) error {
 	return nil
 }
 
-func importSafeSettings(ctx context.Context, db *storage.DB, filePath string) (int, error) {
+func importSafeSettings(ctx context.Context, db *storage.DB, filePath string, includeExchangeNode bool) (int, error) {
 	if err := db.EnsureSettingsSchema(ctx); err != nil {
 		return 0, err
 	}
@@ -907,7 +985,8 @@ func importSafeSettings(ctx context.Context, db *storage.DB, filePath string) (i
 		if err := json.Unmarshal(line, &row); err != nil {
 			return n, fmt.Errorf("parse row %d: %w", n+1, err)
 		}
-		if !safeSettingKeys[row.Key] {
+		isExchangeNode := strings.HasPrefix(strings.ToLower(row.Key), "exchange.this_node.")
+		if !safeSettingKeys[row.Key] && !(includeExchangeNode && isExchangeNode) {
 			continue
 		}
 		if _, err := db.Exec(ctx, q, row.Key, row.Value); err != nil {
@@ -916,6 +995,32 @@ func importSafeSettings(ctx context.Context, db *storage.DB, filePath string) (i
 		n++
 	}
 	return n, scanner.Err()
+}
+
+func resetExchangeSecretsAndCloneState(ctx context.Context, db *storage.DB, mode ExchangeRestoreMode) error {
+	if tableExists(ctx, db, "_settings") {
+		// Tokens are intentionally never exported and an old target token must not
+		// survive either restore mode.
+		if _, err := db.Exec(ctx, `DELETE FROM _settings WHERE key LIKE 'exchange.token.%'`); err != nil {
+			return err
+		}
+		if mode == ExchangeRestoreClone {
+			if _, err := db.Exec(ctx, `DELETE FROM _settings WHERE key LIKE 'exchange.this_node.%'`); err != nil {
+				return err
+			}
+		}
+	}
+	if mode == ExchangeRestoreClone {
+		for _, table := range exchangeTables {
+			if !tableExists(ctx, db, table) {
+				continue
+			}
+			if _, err := db.Exec(ctx, "DELETE FROM "+quotedIdent(db, table)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // readMeta parses META.txt from the ZIP and returns key→value map.
@@ -1146,6 +1251,9 @@ func migrateSchema(ctx context.Context, db *storage.DB, configDest, cfgFileDir s
 	}
 	if err := db.EnsureBlobTable(ctx); err != nil {
 		return fmt.Errorf("ensure blobs: %w", err)
+	}
+	if err := db.EnsureExchangeSchema(ctx); err != nil {
+		return fmt.Errorf("ensure exchange schema: %w", err)
 	}
 	authRepo := auth.NewRepo(db)
 	if err := authRepo.EnsureSchema(ctx); err != nil {

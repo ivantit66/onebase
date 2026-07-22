@@ -306,6 +306,86 @@ func TestUniversalSafeSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUniversalExchangeStateRestoreModes(t *testing.T) {
+	ctx := context.Background()
+	src := newSQLite(t, "exchange-src")
+	if err := src.EnsureExchangeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.SaveExchangeThisNode(ctx, "Обмен", "center"); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.SaveExchangeToken(ctx, "Обмен", "source-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.RegisterExchangeChange(ctx, storage.ExchangeChange{
+		Plan: "Обмен", ObjectType: "Товар", ObjectID: "id-1", NodeCode: "fil01", Version: 7, ChangedAt: 123,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.Exec(ctx, `INSERT INTO _exchange_peers(plan,node_code,sent_no,ack_no,recv_no) VALUES ('Обмен','fil01',3,2,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.Exec(ctx, `INSERT INTO _exchange_applied(plan,object_type,object_id,changed_at) VALUES ('Обмен','Товар','id-2',456)`); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := ExportUniversal(ctx, src, "file", t.TempDir(), "", "test", &buf); err != nil {
+		t.Fatal(err)
+	}
+
+	// Disaster recovery restores node identity, queue and watermarks, but never
+	// restores the Bearer token.
+	dr := newSQLite(t, "exchange-dr")
+	if err := dr.EnsureExchangeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := dr.SaveExchangeToken(ctx, "Обмен", "old-target-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ImportUniversalWithOptions(ctx, dr, "file", t.TempDir(), "", bytes.NewReader(buf.Bytes()), int64(buf.Len()), ImportOptions{ExchangeMode: ExchangeRestoreDisasterRecovery}); err != nil {
+		t.Fatal(err)
+	}
+	if node, _ := dr.GetExchangeThisNode(ctx, "Обмен"); node != "center" {
+		t.Fatalf("DR node=%q", node)
+	}
+	if token, _ := dr.GetExchangeToken(ctx, "Обмен"); token != "" {
+		t.Fatalf("DR leaked/preserved token %q", token)
+	}
+	for _, table := range exchangeTables {
+		var count int
+		if err := dr.QueryRow(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("DR %s count=%d err=%v", table, count, err)
+		}
+	}
+
+	// Clone is isolated even when restoring over a target that previously
+	// participated in exchange.
+	clone := newSQLite(t, "exchange-clone")
+	if err := clone.EnsureExchangeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_ = clone.SaveExchangeThisNode(ctx, "Обмен", "fil02")
+	_ = clone.SaveExchangeToken(ctx, "Обмен", "clone-secret")
+	_ = clone.RegisterExchangeChange(ctx, storage.ExchangeChange{Plan: "Обмен", ObjectType: "Товар", ObjectID: "old", NodeCode: "center", Version: 1})
+	if _, err := ImportUniversal(ctx, clone, "file", t.TempDir(), "", bytes.NewReader(buf.Bytes()), int64(buf.Len())); err != nil {
+		t.Fatal(err)
+	}
+	if node, _ := clone.GetExchangeThisNode(ctx, "Обмен"); node != "" {
+		t.Fatalf("clone retained node %q", node)
+	}
+	if token, _ := clone.GetExchangeToken(ctx, "Обмен"); token != "" {
+		t.Fatalf("clone retained token %q", token)
+	}
+	for _, table := range exchangeTables {
+		var count int
+		if err := clone.QueryRow(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("clone %s count=%d err=%v", table, count, err)
+		}
+	}
+}
+
 func TestUniversalReportPresetsRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	src := newSQLite(t, "report-presets-src")
