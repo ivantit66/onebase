@@ -385,6 +385,17 @@ func (s *Server) handleManagedFormEvent(w http.ResponseWriter, r *http.Request) 
 		vars["PickResult"] = pr
 	}
 
+	// Повторная фаза 1: набранное в строке поиска открытого диалога приходит как
+	// _pick_query → переменная ПодборЗапрос для обработчика события Поиск.
+	// Кладём ВСЕГДА, а не только для непустой строки: очистка строки поиска —
+	// такой же запрос («покажи всё»), и обработчику нужно уметь его отличить от
+	// первого открытия, где переменной нет вовсе.
+	if eventName == string(metadata.FormEventOnSearch) {
+		q := strings.TrimSpace(r.FormValue("_pick_query"))
+		vars["ПодборЗапрос"] = q
+		vars["PickQuery"] = q
+	}
+
 	if err := addEntityTPEventContext(r, entity, form, tableAuthorities, eventTarget, obj, vars); err != nil {
 		respondJSON(enc, formEventResponse{Error: err.Error()})
 		return

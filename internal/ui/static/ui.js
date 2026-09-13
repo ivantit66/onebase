@@ -2699,6 +2699,30 @@ obReady(function () {
   });
 });
 
+// obPickerSearch — что набрано в строке поиска диалога подбора при СЕРВЕРНОМ
+// поиске. Диалог пересобирается на каждый ответ сервера (ответ приходит тем же
+// pickerData, что и первое открытие), поэтому без этого состояния набранное и
+// каретка пропадали бы после первой же буквы.
+var obPickerSearch = { element: '', query: '' };
+
+// obPickerSearchEmpty — серверный поиск не вернул диалога: обработчик ничего не
+// показал (обычно Сообщить и возврат). Окно и набранное оставляем — человек
+// правит запрос и ищет снова, — но строки чистим: прежняя выдача читается как
+// ответ на новый запрос.
+window.obPickerSearchEmpty = function () {
+  var modal = document.getElementById('_item-picker-modal');
+  var tb = modal ? modal.querySelector('tbody') : null;
+  if (!tb) return;
+  tb.innerHTML = '';
+  var tr = document.createElement('tr');
+  var td = document.createElement('td');
+  td.colSpan = 99;
+  td.style.cssText = 'padding:14px;text-align:center;color:#94a3b8;font-size:13px';
+  td.textContent = 'Ничего не найдено';
+  tr.appendChild(td);
+  tb.appendChild(tr);
+};
+
 function openItemPicker(payload, elementName, eventContext) {
   if (!payload) return;
   var cols = payload.columns || [];
@@ -2726,6 +2750,12 @@ function openItemPicker(payload, elementName, eventContext) {
   search.placeholder = 'Поиск...';
   search.autocomplete = 'off';
   search.style.cssText = 'padding:8px 12px;border:1px solid #e2e8f0;border-radius:7px;font-size:14px;margin-bottom:10px;outline:none';
+  // Серверный поиск (Конфиг.ПоискНаСервере): строка спрашивает обработчик
+  // события Поиск, а не фильтрует уже приехавшие строки. Нужен там, где
+  // фильтровать нечего: выдача обрезана пределом, а искомое за ним, либо
+  // колонка показана маской ПДн и её текст искать бессмысленно.
+  var serverSearch = !!cfg.serverSearch && typeof obFire === 'function';
+  if (serverSearch && obPickerSearch.element === elementName) search.value = obPickerSearch.query;
   box.appendChild(search);
   var scroll = document.createElement('div');
   scroll.style.cssText = 'overflow:auto;flex:1;min-height:120px;border:1px solid #e2e8f0;border-radius:7px';
@@ -2901,7 +2931,27 @@ function openItemPicker(payload, elementName, eventContext) {
   updateCounter();
   updateBasket();
   search.focus();
+  if (serverSearch && search.value) {
+    // Каретка в конец: окно пересобрано ответом сервера, а человек продолжает
+    // набирать — без этого следующая буква уехала бы в начало строки.
+    try { search.setSelectionRange(search.value.length, search.value.length); } catch (e) { /* старый браузер */ }
+  }
+  var searchTimer = null;
+  function scheduleServerSearch(q) {
+    obPickerSearch = { element: elementName, query: q };
+    if (searchTimer) clearTimeout(searchTimer);
+    // 250 мс: меньше — запрос на каждую букву, больше — задержка заметна.
+    searchTimer = setTimeout(function () {
+      var params = {};
+      if (eventContext) {
+        Object.keys(eventContext).forEach(function (key) { params[key] = eventContext[key]; });
+      }
+      params._pick_query = q;
+      obFire(elementName, 'Поиск', params);
+    }, 250);
+  }
   search.addEventListener('input', function () {
+    if (serverSearch) { scheduleServerSearch(this.value); return; }
     var q = this.value.toLowerCase();
     Array.prototype.forEach.call(tbody.rows, function (tr) {
       tr.style.display = (tr.getAttribute('data-search') || '').indexOf(q) >= 0 ? '' : 'none';
@@ -2918,7 +2968,10 @@ function openItemPicker(payload, elementName, eventContext) {
     updateCounter();
     updateBasket();
   });
-  btnCancel.addEventListener('click', function () { modal.remove(); });
+  btnCancel.addEventListener('click', function () {
+    obPickerSearch = { element: '', query: '' };
+    modal.remove();
+  });
   btnOk.addEventListener('click', function () {
     var result = checkedRows().map(function (cb) {
       var tr = cb.closest('tr');
@@ -2934,6 +2987,7 @@ function openItemPicker(payload, elementName, eventContext) {
       });
       return obj;
     });
+    obPickerSearch = { element: '', query: '' };
     modal.remove();
     if (typeof obFire === 'function') {
       var params = {};

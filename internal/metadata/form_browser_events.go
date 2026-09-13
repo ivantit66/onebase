@@ -25,7 +25,7 @@ type browserFormEventRule struct {
 var browserFormEventRules = []browserFormEventRule{
 	{
 		kinds:  []FormElementType{FormElementButton},
-		events: []FormEventType{FormEventOnClick, FormEventOnChoice},
+		events: []FormEventType{FormEventOnClick, FormEventOnSearch, FormEventOnChoice},
 	},
 	{
 		kinds: []FormElementType{
