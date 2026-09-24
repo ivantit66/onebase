@@ -4556,6 +4556,42 @@ function obOpenQuestion(payload, elementName) {
   text.style.cssText = 'font-size:14px;color:#1e293b;white-space:pre-line;margin-bottom:16px';
   text.textContent = payload.text;
   box.appendChild(text);
+  // Строки данных: итог операции (номер записанного документа, клиент, дата)
+  // и, при необходимости, поле ввода. Значения редактируемых уезжают обратно
+  // в обработчик вместе с нажатой кнопкой.
+  var inputs = {};
+  (payload.fields || []).forEach(function (field) {
+    if (!field || !field.name) return;
+    var line = document.createElement('div');
+    line.style.cssText = 'margin-bottom:10px';
+    if (field.label) {
+      var label = document.createElement('div');
+      label.style.cssText = 'font-size:12px;color:#64748b;margin-bottom:3px';
+      label.textContent = field.label;
+      line.appendChild(label);
+    }
+    if (field.editable) {
+      var input = document.createElement('input');
+      input.type = 'text';
+      input.value = field.value == null ? '' : String(field.value);
+      input.style.cssText = 'width:100%;padding:8px 10px;border:1px solid #e2e8f0;border-radius:7px;font-size:14px;outline:none';
+      line.appendChild(input);
+      inputs[field.name] = input;
+    } else {
+      var value = document.createElement('div');
+      value.style.cssText = field.strong
+        ? 'font-size:15px;font-weight:650;color:#0f172a'
+        : 'font-size:14px;color:#1e293b';
+      value.textContent = field.value == null ? '' : String(field.value);
+      line.appendChild(value);
+    }
+    box.appendChild(line);
+  });
+  if (payload.fields && payload.fields.length) {
+    var gap = document.createElement('div');
+    gap.style.cssText = 'height:8px';
+    box.appendChild(gap);
+  }
   var row = document.createElement('div');
   row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end';
   payload.variants.forEach(function (variant) {
@@ -4565,7 +4601,14 @@ function obOpenQuestion(payload, elementName) {
     btn.style.cssText = 'padding:8px 16px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;cursor:pointer;font-size:14px';
     btn.addEventListener('click', function () {
       modal.remove();
-      if (typeof obFire === 'function') obFire(elementName, 'Ответ', { _question_answer: variant });
+      var extra = { _question_answer: variant };
+      var names = Object.keys(inputs);
+      if (names.length) {
+        var values = {};
+        names.forEach(function (name) { values[name] = inputs[name].value; });
+        extra._question_fields = JSON.stringify(values);
+      }
+      if (typeof obFire === 'function') obFire(elementName, 'Ответ', extra);
     });
     row.appendChild(btn);
   });
