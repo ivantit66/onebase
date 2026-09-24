@@ -336,6 +336,20 @@ func (f *formObjectThis) selfRef() *interpreter.Ref {
 	return ref
 }
 
+// runtimeObject отдаёт запись, стоящую за Объект управляемой формы.
+//
+// Через этот интерфейс docWriter.fill принимает объект-основание, и модуль
+// документа (entityHookThis) его реализует, а форма — нет: Заполнить(Объект)
+// в обработчике кнопки падал «ожидается ссылка или объект, получено
+// *ui.formObjectThis». Создать документ на основании текущего прямо из формы —
+// ровно то, ради чего кнопка и пишется.
+func (f *formObjectThis) runtimeObject() *runtime.Object {
+	if f == nil {
+		return nil
+	}
+	return f.obj
+}
+
 func (f *formObjectThis) Get(name string) any {
 	if f == nil || f.obj == nil {
 		return nil
