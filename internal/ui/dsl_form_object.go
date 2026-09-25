@@ -215,6 +215,37 @@ func (f *formObjectThis) write() error {
 			return err
 		}
 	}
+	// План 88E: реквизит, видный обработчику только под маской, не должен
+	// перезаписать настоящее значение. Остальные пути записи (submit формы,
+	// REST, DSL-документы) это делают, а запись из обработчика формы —
+	// «Объект.Записать()» — шла мимо: оператор нажимал кнопку, и в базу
+	// уезжали звёздочки вместо телефона.
+	//
+	// После записи возвращаем в объект то, что прислал клиент (маску): иначе
+	// защита записи сама стала бы каналом раскрытия — обработчик прочитал бы
+	// после Записать() значение, которого не видел до неё.
+	if !isNew {
+		submitted := make(map[string]any, len(f.obj.Fields))
+		for k, v := range f.obj.Fields {
+			submitted[k] = v
+		}
+		restored, protectErr := f.srv.protectMaskedFieldsOnWrite(ctx, f.entity, f.obj.ID, f.obj.Fields)
+		if protectErr != nil {
+			return protectErr
+		}
+		if len(restored) > 0 {
+			defer func() {
+				for _, key := range restored {
+					if v, ok := submitted[key]; ok {
+						f.obj.Fields[key] = v
+					} else {
+						delete(f.obj.Fields, key)
+					}
+				}
+			}()
+		}
+	}
+
 	wasSaved := f.saved
 	previousExpectedVersion := f.expectedVersion
 	previousSavedFields := f.lastSavedFields
