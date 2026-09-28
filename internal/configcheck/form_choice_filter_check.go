@@ -228,6 +228,15 @@ func CheckFormChoiceFilter(proj *project.Project) []Issue {
 							}
 							continue
 						}
+						if scalar, isScalar := formChoiceScalarSource(owner, form, cond.From, entities); isScalar {
+							if targetField.Type != metadata.FieldTypeNumber {
+								add("%s: источник %q заканчивается числом, а %s.%s имеет тип %q", where, cond.From, target.Name, targetField.Name, targetField.Type)
+							} else if strings.TrimSpace(targetField.RefEntity) != "" {
+								add("%s: числовой источник %q нельзя сравнивать со ссылкой %s.%s", where, cond.From, target.Name, targetField.Name)
+							}
+							_ = scalar
+							continue
+						}
 						source, problem := formChoiceSourceEntity(owner, form, cond.From, entities)
 						if problem != "" {
 							add("%s: %s", where, problem)
@@ -324,13 +333,38 @@ func formChoiceSourceEntity(owner *metadata.Entity, form *metadata.FormModule, p
 		return nil, fmt.Sprintf("from %q: у %s нет реквизита %q", path, lead.Name, source.Attr)
 	}
 	if strings.TrimSpace(attr.RefEntity) == "" {
-		return nil, fmt.Sprintf("from %q: реквизит %s.%s не ссылочный, сравнивать нечего", path, lead.Name, attr.Name)
+		// Скалярный конец пути: адресный классификатор связывает дом с улицей
+		// числовым кодом, ссылки между ними нет вовсе. Сравнивать такое можно
+		// только с числовым реквизитом цели и только на равенство — вид объекта
+		// здесь не участвует, поэтому справочник-источник не возвращается.
+		if attr.Type == metadata.FieldTypeNumber {
+			return nil, ""
+		}
+		return nil, fmt.Sprintf("from %q: реквизит %s.%s имеет тип %q — сравнивать можно ссылку со ссылкой или число с числом", path, lead.Name, attr.Name, attr.Type)
 	}
 	target := entities[strings.ToLower(attr.RefEntity)]
 	if target == nil {
 		return nil, fmt.Sprintf("from %q: реквизит %s.%s ссылается на неизвестный объект %q", path, lead.Name, attr.Name, attr.RefEntity)
 	}
 	return target, ""
+}
+
+// formChoiceScalarSource сообщает, что источник заканчивается числовым
+// реквизитом посредника: тогда цель обязана быть числом, а не ссылкой.
+func formChoiceScalarSource(owner *metadata.Entity, form *metadata.FormModule, path string, entities map[string]*metadata.Entity) (*metadata.Field, bool) {
+	source, ok := metadata.ParseFormChoiceSource(path)
+	if !ok || !source.Deep() {
+		return nil, false
+	}
+	lead, leadOK := formChoiceRefSource(owner, form, source.Root+"."+source.Field, entities)
+	if !leadOK || lead == nil {
+		return nil, false
+	}
+	attr := entityFieldFold(lead, source.Attr)
+	if attr == nil || strings.TrimSpace(attr.RefEntity) != "" || attr.Type != metadata.FieldTypeNumber {
+		return nil, false
+	}
+	return attr, true
 }
 
 func formChoiceTypeRefEntity(typeRef string) string {

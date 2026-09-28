@@ -93,6 +93,26 @@ func choicePredicateSQL(d Dialect, entity *metadata.Entity, predicates []ChoiceP
 			next++
 			continue
 		}
+		// Числовое равенство: адресный классификатор связывает дом с улицей кодом,
+		// ссылки между ними нет. Значение приводится тем же каноническим
+		// преобразованием, что и запись, — иначе «10» и «10.0» перестали бы
+		// совпадать на SQLite, где число лежит текстом.
+		if strings.TrimSpace(field.RefEntity) == "" && field.Type == metadata.FieldTypeNumber {
+			if predicate.Op != metadata.FormChoiceOpEqual {
+				return "", nil, startArg, fmt.Errorf("choice filter %d: numeric field %q supports only eq", i, fieldName)
+			}
+			arg, err := canonicalNumberArg(*field, predicate.Value)
+			if err != nil {
+				return "", nil, startArg, fmt.Errorf("choice filter %d field %q: %w", i, fieldName, err)
+			}
+			if arg == nil {
+				return "", nil, startArg, fmt.Errorf("choice filter %d: numeric value for %q is empty", i, fieldName)
+			}
+			parts = append(parts, metadata.ColumnName(*field)+" = "+d.Placeholder(next))
+			args = append(args, arg)
+			next++
+			continue
+		}
 		if strings.TrimSpace(field.RefEntity) == "" {
 			return "", nil, startArg, fmt.Errorf("choice filter %d: field %q is not a reference", i, fieldName)
 		}

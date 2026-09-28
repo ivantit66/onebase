@@ -23,6 +23,7 @@ func choiceFilterProject(conditions []metadata.FormChoiceCondition) *project.Pro
 		Fields: []metadata.Field{
 			{Name: "Наименование", Type: metadata.FieldTypeString},
 			{Name: "ГруппаНеисправностей", Type: "reference:ГруппаНеисправностей", RefEntity: "ГруппаНеисправностей"},
+			{Name: "ИД", Type: metadata.FieldTypeNumber},
 		},
 	}
 	fault := &metadata.Entity{
@@ -32,6 +33,7 @@ func choiceFilterProject(conditions []metadata.FormChoiceCondition) *project.Pro
 			{Name: "Направление", Type: "reference:Направление", RefEntity: "Направление"},
 			{Name: "Группа", Type: "reference:ГруппаНеисправностей", RefEntity: "ГруппаНеисправностей"},
 			{Name: "Муниципальный", Type: metadata.FieldTypeBool},
+			{Name: "ВладелецКод", Type: metadata.FieldTypeNumber},
 		},
 	}
 	request := &metadata.Entity{
@@ -78,6 +80,13 @@ func TestCheckFormChoiceFilterValidPlanExamples(t *testing.T) {
 	if issues := CheckFormChoiceFilter(proj); len(issues) != 0 {
 		t.Fatalf("valid deep source choice_filter: %+v", issues)
 	}
+	// Скалярный конец пути: связь по числовому коду, ссылки между объектами нет.
+	proj.Entities[2].Forms[0].Elements[0].ChoiceFilter = []metadata.FormChoiceCondition{{
+		Field: "ВладелецКод", Op: metadata.FormChoiceOpEqual, From: "Объект.Направление.ИД",
+	}}
+	if issues := CheckFormChoiceFilter(proj); len(issues) != 0 {
+		t.Fatalf("valid numeric deep source: %+v", issues)
+	}
 	// Булев литерал: «только немуниципальные».
 	proj.Entities[2].Forms[0].Elements[0].ChoiceFilter = []metadata.FormChoiceCondition{{
 		Field: "Муниципальный", Op: metadata.FormChoiceOpEqual, Value: boolPointer(false),
@@ -118,9 +127,19 @@ func TestCheckFormChoiceFilterRejectsInvalidContracts(t *testing.T) {
 		{"deep source unknown attribute", func(p *project.Project) {
 			p.Entities[2].Forms[0].Elements[0].ChoiceFilter[0].From = "Объект.Направление.ID"
 		}, "нет реквизита"},
-		{"deep source is not a reference", func(p *project.Project) {
+		{"deep source is neither reference nor number", func(p *project.Project) {
 			p.Entities[2].Forms[0].Elements[0].ChoiceFilter[0].From = "Объект.Направление.Наименование"
-		}, "не ссылочный"},
+		}, "ссылку со ссылкой или число с числом"},
+		{"numeric source against a reference target", func(p *project.Project) {
+			p.Entities[2].Forms[0].Elements[0].ChoiceFilter[0] = metadata.FormChoiceCondition{
+				Field: "Направление", Op: metadata.FormChoiceOpEqual, From: "Объект.Направление.ИД",
+			}
+		}, "заканчивается числом"},
+		{"reference source against a numeric target", func(p *project.Project) {
+			p.Entities[2].Forms[0].Elements[0].ChoiceFilter[0] = metadata.FormChoiceCondition{
+				Field: "ВладелецКод", Op: metadata.FormChoiceOpEqual, From: "Объект.Направление.ГруппаНеисправностей",
+			}
+		}, "несовместимые ссылки"},
 		{"both sources", func(p *project.Project) {
 			p.Entities[2].Forms[0].Elements[0].ChoiceFilter[0].Value = boolPointer(false)
 		}, "ровно одно"},
@@ -168,6 +187,7 @@ hierarchical: true
 fields:
   - {name: Наименование, type: string}
   - {name: ГруппаНеисправностей, type: "reference:ГруппаНеисправностей"}
+  - {name: ИД, type: number}
 `)
 	mkFile(t, filepath.Join(dir, "catalogs", "плоский.yaml"), `name: Плоский
 fields:
@@ -186,6 +206,7 @@ fields:
   - {name: Плоский, type: "reference:Плоский"}
   - {name: Группа, type: "reference:ГруппаНеисправностей"}
   - {name: Муниципальный, type: bool}
+  - {name: ВладелецКод, type: number}
 `, targetHierarchical))
 	mkFile(t, filepath.Join(dir, "documents", "заявка.yaml"), `name: Заявка
 fields:
@@ -277,6 +298,20 @@ func TestRunFullChoiceFilterAcceptsPlanExamples(t *testing.T) {
 	} else {
 		assertNoChoiceFilterLintWarning(t, result)
 	}
+
+	// Числовой конец пути: связь по коду, ссылки между объектами нет.
+	writeChoiceFilterCheckProject(t, dir, true, `  - id: fault
+    kind: ПолеВвода
+    data_path: Объект.Неисправность
+    choice_filter:
+      - field: ВладелецКод
+        op: eq
+        from: Объект.Направление.ИД`)
+	if result := RunFullWithOptions(dir, Options{Lint: true}); !result.OK || len(choiceFilterIssues(result)) != 0 {
+		t.Fatalf("числовой глубокий источник не прошёл onebase check: issues=%+v warnings=%+v", result.Issues, result.Warnings)
+	} else {
+		assertNoChoiceFilterLintWarning(t, result)
+	}
 }
 
 func TestRunFullChoiceFilterRejectsPublicContractViolations(t *testing.T) {
@@ -352,7 +387,11 @@ func TestRunFullChoiceFilterRejectsPublicContractViolations(t *testing.T) {
 		{"deep source is not a reference", true, `  - id: fault
     kind: ПолеВвода
     data_path: Объект.Неисправность
-    choice_filter: [{field: Направление, op: eq, from: Объект.Направление.Наименование}]`, "не ссылочный"},
+    choice_filter: [{field: Направление, op: eq, from: Объект.Направление.Наименование}]`, "ссылку со ссылкой или число с числом"},
+		{"numeric source against a reference target", true, `  - id: fault
+    kind: ПолеВвода
+    data_path: Объект.Неисправность
+    choice_filter: [{field: Направление, op: eq, from: Объект.Направление.ИД}]`, "заканчивается числом"},
 		{"deep source of incompatible kind", true, `  - id: fault
     kind: ПолеВвода
     data_path: Объект.Неисправность

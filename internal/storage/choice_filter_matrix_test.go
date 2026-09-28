@@ -12,6 +12,7 @@ import (
 	"github.com/ivantit66/onebase/internal/dbtest"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/storage"
+	"github.com/shopspring/decimal"
 )
 
 type choiceFilterFixture struct {
@@ -44,6 +45,7 @@ func seedChoiceFilterFixture(t *testing.T, db *storage.DB) choiceFilterFixture {
 			{Name: "Направление", Type: metadata.FieldType("reference:" + direction.Name), RefEntity: direction.Name},
 			{Name: "Owner", Type: metadata.FieldTypeString},
 			{Name: "Муниципальный", Type: metadata.FieldTypeBool},
+			{Name: "ВладелецКод", Type: metadata.FieldTypeNumber},
 		},
 	}
 	if err := db.Migrate(ctx, []*metadata.Entity{direction, target}); err != nil {
@@ -87,13 +89,14 @@ func seedChoiceFilterFixture(t *testing.T, db *storage.DB) choiceFilterFixture {
 		owner     string
 		folder    bool
 		municipal bool
+		ownerCode string
 	}{
-		{fixture.rootRow, "root alpha", fixture.root, "alice", false, false},
-		{fixture.childRow, "child alpha", fixture.child, "alice", false, true},
-		{fixture.grandRow, "grand alpha", fixture.grand, "alice", false, false},
-		{choiceTestUUID("000000000104"), "sibling alpha", fixture.sibling, "alice", false, false},
-		{choiceTestUUID("000000000105"), "child blocked", fixture.child, "bob", false, true},
-		{choiceTestUUID("000000000106"), "folder alpha", fixture.child, "alice", true, false},
+		{fixture.rootRow, "root alpha", fixture.root, "alice", false, false, "10"},
+		{fixture.childRow, "child alpha", fixture.child, "alice", false, true, "20"},
+		{fixture.grandRow, "grand alpha", fixture.grand, "alice", false, false, "10.0"},
+		{choiceTestUUID("000000000104"), "sibling alpha", fixture.sibling, "alice", false, false, "30"},
+		{choiceTestUUID("000000000105"), "child blocked", fixture.child, "bob", false, true, "40"},
+		{choiceTestUUID("000000000106"), "folder alpha", fixture.child, "alice", true, false, "50"},
 	} {
 		if err := db.Upsert(ctx, target.Name, row.id, map[string]any{
 			"Наименование":  row.name,
@@ -101,6 +104,7 @@ func seedChoiceFilterFixture(t *testing.T, db *storage.DB) choiceFilterFixture {
 			"Owner":         row.owner,
 			"ЭтоГруппа":     row.folder,
 			"Муниципальный": row.municipal,
+			"ВладелецКод":   row.ownerCode,
 		}, target); err != nil {
 			t.Fatalf("seed target %s: %v", row.name, err)
 		}
@@ -206,6 +210,29 @@ func TestChoiceFilterPredicatesMatrix(t *testing.T) {
 				ChoicePredicates: []storage.ChoicePredicate{{Field: "Муниципальный", Op: metadata.FormChoiceOpInHierarchy, Value: true}},
 			}); err == nil {
 				t.Fatal("in_hierarchy у булева реквизита принят")
+			}
+		})
+
+		// Числовой конец глубокого источника: адресный классификатор связывает
+		// дом с улицей кодом. На SQLite число лежит текстом, поэтому «10» и
+		// «10.0» обязаны совпасть — сравнение идёт по каноническому виду записи.
+		t.Run("numeric equality matches the canonical stored form", func(t *testing.T) {
+			rows := assertChoiceListAndCount(t, db, fixture, storage.ListParams{ChoicePredicates: []storage.ChoicePredicate{
+				{Field: "ВладелецКод", Op: metadata.FormChoiceOpEqual, Value: decimal.RequireFromString("10")},
+			}}, 2)
+			got := strings.Join(choiceRowNames(rows), ",")
+			if !strings.Contains(got, "root alpha") || !strings.Contains(got, "grand alpha") {
+				t.Fatalf("числовое равенство не нашло обе записи: %q", got)
+			}
+			if _, err := db.CountList(context.Background(), fixture.target.Name, fixture.target, storage.ListParams{
+				ChoicePredicates: []storage.ChoicePredicate{{Field: "ВладелецКод", Op: metadata.FormChoiceOpInHierarchy, Value: decimal.RequireFromString("10")}},
+			}); err == nil {
+				t.Fatal("in_hierarchy у числового реквизита принят")
+			}
+			if _, err := db.CountList(context.Background(), fixture.target.Name, fixture.target, storage.ListParams{
+				ChoicePredicates: []storage.ChoicePredicate{{Field: "ВладелецКод", Op: metadata.FormChoiceOpEqual, Value: "не число"}},
+			}); err == nil {
+				t.Fatal("нечисловое значение принято для числового реквизита")
 			}
 		})
 
