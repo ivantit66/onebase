@@ -1,0 +1,36 @@
+schema: onebase.form/v1
+form:
+  name: Объекта
+  kind: object
+  entity: Заявка
+elements:
+  - kind: ГруппаФормы
+    name: ГруппаШапка
+    children:
+      - kind: ПолеВвода
+        name: ПолеФилиал
+        data_path: Объект.Филиал
+        choice: true
+      - id: request-direction
+        kind: ПолеВвода
+        name: ПолеНаправление
+        data_path: Объект.Направление
+        choice: true
+        # v1 плана 170: равенство по реквизиту — это в main уже есть.
+        choice_filter:
+          - field: Филиал
+            op: eq
+            from: Объект.Филиал
+      - kind: ПолеВвода
+        name: ПолеНаселённыйПункт
+        data_path: Объект.НаселённыйПункт
+        choice: true
+      - kind: ПолеВвода
+        name: ПолеТипОбращения
+        data_path: Объект.ТипОбращения
+      - kind: ПолеВвода
+        name: ПолеКомментарий
+        data_path: Объект.Комментарий
+  - kind: ТабличнаяЧасть
+    name: ТаблицаСтроки
+    data_path: Объект.Строки

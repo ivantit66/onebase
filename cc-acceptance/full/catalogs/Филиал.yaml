@@ -1,0 +1,5 @@
+name: Филиал
+title: Филиал
+fields:
+  - name: Наименование
+    type: string

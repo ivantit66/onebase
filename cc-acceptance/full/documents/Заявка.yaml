@@ -1,0 +1,25 @@
+name: Заявка
+title: Заявка
+fields:
+  - name: Филиал
+    type: "reference:Филиал"
+  - name: Направление
+    type: "reference:Направление"
+  - name: Неисправность
+    type: "reference:Неисправность"
+  - name: НаселённыйПункт
+    type: "reference:АдресныйКлассификатор"
+  - name: ТипОбращения
+    type: string
+  - name: Комментарий
+    type: string
+  # Синтетическое «число со значимым нулём» — сценарий заявки #1274.
+  - name: КоличествоПовторов
+    type: number
+tableparts:
+  - name: Строки
+    fields:
+      - name: Неисправность
+        type: "reference:Неисправность"
+      - name: Количество
+        type: number

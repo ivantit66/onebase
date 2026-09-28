@@ -1,0 +1,14 @@
+name: Администратор
+description: Администратор конфигурации
+permissions:
+  catalogs:
+    Направление: [read, write]
+    ГруппаНеисправностей: [read, write]
+    Неисправность: [read, write]
+    АдресныйКлассификатор: [read, write]
+    Филиал: [read, write]
+  documents:
+    Заявка: [read, write]
+  processors:
+    ЗаполнитьДемоданные: [run]
+    ПроверитьНеопределено: [run]

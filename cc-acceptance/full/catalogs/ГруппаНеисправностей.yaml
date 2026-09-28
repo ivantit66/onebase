@@ -1,0 +1,6 @@
+name: ГруппаНеисправностей
+title: Группа неисправностей
+hierarchical: true
+fields:
+  - name: Наименование
+    type: string

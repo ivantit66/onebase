@@ -1,0 +1,9 @@
+name: АдресныйКлассификатор
+title: Адресный классификатор
+hierarchical: true
+# Населённый пункт — ГРУППА: у него есть улицы. Отсюда сценарий choice_folders.
+fields:
+  - name: Наименование
+    type: string
+  - name: Муниципальный
+    type: bool

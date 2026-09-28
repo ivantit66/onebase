@@ -1,0 +1,10 @@
+name: Направление
+title: Направление обслуживания
+hierarchical: true
+fields:
+  - name: Наименование
+    type: string
+  - name: ГруппаНеисправностей
+    type: "reference:ГруппаНеисправностей"
+  - name: Филиал
+    type: "reference:Филиал"

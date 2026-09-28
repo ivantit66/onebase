@@ -1,0 +1,13 @@
+name: Оператор
+description: Оператор колл-центра
+permissions:
+  catalogs:
+    Направление: [read]
+    ГруппаНеисправностей: [read]
+    Неисправность: [read]
+    АдресныйКлассификатор: [read]
+    Филиал: [read]
+  documents:
+    Заявка: [read, write]
+  processors:
+    ЗаполнитьДемоданные: [run]

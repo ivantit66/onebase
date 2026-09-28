@@ -1,0 +1,72 @@
+schema: onebase.form/v1
+form:
+  name: Объекта
+  kind: object
+  entity: Заявка
+elements:
+  # Панель действий: scroll_x + primary (PR #1774).
+  - kind: ГруппаФормы
+    name: ГруппаДействия
+    orientation: horizontal
+    scroll_x: true
+    children:
+      - kind: Кнопка
+        name: КнПринять
+        title:
+          ru: "Принять"
+        primary: true
+      - kind: Кнопка
+        name: КнОтложить
+        title:
+          ru: "Отложить"
+  - kind: ГруппаФормы
+    name: ГруппаШапка
+    children:
+      - kind: ПолеВвода
+        name: ПолеФилиал
+        data_path: Объект.Филиал
+        choice: true
+      - id: request-direction
+        kind: ПолеВвода
+        name: ПолеНаправление
+        data_path: Объект.Направление
+        choice: true
+        # v1 плана 170 — уже в main.
+        choice_filter:
+          - field: Филиал
+            op: eq
+            from: Объект.Филиал
+      - id: request-fault
+        kind: ПолеВвода
+        name: ПолеНеисправность
+        data_path: Объект.Неисправность
+        choice: true
+        # PR #1769: источник за одной ссылкой + булев литерал обычного реквизита.
+        # Подчинение направлению (PR #1696) действует одновременно с этим отбором.
+        choice_filter:
+          - field: Группа
+            op: eq
+            from: Объект.Направление.ГруппаНеисправностей
+          - field: Муниципальный
+            op: eq
+            value: false
+      - id: request-city
+        kind: ПолеВвода
+        name: ПолеНаселённыйПункт
+        data_path: Объект.НаселённыйПункт
+        choice: true
+        # PR #1774: населённый пункт — группа, и список не разворачивается.
+        choice_folders: true
+        choice_dropdown: false
+      - kind: ПолеВвода
+        name: ПолеТипОбращения
+        data_path: Объект.ТипОбращения
+        # PR #1774: правит только администратор.
+        editable_admin_only: true
+      - kind: ПолеВвода
+        name: ПолеКомментарий
+        data_path: Объект.Комментарий
+  # Колонка ТЧ со ссылкой на подчинённый справочник — сценарий блокера 2 ревью #1696.
+  - kind: ТабличнаяЧасть
+    name: ТаблицаСтроки
+    data_path: Объект.Строки
