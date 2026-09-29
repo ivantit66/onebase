@@ -1,0 +1,32 @@
+schema: onebase.form/v1
+form:
+  name: Объекта
+  kind: object
+  entity: Заявка
+elements:
+  - kind: ПолеВвода
+    name: ПолеНаправление
+    data_path: Объект.Направление
+    choice: true
+  # Подбор с ДВУМЯ ограничениями сразу: владелец (#1696) и собственный
+  # choice_filter (план 170). Ради этого сочетания пакет и заведён.
+  - id: fault
+    kind: ПолеВвода
+    name: ПолеНеисправность
+    data_path: Объект.Неисправность
+    choice: true
+    choice_filter:
+      - field: is_folder
+        op: eq
+        value: false
+  - kind: ПолеВвода
+    name: ПолеКомментарий
+    data_path: Объект.Комментарий
+  # Серверный поиск в диалоге подбора (#1495).
+  - kind: Кнопка
+    name: ПодборКн
+    title:
+      ru: "Подбор неисправности"
+    events:
+      Нажатие: ПодборНажатие
+      Поиск: ПодборПоиск

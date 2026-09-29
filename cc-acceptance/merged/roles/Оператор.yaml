@@ -1,0 +1,14 @@
+name: Оператор
+description: Оператор колл-центра — видит маску вместо секретного реквизита
+permissions:
+  catalogs:
+    Направление: [read]
+    Неисправность: [read]
+  documents:
+    Заявка: [read, write]
+  processors:
+    ЗаполнитьПриёмку: [run]
+  field_access:
+    catalogs:
+      Неисправность:
+        Секрет: { read: mask_all }

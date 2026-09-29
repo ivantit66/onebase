@@ -1,0 +1,9 @@
+name: Заявка
+title: Заявка
+fields:
+  - name: Направление
+    type: "reference:Направление"
+  - name: Неисправность
+    type: "reference:Неисправность"
+  - name: Комментарий
+    type: string

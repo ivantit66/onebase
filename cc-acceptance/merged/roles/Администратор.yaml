@@ -1,0 +1,10 @@
+name: Администратор
+description: Администратор — видит всё
+permissions:
+  catalogs:
+    Направление: [read, write]
+    Неисправность: [read, write]
+  documents:
+    Заявка: [read, write]
+  processors:
+    ЗаполнитьПриёмку: [run]
