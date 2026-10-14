@@ -1686,7 +1686,9 @@ const tplNav = `
   {{/* #215.2: не дублируем ведущую «Главная», если в базе есть одноимённая
        подсистема (её представление совпадает с меткой домашней ссылки). Когда
        ведущей ссылки нет (HideHome), одноимённый раздел, наоборот, показываем. */}}
-  {{range .Subsystems}}{{if or $.HideHome (ne (.DisplayName $.Lang) $home)}}<a href="/ui/?subsystem={{.Name}}" class="{{if eq .Name $.CurrentSubsystem}}active{{end}}">{{lucideIcon .Icon}}{{.DisplayName $.Lang}}</a>{{end}}{{end}}
+  {{/* #378: подсистема с заданной page открывается пунктом меню напрямую,
+       а не главной с отфильтрованной боковой панелью. */}}
+  {{range .Subsystems}}{{if or $.HideHome (ne (.DisplayName $.Lang) $home)}}<a href="{{if .Page}}/ui/page/{{.Page}}?subsystem={{.Name}}{{else}}/ui/?subsystem={{.Name}}{{end}}" class="{{if eq .Name $.CurrentSubsystem}}active{{end}}">{{lucideIcon .Icon}}{{.DisplayName $.Lang}}</a>{{end}}{{end}}
 </nav>
 {{end}}
 <div class="app-body">

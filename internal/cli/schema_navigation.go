@@ -37,6 +37,7 @@ func navigationContainerSchema(home bool) map[string]any {
 		props["icon"] = stringSchema("Имя иконки Lucide")
 		props["order"] = map[string]any{"type": "integer"}
 		props["roles"] = names
+		props["page"] = stringSchema("Страница раздела: пункт верхнего меню ведёт на /ui/page/<page>")
 		props["contents"] = contents
 		subHome := navigationContainerSchema(true)
 		delete(subHome["properties"].(map[string]any), "menu")
