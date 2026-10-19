@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/ivantit66/onebase/internal/metadata"
@@ -14,14 +15,42 @@ type browserFormEventTarget struct {
 }
 
 type browserFormElementVisit struct {
-	element           *metadata.FormElement
-	parentTablePart   *metadata.FormElement
+	element         *metadata.FormElement
+	parentTablePart *metadata.FormElement
+	// path — внутренний устойчивый ключ размещения элемента: индексы от корня
+	// дерева формы («0», «0.2.1»). Имя элемента ключом служить не может:
+	// имя бывает пустым (Надпись, декорации) и повторяющимся (одна ТЧ размещена
+	// дважды), и после #1226 в карту состояний попадает каждый потомок
+	// условного контейнера, а не только элементы с собственным условием (#1543).
+	// Индексы считаются по исходному дереву — ДО фильтрации скрытых страниц,
+	// иначе ключи разъехались бы с клиентом.
+	path string
+	// effectiveReadOnly — нередактируемость по МЕТАДАННЫМ (своя и унаследованная).
+	// conditional — на отрисовку элемента влияет собственное
+	// readonly_when/hidden_when либо readonly_when/hidden_when контейнера-предка.
+	// Для такого элемента метаданные больше не говорят, что увидел браузер:
+	// условие могло не отрисовать его вовсе либо отрисовать нередактируемым, а по
+	// метаданным он остаётся размещённым и editable.
 	effectiveReadOnly bool
+	conditional       bool
+	// readOnlyWhenAncestors — предки, объявившие readonly_when, от корня к
+	// ближайшему родителю. Условная нередактируемость наследуется так же,
+	// как статическая: «после проведения вся группа замерзает» — это условие на
+	// группе, а не на каждом её реквизите по отдельности (#1184).
+	//
+	// Выражения предков здесь НЕ вычисляются: обход не знает значений записи и
+	// служит ещё и путям, где условие вычислять нельзя (право на событие,
+	// частичная запись). Вычисляет их managedFormElementStates — единственное
+	// место, где известны и значения, и вычислитель.
+	readOnlyWhenAncestors []*metadata.FormElement
 }
 
 // resolveBrowserFormEvent is the single fail-closed server-side model of what
 // managed.js/templates can emit. Metadata may describe additional server-side
 // lifecycle events, but they cannot be invoked through the browser endpoint.
+// Сам перечень пар «вид элемента → событие» лежит в metadata
+// (BrowserFormEventsFor): его читает ещё и сторож руководства в internal/cli,
+// а из неэкспортированной таблицы он был вынужден держать копию (#1151).
 func resolveBrowserFormEvent(form *metadata.FormModule, elementName, eventName string, processor bool) (string, browserFormEventTarget, bool, error) {
 	var target browserFormEventTarget
 	if form == nil {
@@ -34,7 +63,7 @@ func resolveBrowserFormEvent(form *metadata.FormModule, elementName, eventName s
 
 	elementName = strings.TrimSpace(elementName)
 	if elementName == "" {
-		if event != metadata.FormEventOnOpen {
+		if !browserEventAllowedForForm(event) {
 			return "", target, false, fmt.Errorf("событие %q нельзя вызвать на уровне формы", eventName)
 		}
 		proc := form.Handlers[event]
@@ -80,7 +109,7 @@ func resolveBrowserFormEvent(form *metadata.FormModule, elementName, eventName s
 	}
 
 	if len(commands) == 1 {
-		if event != metadata.FormEventOnClick && event != metadata.FormEventOnChoice {
+		if !browserEventAllowedForCommand(event) {
 			return "", target, false, fmt.Errorf("команда формы %q не отправляет событие %q", elementName, eventName)
 		}
 		target.command = commands[0]
@@ -90,47 +119,66 @@ func resolveBrowserFormEvent(form *metadata.FormModule, elementName, eventName s
 }
 
 func browserEventAllowedForElement(kind metadata.FormElementType, event metadata.FormEventType) bool {
-	switch kind {
-	case metadata.FormElementButton:
-		return event == metadata.FormEventOnClick || event == metadata.FormEventOnChoice
-	case metadata.FormElementField, metadata.FormElementCodeField,
-		metadata.FormElementCheckbox, metadata.FormElementDatePicker,
-		metadata.FormElementSwitch:
-		return event == metadata.FormEventOnChange || event == metadata.FormEventOnChoice
-	case metadata.FormElementInputList:
-		return event == metadata.FormEventOnChange || event == metadata.FormEventStartChoice || event == metadata.FormEventOnChoice
-	case metadata.FormElementTablePart:
-		return event == metadata.FormEventOnChange || event == metadata.FormEventOnRowAdded ||
-			event == metadata.FormEventOnRowDeleted || event == metadata.FormEventOnChoice ||
-			event == metadata.FormEventOnRowActivated || event == metadata.FormEventOnRowChanged ||
-			event == metadata.FormEventAfterRowAdd
-	default:
-		return false
+	return metadata.BrowserFormEventAllowed(kind, event)
+}
+
+func browserEventAllowedForCommand(event metadata.FormEventType) bool {
+	return containsFormEvent(metadata.BrowserFormCommandEvents(), event)
+}
+
+func browserEventAllowedForForm(event metadata.FormEventType) bool {
+	return containsFormEvent(metadata.BrowserFormLevelEvents(), event)
+}
+
+func containsFormEvent(events []metadata.FormEventType, event metadata.FormEventType) bool {
+	for _, candidate := range events {
+		if candidate == event {
+			return true
+		}
 	}
+	return false
 }
 
 func walkBrowserFormElements(form *metadata.FormModule, visit func(browserFormElementVisit)) {
 	if form == nil || visit == nil {
 		return
 	}
-	var walk func([]*metadata.FormElement, *metadata.FormElement, bool)
-	walk = func(elements []*metadata.FormElement, parentTable *metadata.FormElement, parentReadOnly bool) {
+	var walk func([]*metadata.FormElement, string, *metadata.FormElement, bool, bool, []*metadata.FormElement)
+	walk = func(elements []*metadata.FormElement, parentPath string, parentTable *metadata.FormElement, parentReadOnly, parentConditional bool, roWhenAncestors []*metadata.FormElement) {
+		next := 0
 		for _, element := range elements {
 			if element == nil {
 				continue
 			}
+			path := parentPath + strconv.Itoa(next)
+			next++
 			effectiveReadOnly := parentReadOnly || element.ReadOnly
+			conditional := parentConditional ||
+				strings.TrimSpace(element.HiddenWhen) != "" ||
+				strings.TrimSpace(element.ReadOnlyWhen) != ""
 			visit(browserFormElementVisit{
-				element: element, parentTablePart: parentTable, effectiveReadOnly: effectiveReadOnly,
+				element: element, parentTablePart: parentTable,
+				path:              path,
+				effectiveReadOnly: effectiveReadOnly, conditional: conditional,
+				readOnlyWhenAncestors: roWhenAncestors,
 			})
 			nextTable := parentTable
 			if element.Kind == metadata.FormElementTablePart {
 				nextTable = element
 			}
-			walk(element.Children, nextTable, effectiveReadOnly)
+			// Своё условие видят только потомки. Список копируется, а не
+			// дописывается на месте: append по общему массиву склеил бы ветки
+			// соседних контейнеров — второй потомок затёр бы предка первого.
+			nextAncestors := roWhenAncestors
+			if strings.TrimSpace(element.ReadOnlyWhen) != "" {
+				nextAncestors = make([]*metadata.FormElement, 0, len(roWhenAncestors)+1)
+				nextAncestors = append(nextAncestors, roWhenAncestors...)
+				nextAncestors = append(nextAncestors, element)
+			}
+			walk(element.Children, path+".", nextTable, effectiveReadOnly, conditional, nextAncestors)
 		}
 	}
-	walk(form.Elements, nil, false)
+	walk(form.Elements, "", nil, false, false, nil)
 }
 
 func effectiveFormElementReadOnly(form *metadata.FormModule, target *metadata.FormElement) bool {

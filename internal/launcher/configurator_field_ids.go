@@ -18,46 +18,283 @@ package launcher
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	"maps"
+	"path/filepath"
 	"strings"
+
+	"github.com/ivantit66/onebase/internal/metadata"
 )
+
+func splitStandardSaveFields(fields []saveField, name string) ([]saveField, *saveField, error) {
+	ordinary := make([]saveField, 0, len(fields))
+	var standard *saveField
+	for i := range fields {
+		f := fields[i]
+		if strings.EqualFold(strings.TrimSpace(f.Name), name) {
+			if standard != nil {
+				return nil, nil, fmt.Errorf("multiple %s fields alongside numerator", name)
+			}
+			standard = &fields[i]
+		} else {
+			ordinary = append(ordinary, f)
+		}
+	}
+	return ordinary, standard, nil
+}
+
+func standardSaveField(name, id string, properties *saveStandardField) saveField {
+	f := saveField{Name: name, ID: id, Type: "string"}
+	if properties != nil {
+		f.Title, f.Label, f.Titles = properties.Title, properties.Label, properties.Titles
+		f.Required, f.Default, f.PII = properties.Required, properties.Default, properties.PII
+	}
+	return f
+}
+
+func standardProperties(f saveField) *saveStandardField {
+	if f.Title == "" && f.Label == "" && len(f.Titles) == 0 && !f.Required && f.Default == "" && !f.PII {
+		return nil
+	}
+	return &saveStandardField{
+		Title: f.Title, Label: f.Label, Titles: f.Titles,
+		Required: f.Required, Default: f.Default, PII: f.PII,
+	}
+}
+
+// applyStandardFieldEdits keeps the standard column's identity while moving
+// its user properties between numerator.field and fields. The same function
+// runs for file and database configuration storage.
+func applyStandardFieldEdits(ent *saveEntity, kind metadata.Kind, fields []saveField, numerator *saveNumeratorEdit) error {
+	hadNumerator := ent.Numerator != nil
+	willNumerator := hadNumerator
+	if numerator != nil {
+		willNumerator = numerator.Numerator != nil
+	}
+	// After disabling numbering, the materialized std_* field still carries
+	// the same properties and remains editable in the numbering section.
+	wasStandard := false
+	standardName, standardID := standardFieldIdentity(kind, true)
+	for _, field := range ent.Fields {
+		if strings.EqualFold(field.Name, standardName) && field.ID == standardID {
+			wasStandard = true
+			break
+		}
+	}
+	name, id := standardFieldIdentity(kind, hadNumerator || willNumerator || wasStandard)
+	if name == "" {
+		ent.Fields = ensureFieldIDs(ent.Fields, fields)
+		if numerator != nil {
+			ent.Numerator = numerator.Numerator
+		}
+		return nil
+	}
+	previousOrdinary, previousStandard, err := splitStandardSaveFields(ent.Fields, name)
+	if err != nil {
+		return err
+	}
+	nextOrdinary, nextStandard, err := splitStandardSaveFields(fields, name)
+	if err != nil {
+		return err
+	}
+	if !hadNumerator && !willNumerator && nextStandard == nil {
+		// With numbering already off, deleting or renaming the ordinary row
+		// continues to use the ordinary field editor's existing behavior.
+		ent.Fields = ensureFieldIDs(ent.Fields, fields)
+		return nil
+	}
+	if hadNumerator && ent.Numerator.Field != nil && previousStandard != nil {
+		return fmt.Errorf("%s is defined in both fields and numerator.field", name)
+	}
+	standard := standardSaveField(name, id, nil)
+	if previousStandard != nil {
+		standard = *previousStandard
+	} else if hadNumerator {
+		standard = standardSaveField(name, id, ent.Numerator.Field)
+	}
+	// Compare both editors against the stored translations before applying either.
+	previousTitles := standard.Titles
+	var ordinaryTitles, numeratorTitles map[string]string
+	if nextStandard != nil {
+		ordinaryTitles = nextStandard.titleEdits
+		if ordinaryTitles == nil {
+			ordinaryTitles = nextStandard.Titles
+		}
+	}
+	if numerator != nil {
+		numeratorTitles = numerator.FieldTitles
+	}
+	titles, err := reconcileStandardTitles(name, previousTitles, ordinaryTitles, numeratorTitles)
+	if err != nil {
+		return err
+	}
+	if nextStandard != nil {
+		if nextStandard.Type != "" && nextStandard.Type != "string" {
+			return fmt.Errorf("standard field %s must have type string", name)
+		}
+		standard = carryFieldKeys(*nextStandard, standard)
+	}
+	standard.Name, standard.ID, standard.Type = name, id, "string"
+	if numerator != nil {
+		// Preserve the legacy label spelling on an unchanged roundtrip.
+		// A submitted change, including an explicit clear, supersedes it.
+		previousTitle := standard.Title
+		if previousTitle == "" {
+			previousTitle = standard.Label
+		}
+		if numerator.FieldTitle != nil && *numerator.FieldTitle != previousTitle {
+			standard.Title, standard.Label = *numerator.FieldTitle, ""
+		}
+	}
+	standard.Titles = titles
+	if willNumerator {
+		active := ent.Numerator
+		if numerator != nil {
+			active = numerator.Numerator
+		}
+		active.Field = standardProperties(standard)
+		ent.Numerator = active
+		ent.Fields = ensureFieldIDs(previousOrdinary, nextOrdinary)
+		return nil
+	}
+	// Turning numbering off retains the same physical column and stable ID.
+	ent.Numerator = nil
+	ent.Fields = append([]saveField{standard}, ensureFieldIDs(previousOrdinary, nextOrdinary)...)
+	return nil
+}
+
+// A submitted value identical to storage is a stale duplicate, not an edit.
+// Missing controls preserve storage; explicit empty values clear only that language.
+func reconcileStandardTitles(name string, previous, ordinary, numerator map[string]string) (map[string]string, error) {
+	edits := make(map[string]string)
+	for lang, value := range ordinary {
+		if value != previous[lang] {
+			edits[lang] = value
+		}
+	}
+	for lang, value := range numerator {
+		if value == previous[lang] {
+			continue
+		}
+		if other, changed := edits[lang]; changed && other != value {
+			return nil, &standardTitleConflictError{field: name, language: lang}
+		}
+		edits[lang] = value
+	}
+	titles := maps.Clone(previous)
+	if titles == nil {
+		titles = make(map[string]string)
+	}
+	for lang, value := range edits {
+		if value == "" {
+			delete(titles, lang)
+		} else {
+			titles[lang] = value
+		}
+	}
+	if len(titles) == 0 {
+		return nil, nil
+	}
+	return titles, nil
+}
+
+type standardTitleConflictError struct {
+	field, language string
+}
+
+func (e *standardTitleConflictError) Error() string {
+	return fmt.Sprintf("conflicting translations for standard field %s (%s): make both editors agree", e.field, e.language)
+}
 
 // ensureFieldIDs возвращает next с проставленными id: перенесёнными из prev по
 // имени реквизита либо сгенерированными. Заодно переносит ключи, которых
-// редактор не знает и потому не прислал бы обратно, — сейчас это `default`
-// (план 153).
+// редактор не знает и потому не прислал бы обратно, — их список в
+// carryFieldKeys.
 func ensureFieldIDs(prev, next []saveField) []saveField {
-	byName := make(map[string]string, len(prev))
-	defaults := make(map[string]string, len(prev))
+	byName := make(map[string]saveField, len(prev))
 	used := make(map[string]bool, len(prev))
 	for _, f := range prev {
 		key := strings.ToLower(strings.TrimSpace(f.Name))
-		if f.Default != "" {
-			defaults[key] = f.Default
+		byName[key] = carryFieldKeys(f, byName[key])
+		if f.ID != "" {
+			used[f.ID] = true
 		}
-		if f.ID == "" {
-			continue
-		}
-		byName[key] = f.ID
-		used[f.ID] = true
 	}
 	out := make([]saveField, len(next))
 	copy(out, next)
 	for i := range out {
 		key := strings.ToLower(strings.TrimSpace(out[i].Name))
-		if out[i].Default == "" {
-			out[i].Default = defaults[key]
+		out[i] = carryFieldKeys(out[i], byName[key])
+		if out[i].ID == "" {
+			out[i].ID = newFieldID(used)
 		}
-		if out[i].ID != "" {
-			used[out[i].ID] = true
-			continue
-		}
-		if id, ok := byName[key]; ok {
-			out[i].ID = id
-			continue
-		}
-		out[i].ID = newFieldID(used)
+		used[out[i].ID] = true
 	}
 	return out
+}
+
+// carryFieldKeys дополняет f незаполненными ключами из прежнего состояния
+// файла old. Значение из формы главнее: иначе редактор, когда научится править
+// эти ключи, не смог бы их изменить.
+//
+// Перенос односторонний, и это осознанная граница. Снять через конфигуратор
+// `required`, `pii` или подпись нельзя — он их не показывает, а значит
+// «редактор не прислал ключ» и «пользователь снял галочку» приходят одним и тем
+// же пустым значением. Регрессом односторонность не является: до переноса эти
+// ключи нельзя было ни снять осознанно, ни сохранить — они пропадали при любом
+// сохранении объекта. Полноценное редактирование (чекбокс обязательности, поле
+// подписи) — отдельная возможность, а не эта починка.
+func carryFieldKeys(f, old saveField) saveField {
+	if f.ID == "" {
+		f.ID = old.ID
+	}
+	if f.Title == "" {
+		f.Title = old.Title
+	}
+	if f.Label == "" {
+		f.Label = old.Label
+	}
+	if f.Default == "" {
+		f.Default = old.Default
+	}
+	if !f.Required {
+		f.Required = old.Required
+	}
+	if !f.PII {
+		f.PII = old.PII
+	}
+	return f
+}
+
+// standardFieldIdentity returns the platform-owned field for a numbered
+// entity. Both the previous and submitted numerator state matter: turning
+// numbering off must materialize the field with its existing std_* ID.
+func standardFieldIdentity(kind metadata.Kind, hasNumerator bool) (name, id string) {
+	if !hasNumerator {
+		return "", ""
+	}
+	switch kind {
+	case metadata.KindCatalog:
+		return metadata.StandardCodeField, metadata.StandardCodeFieldID
+	case metadata.KindDocument:
+		return metadata.StandardNumberField, metadata.StandardNumberFieldID
+	}
+	return "", ""
+}
+
+// entityKindFromPath определяет вид объекта по каталогу, в котором лежит его
+// YAML. Вид приходит и с формы (entity_kind), но брать его оттуда для засева
+// нельзя: значение из запроса решало бы, какому реквизиту достанется служебный
+// id, то есть за какой колонкой он закрепится. Путь берётся из перечня файлов
+// конфигурации и такого выбора пользователю не оставляет.
+func entityKindFromPath(p string) metadata.Kind {
+	switch strings.ToLower(filepath.Base(filepath.Dir(filepath.ToSlash(p)))) {
+	case "catalogs":
+		return metadata.KindCatalog
+	case "documents":
+		return metadata.KindDocument
+	}
+	return ""
 }
 
 // newFieldID выдаёт идентификатор, которого ещё нет в объекте.
@@ -80,4 +317,11 @@ func newFieldID(used map[string]bool) string {
 			return id
 		}
 	}
+}
+
+func withStandardFieldSeed(prev []saveField, name, id string) []saveField {
+	if name == "" || id == "" {
+		return prev
+	}
+	return append([]saveField{{ID: id, Name: name}}, prev...)
 }

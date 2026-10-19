@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/ivantit66/onebase/internal/launcher"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 func captureStdout(t *testing.T, fn func() error) (string, error) {
@@ -18,14 +22,25 @@ func captureStdout(t *testing.T, fn func() error) (string, error) {
 		t.Fatal(err)
 	}
 	os.Stdout = w
-	runErr := fn()
-	_ = w.Close()
-	os.Stdout = old
 	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, r); err != nil && runErr == nil {
+	copyDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(&buf, r)
+		copyDone <- err
+	}()
+
+	runErr := fn()
+	os.Stdout = old
+	closeErr := w.Close()
+	copyErr := <-copyDone
+	if copyErr != nil && runErr == nil {
+		runErr = copyErr
+	} else if closeErr != nil && runErr == nil {
+		runErr = closeErr
+	}
+	if err := r.Close(); err != nil && runErr == nil {
 		runErr = err
 	}
-	_ = r.Close()
 	return buf.String(), runErr
 }
 
@@ -40,6 +55,7 @@ func TestInstallWindowsServicePrintUsesSQLite(t *testing.T) {
 			"sqlite",
 			"file",
 			`C:\onebase\project`,
+			"0.0.0.0",
 			8080,
 			true,
 			true,
@@ -56,6 +72,9 @@ func TestInstallWindowsServicePrintUsesSQLite(t *testing.T) {
 	}
 	if !strings.Contains(out, `--project \"C:\onebase\project\"`) || !strings.Contains(out, "--watch") {
 		t.Fatalf("windows service command lost project/watch args:\n%s", out)
+	}
+	if !strings.Contains(out, "--host 0.0.0.0") {
+		t.Fatalf("windows service command lost host arg:\n%s", out)
 	}
 	if !strings.Contains(out, `binPath= "\"C:\Program Files\OneBase\onebase.exe\" run`) {
 		t.Fatalf("binPath must preserve quotes around executable with spaces, got:\n%s", out)
@@ -91,7 +110,7 @@ func TestInstallWindowsServiceRejectsMappedDrive(t *testing.T) {
 
 	err := installWindowsService(
 		`C:\Program Files\OneBase\onebase.exe`, "onebase-docflow", "docflow", "",
-		`Z:\DocFlow\app.db`, "sqlite", "file", `Z:\DocFlow`, 8080, false, false,
+		`Z:\DocFlow\app.db`, "sqlite", "file", `Z:\DocFlow`, "127.0.0.1", 8080, false, false,
 	)
 	if err == nil || !strings.Contains(err.Error(), "LocalSystem") || !strings.Contains(err.Error(), "UNC") {
 		t.Fatalf("mapped drive должен остановить установку с подсказкой, got %v", err)
@@ -123,6 +142,7 @@ func TestInstallSystemdPrintUsesSQLite(t *testing.T) {
 			"sqlite",
 			"file",
 			"/srv/onebase/project",
+			"0.0.0.0",
 			8080,
 			true,
 			cmd,
@@ -141,6 +161,117 @@ func TestInstallSystemdPrintUsesSQLite(t *testing.T) {
 	if !strings.Contains(out, `--project "/srv/onebase/project"`) || !strings.Contains(out, "--watch") {
 		t.Fatalf("systemd unit lost project/watch args:\n%s", out)
 	}
+	if !strings.Contains(out, `--host "0.0.0.0"`) {
+		t.Fatalf("systemd unit lost host arg:\n%s", out)
+	}
+}
+
+// assertServiceInstallPrintHost exercises the registered CLI command, including
+// argument parsing and dispatch. Unsupported platforms must fail explicitly,
+// rather than silently passing by skipping the service-install checks.
+func assertServiceInstallPrintHost(t *testing.T, args []string, host, forbiddenHost string) {
+	t.Helper()
+	cmd, _, err := rootCmd.Find([]string{"service", "install"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type flagState struct {
+		flag    *pflag.Flag
+		value   string
+		changed bool
+	}
+	var saved []flagState
+	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+		saved = append(saved, flagState{f, f.Value.String(), f.Changed})
+	})
+	oldSilenceUsage := cmd.SilenceUsage
+	defer func() {
+		rootCmd.SetArgs(nil)
+		cmd.SilenceUsage = oldSilenceUsage
+		for _, state := range saved {
+			if err := state.flag.Value.Set(state.value); err != nil {
+				t.Error(err)
+			}
+			state.flag.Changed = state.changed
+		}
+	}()
+	// Each invocation starts from defaults: --id inherits the registry host
+	// only when a preceding invocation's explicit --host is no longer changed.
+	for _, state := range saved {
+		if err := state.flag.Value.Set(state.flag.DefValue); err != nil {
+			t.Fatal(err)
+		}
+		state.flag.Changed = false
+	}
+	rootCmd.SetArgs(append([]string{"service", "install", "--print"}, args...))
+	out, err := captureStdout(t, rootCmd.Execute)
+	switch runtime.GOOS {
+	case "linux", "windows":
+		if err != nil {
+			t.Fatalf("service install --print: %v", err)
+		}
+		if !serviceOutputHasHost(out, host) {
+			t.Fatalf("service install must use host %s, got:\n%s", host, out)
+		}
+		if forbiddenHost != "" && strings.Contains(out, forbiddenHost) {
+			t.Fatalf("service install must not use host %s, got:\n%s", forbiddenHost, out)
+		}
+	default:
+		want := "автоустановка сервиса не поддерживается на " + runtime.GOOS + "; поддерживаются только Linux и Windows"
+		if err == nil || err.Error() != want {
+			t.Fatalf("service install --print must reject %s, got: %v", runtime.GOOS, err)
+		}
+		if out != "" {
+			t.Fatalf("unsupported service install must not print a configuration, got:\n%s", out)
+		}
+	}
+}
+
+func TestRunServiceInstallPrintCarriesExplicitHost(t *testing.T) {
+	assertServiceInstallPrintHost(t, []string{
+		"--sqlite", filepath.Join(t.TempDir(), "base.db"),
+		"--name", "onebase-host-test", "--host", "0.0.0.0",
+	}, "0.0.0.0", "")
+}
+
+func TestRunServiceInstallPrintDefaultsToLoopback(t *testing.T) {
+	assertServiceInstallPrintHost(t, []string{
+		"--sqlite", filepath.Join(t.TempDir(), "base.db"),
+		"--name", "onebase-loopback-test",
+	}, "127.0.0.1", "0.0.0.0")
+}
+
+func TestRunServiceInstallPrintInheritsRegistryHost(t *testing.T) {
+	serviceHome := t.TempDir()
+	t.Setenv("HOME", serviceHome)
+	t.Setenv("USERPROFILE", serviceHome)
+	store, err := launcher.NewStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := &launcher.Base{
+		ID: "service-host-test", Name: "host-test", DBType: "sqlite",
+		DBPath: filepath.Join(serviceHome, "base.db"), Port: 18080,
+		ConfigSource: "database", Host: "0.0.0.0",
+	}
+	if err := store.Add(base); err != nil {
+		t.Fatal(err)
+	}
+
+	assertServiceInstallPrintHost(t, []string{"--id", base.ID}, "0.0.0.0", "")
+	assertServiceInstallPrintHost(t, []string{
+		"--id", base.ID, "--host", "127.0.0.1",
+	}, "127.0.0.1", "0.0.0.0")
+
+	base.Host = "unexpected.example"
+	if err := store.Update(base); err != nil {
+		t.Fatal(err)
+	}
+	assertServiceInstallPrintHost(t, []string{"--id", base.ID}, "127.0.0.1", "unexpected.example")
+}
+
+func serviceOutputHasHost(out, host string) bool {
+	return strings.Contains(out, "--host "+host) || strings.Contains(out, `--host "`+host+`"`)
 }
 
 func TestSystemdQuoteEscapesSpecialCharacters(t *testing.T) {

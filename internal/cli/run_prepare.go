@@ -17,6 +17,7 @@ import (
 	"github.com/ivantit66/onebase/internal/project"
 	"github.com/ivantit66/onebase/internal/runtime"
 	"github.com/ivantit66/onebase/internal/storage"
+	"github.com/ivantit66/onebase/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -51,6 +52,17 @@ func resolveServerLaunchConfig(cmd *cobra.Command) (serverLaunchConfig, error) {
 	base, err := store.Get(baseID)
 	if err != nil {
 		return serverLaunchConfig{}, fmt.Errorf("база не найдена: %w\nИспользуйте 'onebase ibases list' для просмотра зарегистрированных баз", err)
+	}
+	// Клиентское подключение описывает ЧУЖОЙ работающий сервер, и поднимать для
+	// него локальную платформу нечем. Отказ обязан стоять здесь — до сборки cfg и
+	// до legacy-ветки ниже: у такой записи DBType и DB пусты, ветка приняла бы их
+	// за старую SQLite-запись, создала бы базу в os.TempDir() и подняла listener.
+	// Пользователь при этом работал бы в отдельной пустой базе вместо сервера и
+	// заметил бы это не сразу.
+	if base.Client() {
+		return serverLaunchConfig{}, fmt.Errorf(
+			"база %q — подключение к работающему серверу %s: запускать её нечем, сервер поднимается на своей стороне\nЧтобы открыть её, выполните 'onebase start' и нажмите «Предприятие»",
+			base.Name, base.ServerURL)
 	}
 	cfg := serverLaunchConfig{
 		dir: base.Path, dsn: base.DB, port: base.Port, configSource: base.ConfigSource,
@@ -206,6 +218,9 @@ func prepareServerProject(ctx context.Context, db *storage.DB, cfg serverLaunchC
 	appCfg, err := project.LoadConfig(proj.Dir)
 	if err != nil {
 		return fail(fmt.Errorf("load app config: %w", err))
+	}
+	if warning := version.MinimumWarning(appCfg.MinEngineVersion); warning != nil {
+		log.Warn(warning.Error())
 	}
 	if err := migrateServerSchema(ctx, db, proj); err != nil {
 		return fail(err)

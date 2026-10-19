@@ -30,19 +30,61 @@
     |</head>
     |<body>
     |<header class=""site-header"">
+    |<div class=""site-bar"">
     |<a class=""site-title"" href=""{{.Префикс}}/"">{{.НазваниеСайта}}</a>
-    |<form class=""site-search"" method=""get"" action=""{{.Префикс}}/search"">
-    |<input name=""q"" type=""search"" placeholder=""Поиск по сайту"" value=""{{.Поиск}}"">
-    |</form>
     |<nav class=""site-menu""><ul>
     |{{range .Меню}}<li{{if .Активный}} class=""active""{{end}}><a href=""{{.Адрес}}"">{{.Заголовок}}</a></li>{{end}}
     |</ul></nav>
+    |<form class=""site-search"" method=""get"" action=""{{.Префикс}}/search"" role=""search"">
+    |<input name=""q"" type=""search"" placeholder=""Поиск по сайту"" value=""{{.Поиск}}"" aria-label=""Поиск по сайту"">
+    |<button type=""submit"">Найти</button>
+    |</form>
+    |{{if .АдресКорзины}}<a class=""cart-link"" href=""{{.АдресКорзины}}"">Корзина</a>{{end}}
+    |</div>
     |</header>
-    |<main class=""site-main"">
+    |<main class=""site-main {{.КлассСтраницы}}"">
     |<h1>{{.Заголовок}}</h1>
+    |{{if .Цена}}<div class=""price"">{{.Цена}}</div>{{end}}
     |{{if .Картинка}}<img class=""cover"" src=""{{.Картинка}}"" alt=""{{.Заголовок}}"">{{end}}
     |{{.Содержимое}}
+    |{{if .ВКорзину}}<form class=""buy"" method=""post"" action=""{{.ВКорзину.Адрес}}"">
+    |<input type=""hidden"" name=""product"" value=""{{.ВКорзину.Товар}}"">
+    |<input type=""number"" name=""qty"" value=""1"" min=""1"" max=""999"" aria-label=""Количество"">
+    |<button type=""submit"">В корзину</button>
+    |</form>{{end}}
     |{{if .Сообщение}}<p class=""form-result"">{{.Сообщение}}</p>{{end}}
+    |{{if .Магазин}}{{if .Магазин.Строки}}<table class=""cart"">
+    |<thead><tr><th>Позиция</th><th>Цена</th><th>Количество</th><th>Сумма</th></tr></thead>
+    |<tbody>
+    |{{range .Магазин.Строки}}<tr>
+    |<td>{{if .Адрес}}<a href=""{{.Адрес}}"">{{.Заголовок}}</a>{{else}}{{.Заголовок}}{{end}}
+    |{{if .Артикул}}<span class=""cart-art"">арт. {{.Артикул}}</span>{{end}}</td>
+    |<td>{{.Цена}}</td>
+    |<td>{{if $.Магазин.АдресИзменения}}<form class=""cart-qty"" method=""post"" action=""{{$.Магазин.АдресИзменения}}"">
+    |<input type=""hidden"" name=""product"" value=""{{.Ид}}"">
+    |<input type=""number"" name=""qty"" value=""{{.Количество}}"" min=""1"" max=""999"" aria-label=""Количество"">
+    |<button type=""submit"" name=""action"" value=""set"">Обновить</button>
+    |<button type=""submit"" name=""action"" value=""remove"" class=""link"">Удалить</button>
+    |</form>{{else}}{{.Количество}} шт{{end}}</td>
+    |<td>{{.Сумма}}</td>
+    |</tr>{{end}}
+    |</tbody>
+    |</table>
+    |<p class=""cart-total"">Итого: <strong>{{.Магазин.Итого}}</strong></p>{{end}}
+    |{{if .Магазин.АдресОформления}}<p class=""cart-actions""><a class=""button"" href=""{{.Магазин.АдресОформления}}"">Оформить заказ</a></p>{{end}}
+    |{{if .Магазин.ФормаЗаказа}}<form class=""feedback"" method=""post"" action=""{{.Магазин.АдресОтправки}}"">
+    |<h2>Ваши контакты</h2>
+    |<label>Как к вам обращаться<input name=""name"" required></label>
+    |<label>Почта или телефон<input name=""contact"" required></label>
+    |<label>Комментарий к заказу<textarea name=""comment"" rows=""3""></textarea></label>
+    |<button type=""submit"">Оформить заказ</button>
+    |</form>{{end}}
+    |{{if .Магазин.Номер}}<dl class=""order-meta"">
+    |<dt>Номер</dt><dd>{{.Магазин.Номер}}</dd>
+    |<dt>Статус</dt><dd>{{.Магазин.Статус}}</dd>
+    |<dt>Контакт</dt><dd>{{.Магазин.Контакт}}</dd>
+    |{{if .Магазин.Комментарий}}<dt>Комментарий</dt><dd>{{.Магазин.Комментарий}}</dd>{{end}}
+    |</dl>{{end}}{{end}}
     |{{if .Форма}}<form class=""feedback"" method=""post"" action=""{{.ПрефиксФорм}}/submit/{{.Форма.Код}}"">
     |<h2>{{.Форма.Заголовок}}</h2>
     |<label>Как к вам обращаться<input name=""name"" required></label>
@@ -51,20 +93,41 @@
     |<input class=""hp"" name=""website"" tabindex=""-1"" autocomplete=""off"">
     |<button type=""submit"">{{.Форма.ТекстКнопки}}</button>
     |</form>{{end}}
-    |{{if .Список}}<ul class=""news-list"">
-    |{{range .Список}}<li class=""news-item"">
-    |{{if .Картинка}}<img class=""thumb"" src=""{{.Картинка}}"" alt=""{{.Заголовок}}"">{{end}}
-    |<a href=""{{.Адрес}}"">{{.Заголовок}}</a>
-    |{{if .Дата}}<time>{{дата .Дата ""02.01.2006""}}</time>{{end}}
-    |<div class=""news-anons"">{{.Анонс}}</div>
+    |{{if .Список}}{{if .ЗаголовокСписка}}<h2 class=""block-title"">{{.ЗаголовокСписка}}</h2>{{end}}
+    |<ul class=""cards"">
+    |{{range .Список}}<li class=""card"">
+    |<a class=""card-media"" href=""{{.Адрес}}"" tabindex=""-1"" aria-hidden=""true"">
+    |{{if .Картинка}}<img src=""{{.Картинка}}"" alt="""" loading=""lazy"">{{else}}<span class=""card-noimg""></span>{{end}}
+    |</a>
+    |<div class=""card-body"">
+    |<a class=""card-title"" href=""{{.Адрес}}"">{{.Заголовок}}</a>
+    |{{if .Дата}}<time class=""card-date"">{{дата .Дата ""02.01.2006""}}</time>{{end}}
+    |<div class=""card-text"">{{.Анонс}}</div>
+    |{{if .Цена}}<div class=""card-price"">{{.Цена}}</div>{{end}}
+    |</div>
+    |</li>{{end}}
+    |</ul>{{end}}
+    |{{if .Новости}}{{if .ЗаголовокНовостей}}<h2 class=""block-title"">{{.ЗаголовокНовостей}}</h2>{{end}}
+    |<ul class=""cards"">
+    |{{range .Новости}}<li class=""card"">
+    |<a class=""card-media"" href=""{{.Адрес}}"" tabindex=""-1"" aria-hidden=""true"">
+    |{{if .Картинка}}<img src=""{{.Картинка}}"" alt="""" loading=""lazy"">{{else}}<span class=""card-noimg""></span>{{end}}
+    |</a>
+    |<div class=""card-body"">
+    |<a class=""card-title"" href=""{{.Адрес}}"">{{.Заголовок}}</a>
+    |{{if .Дата}}<time class=""card-date"">{{дата .Дата ""02.01.2006""}}</time>{{end}}
+    |<div class=""card-text"">{{.Анонс}}</div>
+    |</div>
     |</li>{{end}}
     |</ul>{{end}}
     |</main>
     |<footer class=""site-footer"">
+    |<div class=""footer-inner"">
+    |<div class=""footer-name"">{{.НазваниеСайта}}</div>
     |<nav class=""footer-menu""><ul>
     |{{range .МенюПодвала}}<li><a href=""{{.Адрес}}"">{{.Заголовок}}</a></li>{{end}}
     |</ul></nav>
-    |<div>{{.НазваниеСайта}}</div>
+    |</div>
     |</footer>
     |</body>
     |</html>";
@@ -84,31 +147,174 @@
 
     Переменные = ":root{--основной:" + ЗначениеИлиУмолчание(Основной, "#2563eb")
         + ";--дополнительный:" + ЗначениеИлиУмолчание(Дополнительный, "#0f172a")
-        + ";--фон:" + ЗначениеИлиУмолчание(Фон, "#ffffff") + "}";
-    Базовый = "body{margin:0;background:var(--фон);color:var(--дополнительный);"
+        + ";--фон:" + ЗначениеИлиУмолчание(Фон, "#ffffff")
+        // Нейтральные тона не берутся из палитры сайта намеренно: их три на все
+        // случаи, а палитра — про акцент. Иначе редактор, поменявший основной
+        // цвет, случайно перекрашивает рамки и подписи.
+        + ";--поверхность:#f8fafc;--граница:#e2e8f0;--приглушённый:#64748b}";
+    Базовый = "*,*::before,*::after{box-sizing:border-box}"
+        + "body{margin:0;background:var(--фон);color:var(--дополнительный);"
         + "font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;line-height:1.55}"
-        + ".site-header,.site-footer{padding:16px 24px;background:var(--основной);color:#fff}"
-        + ".site-title{color:#fff;text-decoration:none;font-weight:600}"
-        + ".site-menu ul,.footer-menu ul{list-style:none;display:flex;gap:16px;margin:8px 0 0;padding:0}"
-        + ".site-menu a,.footer-menu a{color:#fff;text-decoration:none;opacity:.85}"
-        + ".site-menu li.active a{opacity:1;text-decoration:underline}"
-        + ".site-main{max-width:860px;margin:0 auto;padding:24px}"
-        + ".news-list{list-style:none;padding:0}"
-        + ".news-item{padding:12px 0;border-bottom:1px solid rgba(0,0,0,.08)}"
-        + ".news-item time{display:block;font-size:13px;opacity:.7;margin:4px 0}"
-        + ".cover{max-width:100%;height:auto;border-radius:8px;margin:12px 0}"
-        + ".thumb{float:left;width:96px;height:auto;margin:0 12px 8px 0;border-radius:6px}"
-        + ".feedback label{display:block;margin:10px 0}"
-        + ".feedback input,.feedback textarea{display:block;width:100%;padding:8px;"
-        + "border:1px solid rgba(0,0,0,.2);border-radius:6px}"
-        + ".feedback button{margin-top:12px;padding:10px 18px;border:0;border-radius:6px;"
-        + "background:var(--основной);color:#fff;cursor:pointer}"
-        + ".form-result{padding:10px 14px;background:rgba(0,0,0,.05);border-radius:6px}"
+        + "img{max-width:100%;height:auto}"
+        // ── шапка: белая полоса с акцентом, а не сплошная заливка ──
+        + ".site-header{position:sticky;top:0;z-index:5;background:var(--фон);"
+        + "border-bottom:1px solid var(--граница)}"
+        + ".site-bar{max-width:1120px;margin:0 auto;padding:12px 24px;display:flex;"
+        + "align-items:center;gap:16px;flex-wrap:wrap}"
+        + ".site-title{color:var(--дополнительный);text-decoration:none;font-weight:700;"
+        + "font-size:20px;letter-spacing:.02em;margin-right:auto}"
+        + ".site-menu ul{list-style:none;display:flex;gap:18px;margin:0;padding:0;flex-wrap:wrap}"
+        + ".site-menu a{color:var(--дополнительный);text-decoration:none;opacity:.75;font-size:15px}"
+        + ".site-menu a:hover{opacity:1}"
+        + ".site-menu li.active a{opacity:1;color:var(--основной);font-weight:600}"
+        + ".site-search{display:flex;gap:6px}"
+        + ".site-search input{padding:8px 12px;border:1px solid var(--граница);border-radius:8px;"
+        + "background:var(--поверхность);min-width:180px;font:inherit}"
+        + ".site-search button{padding:8px 14px;border:0;border-radius:8px;background:var(--основной);"
+        + "color:#fff;cursor:pointer;font:inherit}"
+        // ── содержимое ──
+        + ".site-main{max-width:1120px;margin:0 auto;padding:28px 24px 48px}"
+        + ".site-main h1{font-size:30px;line-height:1.2;margin:0 0 16px}"
+        // Подпись блока отделяет разделы каталога от новостей на главной: без
+        // неё две сетки карточек подряд читаются как одна длинная.
+        + ".block-title{font-size:22px;margin:36px 0 0;padding-top:24px;"
+        + "border-top:1px solid var(--граница)}"
+        + ".block-title+.cards{margin-top:16px}"
+        + ".cover{border-radius:12px;margin:0 0 18px;border:1px solid var(--граница);"
+        + "max-height:420px;object-fit:contain;background:var(--поверхность);padding:12px}"
+        // Цена карточки товара: крупная, сразу под названием — за ней и приходят.
+        + ".price{font-size:28px;font-weight:700;margin:0 0 16px}"
+        // Карточка товара — две колонки: фото слева, название с ценой и
+        // описанием справа. Иначе снимок страницы — одинокая картинка и
+        // половина экрана пустоты.
+        + ".site-main.product{display:grid;grid-template-columns:minmax(240px,380px) 1fr;"
+        + "gap:4px 32px;align-items:start}"
+        + ".site-main.product h1{grid-column:2;grid-row:1;margin:0 0 8px}"
+        + ".site-main.product .price{grid-column:2;grid-row:2}"
+        + ".site-main.product .cover{grid-column:1;grid-row:1/span 4;margin:0;align-self:start}"
+        + ".site-main.product>*:not(h1):not(.price):not(.cover){grid-column:2}"
+        // ── витрина карточками ──
+        + ".cards{list-style:none;margin:24px 0 0;padding:0;display:grid;gap:18px;"
+        + "grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}"
+        + ".card{display:flex;flex-direction:column;border:1px solid var(--граница);"
+        + "border-radius:14px;overflow:hidden;background:var(--фон);transition:box-shadow .15s,transform .15s}"
+        + ".card:hover{box-shadow:0 8px 24px rgba(15,23,42,.10);transform:translateY(-2px)}"
+        + ".card-media{display:block;aspect-ratio:4/3;background:var(--поверхность);overflow:hidden}"
+        + ".card-media img{width:100%;height:100%;object-fit:contain;padding:10px}"
+        // Позиция без картинки не должна ломать сетку: место занимает пустая
+        // плашка того же размера, иначе карточки съезжают по высоте.
+        + ".card-noimg{display:block;width:100%;height:100%;background:"
+        + "repeating-linear-gradient(45deg,var(--поверхность),var(--поверхность) 10px,#f1f5f9 10px,#f1f5f9 20px)}"
+        // flex:1 обязателен: сетка растягивает карточки до одной высоты, но без
+        // этого тело остаётся по содержимому, и «margin-top:auto» у цены не
+        // выравнивает ценники — они пляшут по строке вслед за длиной названия.
+        + ".card-body{flex:1;display:flex;flex-direction:column;gap:6px;padding:12px 14px 16px}"
+        + ".card-title{color:var(--дополнительный);text-decoration:none;font-weight:600;line-height:1.35}"
+        + ".card-title:hover{color:var(--основной)}"
+        + ".card-date{font-size:13px;color:var(--приглушённый)}"
+        + ".card-text{font-size:14px;color:var(--приглушённый)}"
+        // Цена — крупная и последней строкой: карточки в ряду разной высоты, и
+        // ценники должны стоять на одной линии, а не плавать по сетке.
+        + ".card-price{margin-top:auto;padding-top:8px;font-size:19px;font-weight:700;"
+        + "color:var(--дополнительный)}"
+        // ── форма обратной связи ──
+        + ".feedback{max-width:520px;margin:28px 0 0;padding:20px;border:1px solid var(--граница);"
+        + "border-radius:14px;background:var(--поверхность)}"
+        + ".feedback h2{margin:0 0 8px;font-size:20px}"
+        + ".feedback label{display:block;margin:12px 0;font-size:14px;color:var(--приглушённый)}"
+        + ".feedback input,.feedback textarea{display:block;width:100%;margin-top:4px;padding:9px 12px;"
+        + "border:1px solid var(--граница);border-radius:8px;font:inherit;background:var(--фон)}"
+        + ".feedback button{margin-top:14px;padding:11px 20px;border:0;border-radius:9px;"
+        + "background:var(--основной);color:#fff;cursor:pointer;font:inherit;font-weight:600}"
+        + ".form-result{padding:12px 16px;background:var(--поверхность);border:1px solid var(--граница);"
+        + "border-radius:10px}"
         // Honeypot прячем стилями, а не type=hidden: скрытое поле бот
         // распознаёт по типу и пропускает, а невидимое глазу — заполняет.
         + ".hp{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}"
-        + ".site-search{float:right}"
-        + ".site-search input{padding:6px 10px;border:0;border-radius:6px}";
+        // ── совместимость с ПРЕДЫДУЩЕЙ разметкой ──
+        //
+        // Макет живёт в базе и обновляется отдельно (по номеру версии), а CSS
+        // отдаётся модулем и приезжает сразу. Между этими двумя моментами база
+        // работает на старой разметке с новыми стилями, и без правил ниже сайт
+        // выглядит ХУЖЕ, чем до обновления: шапка рассыпается в столбик, а
+        // витрина превращается в маркированный список синих ссылок. Такое
+        // «обновился и стало хуже» недопустимо, поэтому прежние классы
+        // приводятся к тому же виду, что и новые.
+        //
+        // Правила удалятся, когда поддерживать старые базы станет незачем.
+        // Отступы висят на самих элементах, а не на шапке: если браузер не знает
+        // «:has()», старая разметка ляжет столбиком — но с полями, а не впритык
+        // к краю окна.
+        + ".site-header>.site-title,.site-header>.site-search,.site-header>.site-menu{padding:6px 24px}"
+        + ".site-header:not(:has(.site-bar)){display:flex;align-items:center;gap:8px;"
+        + "flex-wrap:wrap;max-width:1120px;margin:0 auto;padding:6px 0}"
+        + ".site-header:not(:has(.site-bar))>.site-title{margin-right:auto}"
+        + ".news-list{list-style:none;margin:24px 0 0;padding:0;display:grid;gap:18px;"
+        + "grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}"
+        + ".news-item{display:flex;flex-direction:column;gap:6px;padding:12px 14px 16px;"
+        + "border:1px solid var(--граница);border-radius:14px;overflow:hidden}"
+        + ".news-item>a{color:var(--дополнительный);text-decoration:none;font-weight:600}"
+        + ".news-item>a:hover{color:var(--основной)}"
+        + ".news-item time{font-size:13px;color:var(--приглушённый)}"
+        + ".news-item .thumb{float:none;width:100%;height:150px;object-fit:contain;"
+        + "background:var(--поверхность);border-radius:10px;margin:0 0 8px}"
+        + ".news-anons{font-size:14px;color:var(--приглушённый)}"
+        // ── корзина и заказ (план 156) ──
+        + ".cart-link{margin-left:16px;color:var(--дополнительный);text-decoration:none;font-weight:600;"
+        + "white-space:nowrap}"
+        + ".cart-link:hover{color:var(--основной)}"
+        + ".buy{display:flex;gap:8px;align-items:center;margin:16px 0}"
+        + ".buy input[type=number]{width:80px;padding:8px;border:1px solid var(--граница);border-radius:8px}"
+        + ".buy button,.cart-qty button,.button{padding:8px 16px;border:0;border-radius:8px;"
+        + "background:var(--основной);color:#fff;font:inherit;cursor:pointer;text-decoration:none;"
+        + "display:inline-block}"
+        + ".cart{width:100%;border-collapse:collapse;margin:16px 0}"
+        + ".cart th,.cart td{padding:10px 8px;border-bottom:1px solid var(--граница);text-align:left;"
+        + "vertical-align:top}"
+        + ".cart th{font-size:13px;color:var(--приглушённый);font-weight:600}"
+        + ".cart-art{display:block;font-size:13px;color:var(--приглушённый)}"
+        + ".cart-qty{display:flex;gap:6px;align-items:center;flex-wrap:wrap}"
+        + ".cart-qty input[type=number]{width:70px;padding:6px;border:1px solid var(--граница);"
+        + "border-radius:8px}"
+        // «Удалить» — кнопка, а не ссылка: удаление обязано идти POST-ом, иначе
+        // его выполнит любой обходчик ссылок. Выглядит ссылкой, ведёт себя как
+        // кнопка формы.
+        + ".cart-qty button.link{background:none;color:var(--приглушённый);padding:6px 4px;"
+        + "text-decoration:underline}"
+        + ".cart-qty button.link:hover{color:var(--основной)}"
+        + ".cart-total{font-size:18px;margin:8px 0 16px}"
+        + ".cart-actions{margin:16px 0}"
+        + ".order-meta{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;margin:16px 0;"
+        + "font-size:15px}"
+        + ".order-meta dt{color:var(--приглушённый)}"
+        + ".order-meta dd{margin:0}"
+        // ── подвал ──
+        + ".site-footer{border-top:1px solid var(--граница);background:var(--поверхность);"
+        + "color:var(--приглушённый)}"
+        // «:not(.footer-inner)» — не украшение: в НОВОЙ разметке обёртка подвала
+        // тоже div и тоже прямой ребёнок подвала, а «.site-footer>div» (0-1-1)
+        // специфичнее «.footer-inner» (0-1-0) и перебивает её при любом порядке
+        // правил. Без скобки правило совместимости поджимало подвал с 20px до
+        // 6px на всех базах с УЖЕ обновлённым макетом — то самое «обновился и
+        // стало хуже», против которого написаны эти строки.
+        + ".site-footer>.footer-menu,.site-footer>div:not(.footer-inner){padding:6px 24px}"
+        + ".site-footer:not(:has(.footer-inner)){display:flex;align-items:center;gap:8px;"
+        + "flex-wrap:wrap-reverse;justify-content:space-between;max-width:1120px;margin:0 auto;"
+        + "padding:14px 0}"
+        + ".footer-inner{max-width:1120px;margin:0 auto;padding:20px 24px;display:flex;gap:16px;"
+        + "align-items:center;flex-wrap:wrap}"
+        + ".footer-name{font-weight:600;color:var(--дополнительный);margin-right:auto}"
+        + ".footer-menu ul{list-style:none;display:flex;gap:16px;margin:0;padding:0;flex-wrap:wrap}"
+        + ".footer-menu a{color:var(--приглушённый);text-decoration:none}"
+        + ".footer-menu a:hover{color:var(--дополнительный)}"
+        // ── телефон ──
+        + "@media(max-width:640px){.site-bar{padding:10px 16px}.site-search{width:100%;order:3}"
+        + ".site-search input{flex:1;min-width:0}.site-main{padding:20px 16px 36px}"
+        + ".site-main h1{font-size:24px}"
+        + ".cards{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}"
+        // На телефоне две колонки не помещаются: карточка товара идёт одной,
+        // фото сверху.
+        + ".site-main.product{display:block}.site-main.product .cover{margin:0 0 16px}}";
     Возврат Переменные + Базовый + ЗначениеИлиУмолчание(Свой, "");
 КонецФункции
 
@@ -161,6 +367,13 @@
     Данные.Вставить("Меню", Меню.Пункты(Сайт, "Главное", Путь));
     Данные.Вставить("МенюПодвала", Меню.Пункты(Сайт, "Подвал", Путь));
     Данные.Вставить("Список", Новый Массив);
+    // Второй список и подписи блоков нужны главной: под текстом идут разделы
+    // каталога, а под ними — свежие новости. Ключи есть у КАЖДОЙ страницы, пусть
+    // и пустые: макет один, а «{{if .Новости}}» на отсутствующем ключе — не то
+    // же самое, что на пустом.
+    Данные.Вставить("Новости", Новый Массив);
+    Данные.Вставить("ЗаголовокСписка", "");
+    Данные.Вставить("ЗаголовокНовостей", "");
     Данные.Вставить("Канонический", SEO.Канонический(Сайт, Путь));
     // Префикс сайта нужен и в макете: ссылки шапки, поиск и таблица стилей
     // раньше собирались с зашитым «/hs/site/» и за reverse proxy вели в никуда
@@ -172,7 +385,29 @@
     // Картинка страницы служит и иллюстрацией, и превью для соцсетей:
     // раздельные поля означали бы, что одно из них рано или поздно забудут.
     Данные.Вставить("Картинка", "");
+    // Цена есть у каждой страницы, пусть и пустая: макет один на все страницы,
+    // а «{{if .Цена}}» на отсутствующем ключе — не то же самое, что на пустом.
+    Данные.Вставить("Цена", "");
+    // Класс страницы позволяет ОДНОМУ макету раскладывать карточку товара в две
+    // колонки, а остальные страницы — в одну. Без него пришлось бы заводить
+    // второй шаблон, то есть чинить вёрстку дважды.
+    Данные.Вставить("КлассСтраницы", "");
     Данные.Вставить("Форма", Неопределено);
+    // Ключи магазина есть у КАЖДОЙ страницы, пусть и пустые: макет один на все
+    // страницы, а «{{if .Магазин}}» на отсутствующем ключе — не то же самое,
+    // что на пустом.
+    //
+    // Ссылка на корзину в шапке намеренно БЕЗ счётчика позиций. Счётчик сделал
+    // бы каждую страницу сайта персональной, а сайт кэшируется на 60 секунд с
+    // vary по query и host — про куку кэш не знает, и первый посетитель раздал
+    // бы свою корзину всем следующим.
+    Если ПриёмЗаказов(Сайт) Тогда
+        Данные.Вставить("АдресКорзины", SEO.ПрефиксСервиса(Сайт, "shop") + "/cart");
+    Иначе
+        Данные.Вставить("АдресКорзины", "");
+    КонецЕсли;
+    Данные.Вставить("ВКорзину", Неопределено);
+    Данные.Вставить("Магазин", Неопределено);
     Данные.Вставить("Сообщение", "");
     Данные.Вставить("Поиск", "");
     Данные.Вставить("OGКартинка", "");
@@ -191,6 +426,32 @@
     Ответ.УстановитьЗаголовок("Content-Type", "text/html; charset=utf-8");
     Ответ.УстановитьТелоИзСтроки(HTML);
     Возврат Ответ;
+КонецФункции
+
+// Главная — та же страница, но с витриной: разделы каталога и свежие новости
+// идут прямо под текстом. Без этого демонстрация начиналась с заголовка и
+// одного абзаца, и посетителю некуда было идти дальше меню.
+Функция Главная(Сайт, Стр, Разделы, Новости) Экспорт
+    Ответ = Страница(Сайт, Стр, "");
+    Если Разделы.Количество() = 0 И Новости.Количество() = 0 Тогда
+        Возврат Ответ;
+    КонецЕсли;
+    Данные = ДанныеГлавной(Сайт, Стр, Разделы, Новости);
+    Возврат ОтветHTML(200, СобратьМакет(Сайт, Данные));
+КонецФункции
+
+Функция ДанныеГлавной(Сайт, Стр, Разделы, Новости)
+    Заголовок = ЗначениеИлиУмолчание(Стр.Заголовок, Стр.Наименование);
+    Данные = ДанныеСтраницы(Сайт, "", Заголовок, ЗначениеИлиУмолчание(Стр.ОписаниеSEO, ""),
+        ЗначениеИлиУмолчание(Стр.Содержимое, ""));
+    Данные.Вставить("SEOЗаголовок", ЗначениеИлиУмолчание(Стр.ЗаголовокSEO, Заголовок));
+    Если Разделы.Количество() > 0 Тогда
+        Данные.Вставить("ЗаголовокСписка", "Каталог");
+        Данные.Вставить("Список", Разделы);
+    КонецЕсли;
+    Данные.Вставить("ЗаголовокНовостей", "Новости");
+    Данные.Вставить("Новости", Новости);
+    Возврат Данные;
 КонецФункции
 
 Функция Страница(Сайт, Стр, Путь) Экспорт
@@ -255,19 +516,36 @@
 // КарточкаТовара — страница /product/<слаг>.
 Функция КарточкаТовара(Сайт, Товар, Путь) Экспорт
     Заголовок = Строка(Товар.Наименование);
-    Содержимое = Роутер.ПодписьТовара(Товар);
-    Если Не ПустаяСтрока(Содержимое) Тогда
+    Цена = Роутер.ЦенаСтрокой(Товар.Цена, Товар.Валюта);
+    Содержимое = "";
+    Подпись = Роутер.ПодписьТовара(Товар);
+    Если Не ПустаяСтрока(Подпись) Тогда
         // Без класса: содержимое страницы проходит через санитайзер, и
         // атрибуты он срезает — класс в разметке создавал бы иллюзию стиля.
-        Содержимое = "<p>" + Содержимое + "</p>";
+        // Поэтому крупная цена идёт не сюда, а отдельным полем макета.
+        Содержимое = "<p>" + Подпись + "</p>";
     КонецЕсли;
     Описание = СокрЛП(Строка(Товар.Описание));
     Если Не ПустаяСтрока(Описание) И Описание <> "<nil>" Тогда
         Содержимое = Содержимое + Описание;
     КонецЕсли;
 
+    // Описание для поисковика — артикул И цена, как было до выноса цены в
+    // отдельное поле. Одна цена в сниппете выдачи читается обрывком строки, а
+    // не описанием товара, и артикул из неё пропадает совсем.
+    ОписаниеПоУмолчанию = Подпись;
+    Если Не ПустаяСтрока(Цена) Тогда
+        Если ПустаяСтрока(ОписаниеПоУмолчанию) Тогда
+            ОписаниеПоУмолчанию = Цена;
+        Иначе
+            ОписаниеПоУмолчанию = ОписаниеПоУмолчанию + " · " + Цена;
+        КонецЕсли;
+    КонецЕсли;
+
     Данные = ДанныеСтраницы(Сайт, Путь, Заголовок,
-        ЗначениеИлиУмолчание(Товар.ОписаниеSEO, Роутер.ПодписьТовара(Товар)), Содержимое);
+        ЗначениеИлиУмолчание(Товар.ОписаниеSEO, ОписаниеПоУмолчанию), Содержимое);
+    Данные.Вставить("Цена", Цена);
+    Данные.Вставить("КлассСтраницы", "product");
     Данные.Вставить("SEOЗаголовок", ЗначениеИлиУмолчание(Товар.ЗаголовокSEO, Заголовок));
 
     // Картинка из медиатеки приоритетнее адреса из выгрузки: своя лежит рядом
@@ -278,7 +556,104 @@
     КонецЕсли;
     Данные.Вставить("Картинка", Картинка);
     Данные.Вставить("OGКартинка", Картинка);
+
+    // Кнопка «В корзину» стоит ТОЛЬКО в карточке, а не в плитках витрины.
+    // Оптовик выбирает количество, а количество в плитке означает форму в
+    // каждой ячейке сетки — и случайный заказ вместо перехода в карточку.
+    Если ПриёмЗаказов(Сайт) Тогда
+        ВКорзину = Новый Структура;
+        ВКорзину.Вставить("Адрес", SEO.ПрефиксСервиса(Сайт, "shop") + "/cart/add");
+        ВКорзину.Вставить("Товар", ТекстЗначения(Товар.Ссылка));
+        Данные.Вставить("ВКорзину", ВКорзину);
+    КонецЕсли;
     Возврат ОтветHTML(200, СобратьМакет(Сайт, Данные));
+КонецФункции
+
+// ПриёмЗаказов — включена ли корзина у сайта. Отдельной функцией, потому что
+// спрашивают об этом и шапка каждой страницы, и карточка товара, и все
+// обработчики магазина.
+Функция ПриёмЗаказов(Сайт) Экспорт
+    Если Сайт = Неопределено Тогда
+        Возврат Ложь;
+    КонецЕсли;
+    Возврат Сайт.ПриёмЗаказов = Истина;
+КонецФункции
+
+// ─────────────────────── страницы магазина (план 156) ───────────────────────
+
+// СтраницаКорзины и СтраницаОформления различаются не набором данных, а тем,
+// что на них можно делать: в корзине правят количество, на оформлении вводят
+// контакты. Общий сборщик держит эти два состояния рядом, чтобы расхождение
+// вёрстки было видно сразу.
+Функция СтраницаКорзины(Сайт, Состав, Сообщение, Код) Экспорт
+    Данные = ДанныеМагазина(Сайт, "Корзина", Состав, Сообщение);
+    Магазин = Данные.Магазин;
+    Магазин.Вставить("АдресИзменения", SEO.ПрефиксСервиса(Сайт, "shop") + "/cart/update");
+    Если Состав.Позиций > 0 Тогда
+        Магазин.Вставить("АдресОформления", SEO.ПрефиксСервиса(Сайт, "shop") + "/checkout");
+    КонецЕсли;
+    Возврат ОтветHTML(Код, СобратьМакет(Сайт, Данные));
+КонецФункции
+
+Функция СтраницаОформления(Сайт, Состав, Сообщение, Код) Экспорт
+    Данные = ДанныеМагазина(Сайт, "Оформление заказа", Состав, Сообщение);
+    Магазин = Данные.Магазин;
+    Если Состав.Позиций > 0 Тогда
+        Магазин.Вставить("ФормаЗаказа", Истина);
+        Магазин.Вставить("АдресОтправки", SEO.ПрефиксСервиса(Сайт, "shop") + "/checkout");
+    КонецЕсли;
+    Возврат ОтветHTML(Код, СобратьМакет(Сайт, Данные));
+КонецФункции
+
+// СтраницаЗаказа — то, что покупатель открывает по ссылке из письма. Строки
+// берутся из ДОКУМЕНТА, а не из справочника товаров: заказ обязан остаться
+// читаемым, даже если позицию потом переименовали или сняли с публикации.
+Функция СтраницаЗаказа(Сайт, Заказ) Экспорт
+    Состав = Новый Структура;
+    Состав.Вставить("Строки", Заказ.Строки);
+    Состав.Вставить("Позиций", Заказ.Строки.Количество());
+    Состав.Вставить("ИтогоСтрокой", Заказ.Итого);
+
+    Данные = ДанныеМагазина(Сайт, "Заказ " + Заказ.Номер, Состав, "");
+    Магазин = Данные.Магазин;
+    Магазин.Вставить("Номер", Заказ.Номер);
+    Магазин.Вставить("Статус", Заказ.Статус);
+    Магазин.Вставить("Контакт", Заказ.Контакт);
+    Магазин.Вставить("Комментарий", Заказ.Комментарий);
+    Данные.Вставить("Сообщение", "Заказ принят. Сохраните ссылку на эту страницу —"
+        + " по ней виден статус, и она же ушла вам письмом.");
+    Возврат ОтветHTML(200, СобратьМакет(Сайт, Данные));
+КонецФункции
+
+// ДанныеМагазина — общая часть трёх страниц: список позиций и итог.
+Функция ДанныеМагазина(Сайт, Заголовок, Состав, Сообщение) Экспорт
+    Данные = ДанныеСтраницы(Сайт, "", Заголовок, "", "");
+    // Страницы магазина персональны, и в индексе поисковика им делать нечего:
+    // canonical на чужую корзину — худшее, что можно отдать роботу.
+    Данные.Вставить("Канонический", "");
+    Если Не ПустаяСтрока(Сообщение) Тогда
+        Данные.Вставить("Сообщение", Сообщение);
+    КонецЕсли;
+
+    Магазин = Новый Структура;
+    Магазин.Вставить("Строки", Состав.Строки);
+    Магазин.Вставить("Итого", Состав.ИтогоСтрокой);
+    Магазин.Вставить("АдресИзменения", "");
+    Магазин.Вставить("АдресОформления", "");
+    Магазин.Вставить("АдресОтправки", "");
+    Магазин.Вставить("ФормаЗаказа", Ложь);
+    Магазин.Вставить("Номер", "");
+    Магазин.Вставить("Статус", "");
+    Магазин.Вставить("Контакт", "");
+    Магазин.Вставить("Комментарий", "");
+    Данные.Вставить("Магазин", Магазин);
+
+    Если Состав.Позиций = 0 И ПустаяСтрока(Сообщение) Тогда
+        // Пустая страница без объяснения читается как поломка сайта, а не как
+        // пустая корзина — та же болезнь, что была у пустого раздела каталога.
+        Данные.Вставить("Сообщение", "Корзина пуста. Загляните в каталог — товары добавляются кнопкой в карточке.");
+    КонецЕсли;
+    Возврат Данные;
 КонецФункции
 
 // СтраницаСообщение — страница-подтверждение (заявка принята, ошибка ввода).

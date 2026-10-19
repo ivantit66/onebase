@@ -24,18 +24,38 @@ type saveField struct {
 	// проставляет его сам и сохраняет при перезаписи файла: без него
 	// переименование реквизита отвязало бы данные от поля, а редактор,
 	// не знающий про ключ, стирал бы его при каждом сохранении.
-	ID     string            `yaml:"id,omitempty"`
-	Name   string            `yaml:"name"`
+	ID   string `yaml:"id,omitempty"`
+	Name string `yaml:"name"`
+	// Title / Label — подпись реквизита на базовом языке. Редактор реквизитов
+	// показывает только переводы (titles-block пропускает ru), поэтому оба
+	// ключа приходить с формы не могут и переносятся из прежнего состояния
+	// файла. Label — устаревший синоним title: parseField подставляет его при
+	// пустом title, и потеря обоих откатывала подпись к имени реквизита.
 	Title  string            `yaml:"title,omitempty"`
+	Label  string            `yaml:"label,omitempty"`
 	Titles map[string]string `yaml:"titles,omitempty"`
-	Type   string            `yaml:"type"`
+	// Submitted translations, including explicit clears, for the standard editor.
+	// Kept separate so ordinary fields retain their existing YAML representation.
+	titleEdits map[string]string
+	Type       string `yaml:"type"`
 	// AllowInlineCreate — pointer-bool, чтобы omitempty отличал «явно false»
 	// от «не задано». nil → дефолт контекста (true в шапке, false в ТЧ).
 	AllowInlineCreate *bool `yaml:"allow_inline_create,omitempty"`
+	// Required — обязательность реквизита. Редактор её не показывает, поэтому
+	// ключ переносится из прежнего состояния файла: без переноса сохранение
+	// объекта снимало required со ВСЕХ его реквизитов разом.
+	Required bool `yaml:"required,omitempty"`
 	// Default — значение по умолчанию (план 153). Редактор реквизитов его не
 	// показывает, поэтому ключ переносится из прежнего состояния файла, как
 	// id: иначе правка любого реквизита молча стирала бы дефолты у всех.
 	Default string `yaml:"default,omitempty"`
+	// PII — признак персональных данных (Field.PII). Редактор его не
+	// показывает, поэтому ключ тоже переносится из прежнего состояния файла.
+	// Для fail-closed признака потеря опаснее прочих: снятый pii не ломает
+	// конфигурацию и не виден в `onebase check` — поле просто молча
+	// открывается всем ролям, которые про него не высказались. Полноту
+	// вложенных ключей сторожит TestSaveField_CoversAllRawKeys.
+	PII bool `yaml:"pii,omitempty"`
 }
 
 type saveTP struct {
@@ -58,8 +78,29 @@ type saveNumerator struct {
 	// уникальность кода и подстановку префикса базы — ровно та потеря, ради
 	// которой заведена структура. Полноту вложенных ключей сторожит
 	// TestSaveNumerator_CoversAllRawKeys.
-	BasePrefix bool `yaml:"base_prefix,omitempty"`
-	Unique     bool `yaml:"unique,omitempty"`
+	BasePrefix bool               `yaml:"base_prefix,omitempty"`
+	Unique     bool               `yaml:"unique,omitempty"`
+	Field      *saveStandardField `yaml:"field,omitempty"`
+}
+
+// saveNumeratorEdit separates the submitted field properties from the final
+// numbering state: disabling numbering still submits edits to that field.
+// A nil edit preserves numbering; a nil Numerator explicitly disables it.
+type saveNumeratorEdit struct {
+	Numerator   *saveNumerator
+	FieldTitle  *string
+	FieldTitles map[string]string
+}
+
+// saveStandardField mirrors the user properties of metadata.rawNumeratorField.
+// The standard name, string type and stable ID are derived from entity kind.
+type saveStandardField struct {
+	Title    string            `yaml:"title,omitempty"`
+	Label    string            `yaml:"label,omitempty"`
+	Titles   map[string]string `yaml:"titles,omitempty"`
+	Required bool              `yaml:"required,omitempty"`
+	Default  string            `yaml:"default,omitempty"`
+	PII      bool              `yaml:"pii,omitempty"`
 }
 
 // savePredefined — предопределённые элементы справочника. inline map нужен,
@@ -83,18 +124,20 @@ type saveActivity struct {
 // Список/Дерево, Группа» после добавления поля «Поставщик» в Номенклатуру
 // (2026-05-25). Теперь поля сохраняются полностью.
 type saveEntity struct {
-	Name               string            `yaml:"name"`
-	Title              string            `yaml:"title,omitempty"`
-	Titles             map[string]string `yaml:"titles,omitempty"`
-	Hierarchical       bool              `yaml:"hierarchical,omitempty"`
-	HierarchyKind      string            `yaml:"hierarchy_kind,omitempty"`
-	Posting            bool              `yaml:"posting,omitempty"`
-	PostCaption        string            `yaml:"post_caption,omitempty"`
-	PostAndCloseHidden bool              `yaml:"post_and_close_hidden,omitempty"`
-	BasedOn            []string          `yaml:"based_on,omitempty"`
-	Numerator          *saveNumerator    `yaml:"numerator,omitempty"`
-	Predefined         []savePredefined  `yaml:"predefined,omitempty"`
-	ListForm           []string          `yaml:"list_form,omitempty"`
+	Name         string            `yaml:"name"`
+	Title        string            `yaml:"title,omitempty"`
+	Titles       map[string]string `yaml:"titles,omitempty"`
+	Hierarchical bool              `yaml:"hierarchical,omitempty"`
+	// Owner — справочник-владелец (подчинённый справочник, 1С «Владелец»).
+	Owner              string           `yaml:"owner,omitempty"`
+	HierarchyKind      string           `yaml:"hierarchy_kind,omitempty"`
+	Posting            bool             `yaml:"posting,omitempty"`
+	PostCaption        string           `yaml:"post_caption,omitempty"`
+	PostAndCloseHidden bool             `yaml:"post_and_close_hidden,omitempty"`
+	BasedOn            []string         `yaml:"based_on,omitempty"`
+	Numerator          *saveNumerator   `yaml:"numerator,omitempty"`
+	Predefined         []savePredefined `yaml:"predefined,omitempty"`
+	ListForm           []string         `yaml:"list_form,omitempty"`
 	// ItemForm — []any, а не []string: запись состава формы может быть и
 	// отображением {name, readonly} (#1011). При []string правка реквизитов
 	// в конфигураторе роняла бы разбор такого YAML целиком.
@@ -145,6 +188,12 @@ type saveEntity struct {
 	// `presentation: Артикул` в список из одного элемента, то есть переписал бы
 	// файл, которого автор не трогал.
 	Presentation yaml.Node `yaml:"presentation,omitempty"`
+	// OrderBy — порядок списка по умолчанию. Как и presentation, принимает
+	// строку или список, поэтому сырой узел сохраняет исходную форму YAML при
+	// любом редактировании реквизитов в конфигураторе.
+	OrderBy           yaml.Node `yaml:"order_by,omitempty"`
+	ChoicePreview     string    `yaml:"choice_preview,omitempty"`
+	ChoicePreviewProc string    `yaml:"choice_preview_proc,omitempty"`
 }
 
 type saveRegister struct {
@@ -300,6 +349,7 @@ func applyAccountRegFields(raw []byte, reg saveAccountReg, setTitles bool) ([]by
 
 type cfgField struct {
 	Name           string
+	Standard       bool // standard field is edited in the numerator section
 	Type           string
 	RefEntity      string
 	EnumName       string
@@ -371,20 +421,23 @@ type cfgActivity struct {
 }
 
 type cfgEntity struct {
-	Name               string
-	Kind               string // "Справочник" / "Документ"
-	Posting            bool
-	PostCaption        string // подпись кнопки проведения (пусто → «Провести»), issue #497
-	PostAndCloseHidden bool   // скрыть кнопку «Провести и закрыть»
-	Hierarchical       bool
-	BasedOn            []string // источники для ввода на основании (Plan 38)
-	Receivers          []string // обратный список: куда вводится на основании текущего объекта
-	Fields             []cfgField
-	TableParts         []cfgTablePart
-	Source             string // raw .os content (object module)
-	PostingSource      string // raw .posting.os content (ОбработкаПроведения)
-	ManagerSource      string // raw .manager.os content (модуль менеджера)
-	LinkedPrintForms   []cfgPrintForm
+	Name                string
+	Kind                string // "Справочник" / "Документ"
+	Posting             bool
+	PostCaption         string // подпись кнопки проведения (пусто → «Провести»), issue #497
+	PostAndCloseHidden  bool   // скрыть кнопку «Провести и закрыть»
+	Hierarchical        bool
+	Owner               string   // справочник-владелец (подчинённый справочник, 1С «Владелец»)
+	BasedOn             []string // источники для ввода на основании (Plan 38)
+	Receivers           []string // обратный список: куда вводится на основании текущего объекта
+	Fields              []cfgField
+	StandardFieldTitle  string
+	StandardFieldTitles map[string]string
+	TableParts          []cfgTablePart
+	Source              string // raw .os content (object module)
+	PostingSource       string // raw .posting.os content (ОбработкаПроведения)
+	ManagerSource       string // raw .manager.os content (модуль менеджера)
+	LinkedPrintForms    []cfgPrintForm
 	// LinkedDSLForms — DSL-формы (.os) и декларативные макеты (LayoutOnly)
 	// этой сущности: вкладка «Печатные формы» показывает все варианты, а не
 	// только legacy YAML.
@@ -393,6 +446,16 @@ type cfgEntity struct {
 	Titles         map[string]string // переводы синонима объекта
 	Activity       *cfgActivity
 	Numerator      *cfgNumerator
+}
+
+func (e cfgEntity) RegularFieldCount() int {
+	count := 0
+	for _, field := range e.Fields {
+		if !field.Standard {
+			count++
+		}
+	}
+	return count
 }
 
 type cfgRegister struct {

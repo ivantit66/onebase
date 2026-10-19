@@ -3,14 +3,14 @@ package entityservice
 // Порты хранилища (шаг 2 ARCH-01, issue #787).
 //
 // Интерфейсы объявлены на стороне потребителя: здесь перечислена ровно та
-// поверхность *storage.DB, которой пользуется сам сервис, — 24 метода из 314.
-// internal/storage о них не знает и не меняется, *storage.DB удовлетворяет им
+// поверхность *storage.DB, которой пользуется сам сервис, включая tx-only lifecycle записи и проведения.
+// internal/storage о них не знает; *storage.DB удовлетворяет им
 // как есть (см. compile-time проверку в конце файла).
 //
 // Зачем: раньше поле Service.Store имело тип *storage.DB, и сигнатура ничего не
 // сообщала о контракте — чтобы узнать, что сервису нужно от базы, приходилось
 // читать сервис целиком. Теперь набор виден объявлением, а изменение любого из
-// остальных 290 методов storage.DB сервиса не задевает.
+// остальных методов storage.DB сервиса не задевает.
 //
 // Роли объявлены раздельно, чтобы будущие потребители могли зависеть от узкой
 // части; поле Store пока держит совокупный Storage — это оставляет все точки
@@ -42,12 +42,27 @@ type EntityStore interface {
 	// UpsertVersioned пишет с проверкой ожидаемой версии; при расхождении —
 	// storage.ErrVersionConflict, и ничего не записано.
 	UpsertVersioned(ctx context.Context, entityName string, id uuid.UUID, fields map[string]any, entity *metadata.Entity, expectedVersion *int64) error
+	// Posting preludes share one version bump and delay durable effects until
+	// finalization. A new parent keeps its provisional-create lifecycle open.
+	UpdateProvisional(ctx context.Context, entityName string, id uuid.UUID, fields map[string]any, entity *metadata.Entity) error
+	UpsertPostingPreludeVersioned(ctx context.Context, entityName string, id uuid.UUID, fields map[string]any, entity *metadata.Entity, expectedVersion *int64) error
+	UpsertAfterVersionBump(ctx context.Context, entityName string, id uuid.UUID, fields map[string]any, entity *metadata.Entity) error
+	UpsertPostingPreludeTablePartRows(ctx context.Context, entityName, tpName string, parentID uuid.UUID, rows []map[string]any, tp metadata.TablePart) error
+	FinalizePostingPreludeTablePartRows(ctx context.Context, entityName, tpName string, parentID uuid.UUID, rows []map[string]any, provided bool, tp metadata.TablePart) error
+	// EntityVersion читает точную текущую optimistic-lock версию. Service
+	// использует её внутри той же транзакции после записи: при unversioned update
+	// арифметика от входного token невозможна, а наружу всё равно нужен точный
+	// durable token для следующей записи.
+	EntityVersion(ctx context.Context, entityName string, id uuid.UUID) (int64, error)
 	// GetTablePartRows читает строки табличной части родителя.
 	GetTablePartRows(ctx context.Context, entityName, tpName string, parentID uuid.UUID, tp metadata.TablePart) ([]map[string]any, error)
 	// UpsertTablePartRows заменяет все строки табличной части родителя.
 	UpsertTablePartRows(ctx context.Context, entityName, tpName string, parentID uuid.UUID, rows []map[string]any, tp metadata.TablePart) error
 	// Delete удаляет строку сущности (предопределённые — ошибка).
 	Delete(ctx context.Context, entityName string, id uuid.UUID) error
+	// DeleteVersioned удаляет строку только при совпадении _version; при
+	// расхождении возвращает storage.ErrVersionConflict.
+	DeleteVersioned(ctx context.Context, entityName string, id uuid.UUID, expectedVersion int64) error
 	// SetPosted выставляет признак проведения документа.
 	SetPosted(ctx context.Context, entityName string, id uuid.UUID, posted bool) error
 	// IsMarkedForDeletion сообщает, помечен ли объект на удаление.
@@ -132,7 +147,7 @@ type Storage interface {
 	DefaultsStore
 }
 
-// *storage.DB обязан удовлетворять порту без единой правки в internal/storage.
+// *storage.DB обязан удовлетворять всему порту, включая tx-only lifecycle.
 // Если сигнатура там разойдётся с портом, сломается эта строка с внятным
 // сообщением, а не полсотни мест вызова.
 var _ Storage = (*storage.DB)(nil)

@@ -18,9 +18,13 @@ type Subsystem struct {
 	// Roles — необязательный whitelist ролей (как у страниц и HTTP-сервисов):
 	// непустой список показывает раздел только пользователям с одной из ролей
 	// (админ видит всегда). Пустой — видимость определяется правами на объекты.
-	Roles    []string
+	Roles []string
+	// Page — необязательная страница раздела: если задана, пункт верхнего меню
+	// ведёт на /ui/page/<Page> (с ?subsystem=), а не на главную с панелью.
+	Page     string
 	Contents SubsystemContents
 	HomePage *HomePage
+	Menu     *Menu
 }
 
 // DisplayName возвращает заголовок подсистемы с учётом языка.
@@ -66,6 +70,7 @@ type rawSubsystem struct {
 	Icon     string            `yaml:"icon"`
 	Order    int               `yaml:"order"`
 	Roles    []string          `yaml:"roles"`
+	Page     string            `yaml:"page"`
 	Contents struct {
 		Documents  []string `yaml:"documents"`
 		Catalogs   []string `yaml:"catalogs"`
@@ -77,6 +82,7 @@ type rawSubsystem struct {
 		Pages      []string `yaml:"pages"`
 	} `yaml:"contents"`
 	HomePage *HomePage `yaml:"home_page"`
+	Menu     *Menu     `yaml:"menu"`
 }
 
 func LoadSubsystemFile(path string) (*Subsystem, error) {
@@ -101,6 +107,8 @@ func LoadSubsystemFile(path string) (*Subsystem, error) {
 		Icon:   raw.Icon,
 		Order:  raw.Order,
 		Roles:  raw.Roles,
+		Page:   raw.Page,
+		Menu:   raw.Menu,
 		Contents: SubsystemContents{
 			Documents:  raw.Contents.Documents,
 			Catalogs:   raw.Contents.Catalogs,

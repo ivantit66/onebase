@@ -10,6 +10,7 @@ permissions:
     СтавкаНДС: [read, write]
     МестоХранения: [read, write]
     ПодключаемоеОборудование: [read, write]
+    ЗаявкаНаОбработку: [read, write]
   documents:
     ПоступлениеТоваров: [read, write, post, unpost]
     РеализацияТоваров: [read, write, post, unpost]
@@ -30,6 +31,7 @@ permissions:
   inforegs:
     ЦеныНоменклатуры: [read, write]
   reports:
+    РеализацииЗаПериод: [run]
     ОстаткиТоваров: [run]
     ДвиженияТоваров: [run]
     Взаиморасчеты: [run]

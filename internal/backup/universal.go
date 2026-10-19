@@ -45,6 +45,12 @@ type ImportReport struct {
 	// TOTPReset — учётные записи, которым при восстановлении погашен второй
 	// фактор: их секрет зашифрован мастер-ключом другой установки.
 	TOTPReset []string
+	// SkippedTables — таблицы данных архива, которых нет в схеме
+	// восстановленной конфигурации (метаданные убраны, а таблица осталась в
+	// исходной базе): имя → строк в архиве. Их строки не переносятся — так
+	// импорт поступал и раньше, — но теперь это видно, а сверка с манифестом
+	// на таких таблицах не роняет восстановление.
+	SkippedTables map[string]int
 }
 
 // disableUnreadableTOTP гасит второй фактор у учёток, чей секрет не
@@ -592,6 +598,50 @@ func detectBoolCols(ctx context.Context, db schemaMetadataDB, tableName string) 
 	return result, nil
 }
 
+// detectTypedCols — колонки PostgreSQL, в которых пустая строка недопустима:
+// всё, кроме текстовых, JSON и bytea. На SQLite — пусто: там пустая строка
+// принимается любой колонкой и переносится как есть.
+func detectTypedCols(ctx context.Context, db schemaMetadataDB, tableName string) (map[string]bool, error) {
+	result := make(map[string]bool)
+	if db.IsSQLite() {
+		return result, nil
+	}
+	rows, err := db.Query(ctx,
+		`SELECT column_name FROM information_schema.columns
+		 WHERE table_schema=current_schema() AND table_name=$1
+		   AND data_type NOT IN ('text', 'character varying', 'character', 'json', 'jsonb', 'bytea')`,
+		tableName)
+	if err != nil {
+		return nil, fmt.Errorf("query typed columns for %s: %w", tableName, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var col string
+		if err := rows.Scan(&col); err != nil {
+			return nil, fmt.Errorf("scan typed column for %s: %w", tableName, err)
+		}
+		result[col] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate typed columns for %s: %w", tableName, err)
+	}
+	return result, nil
+}
+
+// pgTextCol — колонка PostgreSQL текстовая: не типизированная, не JSON, не
+// bytea и не boolean. Сюда же попадают колонки, которые импорт добавил сам
+// (AddColumnIfMissing с TEXT): их нет в наборах, снятых до загрузки. SQLite
+// держит в TEXT-колонке и число, и в архив оно уходит числом — например,
+// служебная колонка от прежней конфигурации (_is_predefined = 0). PostgreSQL
+// такое значение в text не принимает («unable to encode 0 into text format
+// for text»), и перенос базы падал. На SQLite значение остаётся как есть.
+func pgTextCol(db *storage.DB, col string, typedCols, jsonCols, byteaCols, boolCols map[string]bool) bool {
+	if db.IsSQLite() {
+		return false
+	}
+	return !typedCols[col] && !jsonCols[col] && !byteaCols[col] && !boolCols[col]
+}
+
 // detectByteaCols returns the set of columns with bytea type in PostgreSQL.
 // Used during import to decide whether to base64-decode btype values:
 // only true bytea columns get decoded; text/jsonb columns keep the original string.
@@ -900,7 +950,7 @@ func exportSafeSettings(ctx context.Context, db safeSettingsDB, zw *zip.Writer) 
 		if err := rows.Scan(&key, &value); err != nil {
 			return 0, fmt.Errorf("scan safe setting: %w", err)
 		}
-		if safeSettingKeys[key] || strings.HasPrefix(strings.ToLower(key), "exchange.this_node.") || isScheduledEnabledKey(key) {
+		if safeSettingKeys[key] || strings.HasPrefix(strings.ToLower(key), "exchange.this_node.") || isScheduledEnabledKey(key) || storage.IsNavigationSettingsKey(key) {
 			selected = append(selected, map[string]string{"key": key, "value": value})
 		}
 	}
@@ -1632,6 +1682,12 @@ func verifyImportedTableCounts(manifest map[string]int, report *ImportReport, mo
 			continue
 		}
 		tableName := strings.TrimSuffix(path.Base(key), ".jsonl")
+		// Таблица данных, которой нет в схеме конфигурации, сверке не подлежит:
+		// её строки некуда записать. Служебная (system/) — обязана быть.
+		if _, skipped := report.SkippedTables[tableName]; skipped && strings.HasPrefix(key, "data/") {
+			report.SkippedTables[tableName] = manifest[key]
+			continue
+		}
 		actual, ok := report.Tables[tableName]
 		if !ok {
 			return fmt.Errorf("import: manifest table %s was not imported", tableName)
@@ -1659,6 +1715,33 @@ func clearPortableSettings(ctx context.Context, db *storage.DB) error {
 	}
 	if _, err = db.Exec(ctx, "DELETE FROM _settings WHERE LOWER(key) LIKE "+d.Placeholder(1), "exchange.this_node.%"); err != nil {
 		return err
+	}
+	// Use the same complete key validator as export/import. A reserved prefix
+	// alone does not make a malformed key portable; keep such local values.
+	rows, err := db.Query(ctx, "SELECT key FROM _settings")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var navigationKeys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return err
+		}
+		if storage.IsNavigationSettingsKey(key) {
+			navigationKeys = append(navigationKeys, key)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// Finish reading before issuing writes on the same restore transaction.
+	rows.Close()
+	for _, key := range navigationKeys {
+		if _, err := db.Exec(ctx, "DELETE FROM _settings WHERE key = "+d.Placeholder(1), key); err != nil {
+			return err
+		}
 	}
 	_, err = db.Exec(ctx, "DELETE FROM _settings WHERE LOWER(key) LIKE "+d.Placeholder(1), scheduledEnabledPrefix+"%")
 	return err
@@ -2094,7 +2177,7 @@ func importSafeSettings(ctx context.Context, db *storage.DB, filePath string, in
 		}
 		isExchangeNode := strings.HasPrefix(strings.ToLower(row.Key), "exchange.this_node.")
 		// Решения о заданиях импортируются в любом режиме восстановления.
-		if !safeSettingKeys[row.Key] && !isScheduledEnabledKey(row.Key) && (!includeExchangeNode || !isExchangeNode) {
+		if !safeSettingKeys[row.Key] && !isScheduledEnabledKey(row.Key) && !storage.IsNavigationSettingsKey(row.Key) && (!includeExchangeNode || !isExchangeNode) {
 			continue
 		}
 		if _, err := db.Exec(ctx, q, row.Key, row.Value); err != nil {
@@ -2495,6 +2578,20 @@ func importDir(ctx context.Context, db *storage.DB, dir string, report *ImportRe
 		if allSkip[strings.ToLower(tableName)] {
 			return nil
 		}
+		// Таблицы нет в схеме конфигурации — данные убранных метаданных.
+		// importTableJSONL её и так пропускает; отмечаем пропуск, чтобы сверка
+		// с манифестом отличила его от потерянных строк существующей таблицы.
+		exists, err := tableExistsChecked(ctx, db, tableName)
+		if err != nil {
+			return fmt.Errorf("inspect table %s: %w", tableName, err)
+		}
+		if !exists {
+			if report.SkippedTables == nil {
+				report.SkippedTables = map[string]int{}
+			}
+			report.SkippedTables[tableName] = 0
+			return nil
+		}
 
 		n, err := importTableJSONL(ctx, db, tableName, path)
 		if err != nil {
@@ -2565,6 +2662,12 @@ func importTableJSONL(ctx context.Context, db *storage.DB, tableName, filePath s
 	if err != nil {
 		return 0, fmt.Errorf("detect boolean columns for %s: %w", tableName, err)
 	}
+	// Нетекстовые колонки PostgreSQL: пустая строка из архива становится в них
+	// NULL (см. insertRow).
+	typedCols, err := detectTypedCols(ctx, db, tableName)
+	if err != nil {
+		return 0, fmt.Errorf("detect typed columns for %s: %w", tableName, err)
+	}
 
 	// Detect bytea columns so we only base64-decode btypes for actual binary columns.
 	byteaCols, err := detectByteaCols(ctx, db, tableName)
@@ -2618,7 +2721,7 @@ func importTableJSONL(ctx context.Context, db *storage.DB, tableName, filePath s
 			existingCols[col] = true
 		}
 
-		if err := insertRow(ctx, db, tableName, raw, btypes, existingCols, jsonCols, boolCols, byteaCols); err != nil {
+		if err := insertRow(ctx, db, tableName, raw, btypes, existingCols, jsonCols, boolCols, byteaCols, typedCols); err != nil {
 			return n, fmt.Errorf("insert row %d into %s: %w", n+1, tableName, err)
 		}
 		n++
@@ -2633,7 +2736,7 @@ func importTableJSONL(ctx context.Context, db *storage.DB, tableName, filePath s
 // directly so PostgreSQL can parse it as JSON.
 // boolCols is the set of boolean columns — numeric 0/1 values are converted to bool
 // so that the PG driver does not fail with "cannot find encode plan for bool (OID 16)".
-func insertRow(ctx context.Context, db *storage.DB, tableName string, raw map[string]json.RawMessage, btypes map[string]bool, existingCols map[string]bool, jsonCols map[string]bool, boolCols map[string]bool, byteaCols map[string]bool) error {
+func insertRow(ctx context.Context, db *storage.DB, tableName string, raw map[string]json.RawMessage, btypes map[string]bool, existingCols map[string]bool, jsonCols map[string]bool, boolCols map[string]bool, byteaCols map[string]bool, typedCols map[string]bool) error {
 	d := db.Dialect()
 
 	cols := make([]string, 0, len(raw))
@@ -2743,13 +2846,29 @@ func insertRow(ctx context.Context, db *storage.DB, tableName string, raw map[st
 						goVal = iv != 0
 					}
 				}
+				// Число в текстовой колонке PostgreSQL — строкой (см. pgTextCol).
+				if pgTextCol(db, col, typedCols, jsonCols, byteaCols, boolCols) {
+					goVal = tv.String()
+				}
 			case string:
 				// Raw bytes are already valid UTF-8 here — the line-level
 				// transcode in importTableJSONL has already converted
 				// any Windows-1251 source to UTF-8.
 				goVal = stripMonoClock(tv)
+				// SQLite хранит что угодно в колонке любого типа, и пустая
+				// строка в поле даты, числа или булева там — обычное «не
+				// заполнено» (так его пишут загрузчики мимо платформы).
+				// PostgreSQL такое значение отвергает («invalid input syntax for
+				// type timestamp with time zone: ""»), и перенос базы падал на
+				// первой же такой строке. Незаполненное значение — NULL.
+				if tv == "" && typedCols[col] {
+					goVal = nil
+				}
 			case bool:
 				goVal = tv
+				if pgTextCol(db, col, typedCols, jsonCols, byteaCols, boolCols) {
+					goVal = strconv.FormatBool(tv)
+				}
 			default:
 				goVal = v
 			}

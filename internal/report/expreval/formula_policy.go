@@ -87,7 +87,7 @@ func validateFormulaExprN(expr ast.Expr, nodes *int) error {
 		return fmt.Errorf("формула отчёта превышает предел сложности %d узлов", maxFormulaASTNodes)
 	}
 	switch v := expr.(type) {
-	case *ast.Ident, *ast.BoolLit:
+	case *ast.Ident, *ast.BoolLit, *ast.DateLit:
 		return nil
 	case *ast.StringLit:
 		if len(v.Value) > maxFormulaStringLiteral {
@@ -156,7 +156,19 @@ func validateFormulaExprN(expr ast.Expr, nodes *int) error {
 	case nil:
 		return fmt.Errorf("пустое выражение формулы отчёта")
 	default:
-		return fmt.Errorf("конструкция %T не разрешена в формуле отчёта", expr)
+		return fmt.Errorf("формула отчёта содержит недопустимую конструкцию: %s", forbiddenFormulaExprDescription(expr))
+	}
+}
+
+// forbiddenFormulaExprDescription keeps implementation type names out of
+// diagnostics shown to report users. The fallback deliberately stays generic:
+// a newly added AST node must remain forbidden without exposing its Go type.
+func forbiddenFormulaExprDescription(expr ast.Expr) string {
+	switch expr.(type) {
+	case *ast.MissingArg:
+		return "пропущенный аргумент"
+	default:
+		return "неподдерживаемое выражение"
 	}
 }
 

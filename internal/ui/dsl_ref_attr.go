@@ -98,7 +98,13 @@ func (r *dslRefAttrResolver) ResolveRefAttr(ref *interpreter.Ref, field string) 
 	}
 	// План 88E: разыменование чужой записи (this.Клиент.Телефон) — такой же путь
 	// чтения, как форма или REST, и обязано подчиняться полевой политике роли.
-	return r.s.maskDSLValue(r.ctx, entity, fd.Name, row[fd.Name]), true
+	if r.s.dslFieldMasked(r.liveCtx(), entity, fd.Name) {
+		return r.s.maskDSLValue(r.liveCtx(), entity, fd.Name, row[fd.Name]), true
+	}
+	if value := row[fd.Name]; value != nil {
+		return value, true
+	}
+	return r.s.declaredEntityFieldValue(fd, nil, r), true
 }
 
 func (r *dslRefAttrResolver) attachObject(entity *metadata.Entity, obj *runtime.Object) {
@@ -158,6 +164,9 @@ func (r *dslRefAttrResolver) attachRef(ref *interpreter.Ref, entityName string) 
 	if ref.Type == "" {
 		ref.Type = entityName
 	}
+	if ref.Kind == "" && r.s != nil {
+		ref.Kind = refKind(r.s.reg.GetEntity(ref.Type))
+	}
 	if ref.Manager == nil && r.s != nil {
 		ref.Manager = r.s.refManagerForSrc(r.s.reg.GetEntity(ref.Type), r, r.liveCtx())
 	}
@@ -179,11 +188,59 @@ func (r *dslRefAttrResolver) bindRefToContext(ref *interpreter.Ref, entityName s
 	if bound.Type == "" {
 		bound.Type = entityName
 	}
+	if bound.Kind == "" && r.s != nil {
+		bound.Kind = refKind(r.s.reg.GetEntity(bound.Type))
+	}
 	if r.s != nil {
 		bound.Manager = r.s.refManagerForSrc(r.s.reg.GetEntity(bound.Type), r, r.liveCtx())
 	}
 	bound.AttrResolver = r
 	return &bound
+}
+
+// isSelfRefName — имя псевдо-реквизита «Ссылка» самого объекта.
+func isSelfRefName(name string) bool {
+	return strings.EqualFold(name, "Ссылка") || strings.EqualFold(name, "Reference")
+}
+
+// constantsRefPresenter — подписи ссылочных констант для DSL, исполняемого
+// сервером (обработчики, procrun через RunProcessorOffline). Чтение вертикальное
+// (UUID → подпись), как у остальных резолверов ссылок, поэтому подпись строит
+// maskedRecordLabel: сначала маска полевой политики роли, потом представление.
+// Удалённая или нечитаемая строка даёт пустую подпись: UUID, выданный за
+// наименование, молча уезжал в письма и печатные формы (#1536).
+func (s *Server) constantsRefPresenter(ctxSrc docsCtxSource) func(ctx context.Context, entityName, id string) string {
+	return func(ctx context.Context, entityName, id string) string {
+		if s == nil || s.store == nil || s.reg == nil {
+			return ""
+		}
+		if ctxSrc != nil {
+			if live := ctxSrc.Ctx(); live != nil {
+				ctx = live
+			}
+		}
+		entity := s.reg.GetEntity(strings.TrimSpace(entityName))
+		if entity == nil {
+			return ""
+		}
+		uid, err := uuid.Parse(strings.TrimSpace(id))
+		if err != nil {
+			return ""
+		}
+		fields := metadata.LabelFields(entity)
+		if len(fields) == 0 {
+			return ""
+		}
+		rows, err := s.store.GetFieldsByIDs(ctx, entity, []uuid.UUID{uid}, fields)
+		if err != nil {
+			return ""
+		}
+		row := rows[uid.String()]
+		if row == nil {
+			return ""
+		}
+		return s.maskedRecordLabel(ctx, entity, row)
+	}
 }
 
 func (r *dslRefAttrResolver) preloadBatch(batch map[string]map[string]uuid.UUID) {
@@ -274,7 +331,22 @@ func newRefAwareMapThis(row map[string]any, tp *metadata.TablePart, resolver *ds
 	if tp == nil {
 		return &interpreter.MapThis{M: row}
 	}
-	return &refAwareMapThis{row: row, tp: tp, resolver: resolver}
+	aware := &refAwareMapThis{row: row, tp: tp, resolver: resolver}
+	return &interpreter.MapThis{
+		M: row,
+		Read: func(name string) (any, bool) {
+			fd := tablePartField(tp, name)
+			if fd == nil {
+				return nil, false
+			}
+			_, value, _ := lookupMapCI(row, name)
+			return aware.wrapValue(fd, value), true
+		},
+		Write: func(name string, value any) bool {
+			aware.Set(name, value)
+			return true
+		},
+	}
 }
 
 func (m *refAwareMapThis) Get(name string) any {
@@ -282,10 +354,11 @@ func (m *refAwareMapThis) Get(name string) any {
 		return nil
 	}
 	_, v, ok := lookupMapCI(m.row, name)
-	if !ok {
+	fd := tablePartField(m.tp, name)
+	if !ok && fd == nil {
 		return nil
 	}
-	return m.wrapValue(name, v)
+	return m.wrapValue(fd, v)
 }
 
 func (m *refAwareMapThis) Set(name string, v any) {
@@ -308,27 +381,11 @@ func (m *refAwareMapThis) Set(name string, v any) {
 	m.row[name] = v
 }
 
-func (m *refAwareMapThis) wrapValue(name string, v any) any {
-	fd := tablePartField(m.tp, name)
-	if fd == nil || fd.RefEntity == "" {
+func (m *refAwareMapThis) wrapValue(fd *metadata.Field, v any) any {
+	if fd == nil {
 		return v
 	}
-	if m.resolver == nil {
-		return v
-	}
-	if ref, ok := v.(*interpreter.Ref); ok {
-		return m.resolver.bindRefToContext(ref, fd.RefEntity)
-	}
-	idStr, _, ok := uuidFromValue(v)
-	if !ok {
-		return v
-	}
-	return m.resolver.attachRef(&interpreter.Ref{
-		UUID:    idStr,
-		Name:    idStr,
-		Type:    fd.RefEntity,
-		Manager: m.resolver.s.refManagerFor(m.resolver.s.reg.GetEntity(fd.RefEntity), m.resolver.ctx),
-	}, fd.RefEntity)
+	return declaredDSLValue(v, mustFieldDescriptor(fd), m.resolver)
 }
 
 func tablePartField(tp *metadata.TablePart, name string) *metadata.Field {

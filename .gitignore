@@ -1,6 +1,17 @@
 # Binaries
 /onebase
 /onebase.exe
+# `go build ./tools/<имя>` кладёт бинарь в корень репозитория, и `git add -A`
+# заметает его в индекс — так в PR #1141 уехало 4 МБ ELF.
+/backlogsweep
+/benchgate
+/featureage
+/i18ncheck
+/issuetail
+/jsextract
+/plannum
+/relsign
+/dbquery
 onebase-gui.exe
 onebase-linux-arm64
 onebase-arm64
@@ -47,8 +58,7 @@ Thumbs.db
 .codex/
 .superpowers/
 
-# Local agent instructions
-AGENTS.md
+# Shared agent instructions are tracked in AGENTS.md.
 
 # IDE
 .idea/
@@ -62,6 +72,7 @@ docs/*
 !docs/ai-assistant.md
 !docs/features.md
 !docs/mcp.md
+!docs/vibe-coding.md
 !docs/rest-api-v2.md
 !docs/roadmap.json
 !docs/publications.md
@@ -70,11 +81,16 @@ docs/*
 !docs/DEPLOYMENT.md
 !docs/reverse-proxy.md
 !docs/release-signing.md
+!docs/self-update.md
+!docs/maintenance-pipeline.md
 # Каталоги, а не файлы по одному: `docs/*` исключает и сам каталог, а в
 # исключённый каталог git не заходит — правило вида `!docs/releases/*.md`
 # не сработало бы, и новые заметки молча не попадали бы в коммит (#988, А3).
 !docs/releases/
 !docs/history/
+# Скриншоты для README. Каталог, а не маска — по той же причине, что выше:
+# правило `!docs/images/*.png` не сработает, git в исключённый каталог не зайдёт.
+!docs/images/
 
 # Генерируется `onebase langref`; сверяется тестом TestDSLReferenceUpToDate.
 !docs/dsl-reference.md
@@ -94,6 +110,10 @@ loadtest/reports/
 *.db-wal
 # Lifetime-lock базы (internal/dblock); остаётся после жёсткого kill сервера
 *.onebase.lock
+# Рабочие файлы самообновления (internal/selfupdate); заводятся рядом с бинарём
+.onebase-update.lock
+.onebase-update.intent.lock
+.onebase-update.pending.json
 
 # Бэкапы
 *.obz
@@ -102,3 +122,4 @@ loadtest/reports/
 e2e/node_modules/
 e2e/test-results/
 e2e/playwright-report/
+govulnpolicy.exe

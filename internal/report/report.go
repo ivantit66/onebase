@@ -8,10 +8,26 @@ import (
 
 type Param struct {
 	Name    string            `yaml:"name"`
-	Type    string            `yaml:"type"`    // string, date, number, bool, select, reference:Entity
+	Type    string            `yaml:"type"`    // string, date, datetime, number, bool, select, reference:Entity
 	Label   string            `yaml:"label"`   // display label; falls back to Name
 	Labels  map[string]string `yaml:"labels"`  // per-language labels (lang code → translation)
 	Options []string          `yaml:"options"` // for type: select
+	// Default — значение параметра, когда пользователь его не задал. Понимает ту
+	// же грамматику подстановок, что параметры виджетов и регламентных заданий
+	// ({{today}}, {{now|-7d}} и т.п.). Раньше линтер ключ `default` принимал, а
+	// модель его не знала: отчёт с необязательной датой молча приходил пустым,
+	// потому что «Срок < NULL» не выбирает ничего.
+	//
+	// Результат подстановки форматируется ПО ТИПУ параметра: `datetime` получает
+	// момент со временем суток (2006-01-02T15:04:05), `date` и все прочие типы —
+	// дату. Поэтому `{{now | minus_hours:6}}` у `datetime` отличается от
+	// `{{now}}`, а у `date` усечение до даты — правило типа, а не потеря (#1204).
+	Default string `yaml:"default"`
+	// PeriodEnd — только для `date`: значение берётся концом дня (23:59:59),
+	// как КонецПериода(…, День) в 1С. Нужен параметру «По»: документы и движения
+	// хранят время суток, и «Дата <= &По» с полночью теряло всё, что было в этот
+	// день после 00:00.
+	PeriodEnd bool `yaml:"period_end"`
 }
 
 type Report struct {

@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -306,8 +307,13 @@ func resetBasePrefixAfterRestore(ctx context.Context, b *Base) (string, error) {
 // Raw engine dumps cannot resolve a universal restore's external directory
 // journal, so they must never overwrite the database that contains its marker.
 func checkRawRestoreAllowed(ctx context.Context, b *Base) error {
-	if err := checkNoPendingRestoreReadOnly(ctx, b); err != nil {
-		return fmt.Errorf("raw database restore refused while universal recovery is pending: %w", err)
+	if err := checkNoPendingRestoreBeforeOpen(ctx, b); err != nil {
+		// Формулировка нейтральная: проба маркера могла упасть на ошибке чтения
+		// или повреждённой базе, и тогда наличие pending recovery не доказано —
+		// внешнее сообщение не имеет права утверждать обратное (#1563).
+		// Вложенная ошибка различает «маркер найден» и «проба не прошла»;
+		// отказ в любом случае fail-closed.
+		return fmt.Errorf("raw database restore refused: %w", err)
 	}
 	return nil
 }
@@ -433,7 +439,7 @@ func (h *handler) acquireFullExportSnapshot(ctx context.Context, b *Base) (*full
 		releaseGates()
 		return nil, errors.Join(fmt.Errorf("заблокировать БД для полной выгрузки: %w", err), restartErr)
 	}
-	gateErr := checkNoPendingRestoreReadOnly(ctx, b)
+	gateErr := checkNoPendingRestoreBeforeOpen(ctx, b)
 	if gateErr == nil {
 		gateErr = publishBaseSchemaRevisionExclusive(ctx, b)
 	}
@@ -1278,6 +1284,17 @@ func (h *handler) backupFullImport(w http.ResponseWriter, r *http.Request) {
 				// их, чтобы владельцам перепривязать приложение-аутентификатор (#611).
 				msg += ". " + fmt.Sprintf(tr(lang, "Сброшен второй фактор (перепривяжите): %s"),
 					strings.Join(report.TOTPReset, ", "))
+			}
+			if len(report.SkippedTables) > 0 {
+				// Таблицы метаданных, которых в конфигурации архива уже нет:
+				// их строки не восстановлены — называем, чтобы потеря не была тихой.
+				names := make([]string, 0, len(report.SkippedTables))
+				for name, rows := range report.SkippedTables {
+					names = append(names, fmt.Sprintf("%s (%d)", name, rows))
+				}
+				sort.Strings(names)
+				msg += ". " + fmt.Sprintf(tr(lang, "Не восстановлены таблицы, которых нет в конфигурации: %s"),
+					strings.Join(names, ", "))
 			}
 			if wasRunning {
 				msg += ". " + tr(lang, "База остановлена — запустите её заново.")

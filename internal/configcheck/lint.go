@@ -66,6 +66,9 @@ func CheckLintProject(dir string, proj *project.Project, roles []*auth.Role) []I
 	issues = append(issues, CheckLintDSL(dir, proj)...)
 	issues = append(issues, CheckLintRoles(dir, proj, roles)...)
 	issues = append(issues, CheckLintIndexes(proj)...)
+	issues = append(issues, CheckLintReports(proj)...)
+	issues = append(issues, CheckLintFormAttrTypes(proj)...)
+	issues = append(issues, checkNavigation(proj, true)...)
 	return issues
 }
 
@@ -170,11 +173,16 @@ type formHotkeyRef struct {
 	line int
 }
 
-// formDeleteEvents — события удаления, объявляемые в форме. Обработчик формы
-// срабатывает только при удалении из открытой формы, а удаляют ещё из списка,
-// пачкой, из DSL и по REST. Запрет, написанный только в форме, обходится
-// сменой способа удаления — то есть не защищает. Настоящий гейт живёт в модуле
-// объекта (Процедура ПередУдалением), и предупреждение об этом говорит.
+// formDeleteEvents — события удаления, объявляемые в форме. Обработчик формы не
+// вызывается вовсе: удаление идёт единой точкой entityservice.Delete, и хуки она
+// берёт из модуля объекта (см. там же комментарий «не вызывались НИОТКУДА»).
+// Даже ожив форменный путь, мы закрыли бы один способ удаления из пяти —
+// остаются список, пачка, DSL и REST. Настоящий гейт живёт в модуле объекта
+// (Процедура ПередУдалением), и предупреждение об этом говорит.
+//
+// Про «не вызывается» по умолчанию, без --lint, говорит ещё и
+// CheckFormEventDispatch: события удаления попадают в невызываемые (#1153).
+// Здесь остаётся совет, куда перенести проверку, — он и есть ценность линта.
 var formDeleteEvents = map[string]string{
 	"ПередУдалением": "ПередУдалением",
 	"ПриУдалении":    "ПередУдалением",
@@ -208,7 +216,7 @@ func lintFormDeleteEvents(path, label string) []Issue {
 			Object:       label,
 			Kind:         "Управляемая форма",
 			Code:         "forms.delete-event-in-form",
-			Message:      fmt.Sprintf("событие %q объявлено в форме: оно сработает только при удалении из открытой формы, а из списка, пачкой, из DSL и по REST объект удалится без него", name),
+			Message:      fmt.Sprintf("событие %q объявлено в форме: обработчик формы не вызывается вовсе, а из списка, пачкой, из DSL и по REST объект удаляется своим путём — проверка не сработает нигде", name),
 			SuggestedFix: fmt.Sprintf("Перенесите проверку в модуль объекта: Процедура %s() в src/<объект>.os — она выполняется на всех путях удаления.", moduleEvent),
 		})
 	}
@@ -349,7 +357,7 @@ func fieldYAMLSchema(allowRequired bool) *yamlLintSchema {
 	// который его честно читает, и DEVELOPER.md, где id описан как
 	// рекомендуемая практика. Пользователь, послушавшийся линта, снимал
 	// страховку от потери данных (#873, дефект Д11 из #668).
-	keys := []string{"id", "name", "title", "label", "type", "allow_inline_create"}
+	keys := []string{"id", "name", "title", "label", "type", "allow_inline_create", "pii"}
 	if allowRequired {
 		// Required is currently a write invariant for entity headers and table
 		// parts. Register recorders have a different persistence path and must
@@ -395,7 +403,9 @@ func entityYAMLSchema() *yamlLintSchema {
 	})
 	return with(obj(
 		"name", "title", "description", "posting", "hierarchical", "hierarchy_kind",
-		"presentation",
+		// owner — справочник-владелец (подчинённый справочник, 1С «Владелец»).
+		"owner",
+		"presentation", "order_by", "choice_preview", "choice_preview_proc",
 		"list_form", "item_form", "based_on", "list_mode", "notify_changes", "list_refresh_on",
 		"fulltext", "search_fields", "detail_panel",
 	), map[string]*yamlLintSchema{
@@ -404,11 +414,13 @@ func entityYAMLSchema() *yamlLintSchema {
 		// {name, readonly} — «показывать, но не давать править» (#1011).
 		// Скалярные элементы схема пропускает, а опечатку в ключе записи
 		// (read_only) ловит.
-		"item_form":    seq(obj("name", "readonly")),
-		"fields":       seq(fieldYAMLSchema(true)),
-		"tableparts":   seq(tablePartYAMLSchema(true)),
-		"indexes":      seq(indexYAMLSchema()),
-		"numerator":    obj("prefix", "length", "period", "scope", "base_prefix", "unique"),
+		"item_form":  seq(obj("name", "readonly")),
+		"fields":     seq(fieldYAMLSchema(true)),
+		"tableparts": seq(tablePartYAMLSchema(true)),
+		"indexes":    seq(indexYAMLSchema()),
+		"numerator": with(obj("prefix", "length", "period", "scope", "base_prefix", "unique"), map[string]*yamlLintSchema{
+			"field": with(obj("title", "label", "required", "default", "pii"), map[string]*yamlLintSchema{"titles": freeMap()}),
+		}),
 		"predefined":   seq(with(obj("name"), map[string]*yamlLintSchema{"fields": freeMap()})),
 		"tile_view":    obj("image", "title", "subtitle", "fields"),
 		"activity":     obj("field", "default_scope", "hide_from_choice"),
@@ -447,7 +459,14 @@ func constantsYAMLSchema() *yamlLintSchema {
 }
 
 func widgetYAMLSchema() *yamlLintSchema {
-	return with(obj("name", "type", "title", "query", "format", "compare_to", "limit", "chart_kind", "chart_type", "x_field", "y_fields", "entities", "scope"), map[string]*yamlLintSchema{
+	return with(obj("name", "type", "title", "query", "format", "compare_to", "limit", "chart_kind", "chart_type", "x_field", "y_fields", "entities", "scope", "link", "refresh_on"), map[string]*yamlLintSchema{
+		"source": obj("entity", "id_field"),
+		"filters": seq(with(obj("name", "label", "type", "param"), map[string]*yamlLintSchema{
+			"labels": freeMap(),
+			"values": seq(with(obj("value", "label"), map[string]*yamlLintSchema{
+				"labels": freeMap(),
+			})),
+		})),
 		"titles": freeMap(),
 		"params": freeMap(),
 		"columns": seq(with(obj("field", "label", "format", "align"), map[string]*yamlLintSchema{
@@ -473,8 +492,13 @@ func reportYAMLSchema() *yamlLintSchema {
 		"chart":       obj("type", "category", "series"),
 	})
 	return with(obj("name", "title", "query", "chart_proc", "output_format"), map[string]*yamlLintSchema{
-		"titles":      freeMap(),
-		"params":      seq(with(obj("name", "type", "label", "options"), map[string]*yamlLintSchema{"labels": freeMap()})),
+		"titles": freeMap(),
+		// У отчёта «required» НЕТ намеренно: report.Param такого поля не знает,
+		// и разрешённый линтом ключ молча ничего бы не делал. Обязательность
+		// параметра пока только у обработок (processor.Param). А вот «default»
+		// модель знает — параметр без значения получает умолчание, — поэтому
+		// ключ разрешён: иначе линт ругался бы на работающую возможность.
+		"params":      seq(with(obj("name", "type", "label", "options", "default", "period_end"), map[string]*yamlLintSchema{"labels": freeMap()})),
 		"composition": composition,
 		"variants":    seq(with(obj("name"), map[string]*yamlLintSchema{"composition": composition})),
 	})
@@ -482,21 +506,22 @@ func reportYAMLSchema() *yamlLintSchema {
 
 func roleYAMLSchema() *yamlLintSchema {
 	perm := with(obj(), map[string]*yamlLintSchema{
-		"ai_data_access": freeMap(),
-		"catalogs":       freeMap(),
-		"documents":      freeMap(),
-		"registers":      freeMap(),
-		"inforegs":       freeMap(),
-		"reports":        freeMap(),
-		"processors":     freeMap(),
-		"row_access":     freeMap(),
-		"field_access":   freeMap(),
+		"ai_data_access":     freeMap(),
+		"catalogs":           freeMap(),
+		"documents":          freeMap(),
+		"registers":          freeMap(),
+		"inforegs":           freeMap(),
+		"reports":            freeMap(),
+		"processors":         freeMap(),
+		"processors_default": freeMap(),
+		"row_access":         freeMap(),
+		"field_access":       freeMap(),
 	})
 	return with(obj("name", "description"), map[string]*yamlLintSchema{"permissions": perm})
 }
 
 func processorYAMLSchema() *yamlLintSchema {
-	param := with(obj("name", "type", "label", "default", "options"), map[string]*yamlLintSchema{"labels": freeMap()})
+	param := with(obj("name", "type", "label", "default", "options", "required"), map[string]*yamlLintSchema{"labels": freeMap()})
 	return with(obj("name", "title", "kind"), map[string]*yamlLintSchema{
 		"titles": freeMap(),
 		"params": seq(param),
@@ -553,6 +578,7 @@ func subsystemYAMLSchema() *yamlLintSchema {
 		"titles":    freeMap(),
 		"contents":  contents,
 		"home_page": homePageYAMLSchema(),
+		"menu":      menuYAMLSchema(),
 	})
 }
 
@@ -586,6 +612,7 @@ func homePageYAMLSchema() *yamlLintSchema {
 		"rows":    seq(obj("widgets")),
 		"widgets": seq(obj("name", "span")),
 		"nav":     nav,
+		"menu":    menuYAMLSchema(),
 	})
 }
 
@@ -595,22 +622,34 @@ func formModuleYAMLSchema() *yamlLintSchema {
 	for _, k := range []string{
 		"id", "name", "kind", "field", "table_part", "visible", "enabled", "required",
 		"original_id", "data_path", "picture", "values_picture", "width", "height",
-		"halign", "valign", "readonly", "use_grid", "no_grid", "auto_sum", "hint", "mask",
+		"halign", "valign", "readonly", "readonly_when", "hidden_when", "use_grid", "no_grid", "auto_sum", "hint", "mask",
 		"accesskey", "hotkey", "multiline", "format", "display_format", "type", "choice", "unknown_xml", "view",
+		"scroll_x", "primary", "editable_admin_only", "choice_folders", "choice_dropdown",
 		// Ключи, поддержанные загрузчиком, но забытые здесь: линт объявлял их
 		// неизвестными, а гейт CI считает предупреждение ошибкой — то есть
 		// документированный «language» у kind: ПолеКода не давал примеру
 		// пройти собственную проверку (#1014).
-		"orientation", "input_mask", "language", "virtual_columns",
+		"orientation", "background", "input_mask", "language", "virtual_columns",
 	} {
 		element.keys[k] = nil
 	}
+	// choice_filter — «реквизит выбираемого справочника → путь к значению»
+	// (связи параметров выбора), тоже свободная карта.
+	element.keys["choice_filter"] = freeMap()
+	// choice_context — карта «параметр → путь к значению», а не скаляр: состав
+	// ключей свободный, поэтому freeMap, иначе линт ругался бы на каждое имя
+	// параметра.
+	element.keys["choice_context"] = freeMap()
 	element.keys["title"] = freeMap()
 	element.keys["events"] = freeMap()
+	// props остаётся свободной картой: про ключи, которых не читает ни один
+	// потребитель, говорит CheckFormProps — там есть, кем именно ключ не
+	// используется, а здесь было бы только «неизвестный ключ» (#1492).
 	element.keys["props"] = freeMap()
 	element.keys["children"] = seq(element)
 	element.keys["choices"] = seq(with(obj("value"), map[string]*yamlLintSchema{"title": freeMap()}))
 	element.keys["options"] = seq(with(obj("value"), map[string]*yamlLintSchema{"label": freeMap()}))
+	element.keys["choice_filter"] = seq(obj("field", "op", "from", "value", "ref"))
 
 	attrColumn := with(obj("id", "original_id", "name", "type", "length", "precision"), map[string]*yamlLintSchema{
 		"title": freeMap(),
@@ -631,7 +670,7 @@ func formModuleYAMLSchema() *yamlLintSchema {
 	commandBar := obj("id", "original_id", "name", "visible")
 	commandBar.keys["buttons"] = seq(button)
 
-	formHeader := with(obj("entity", "name", "kind", "original_id", "auto_save_settings", "auto_save_data_in_settings", "vertical_scroll"), map[string]*yamlLintSchema{
+	formHeader := with(obj("entity", "name", "kind", "original_id", "auto_save_settings", "auto_save_data_in_settings", "vertical_scroll", "ref_card_button"), map[string]*yamlLintSchema{
 		"title": freeMap(),
 	})
 	style := obj("color", "background", "bold", "italic")
@@ -640,12 +679,28 @@ func formModuleYAMLSchema() *yamlLintSchema {
 		"then":  style,
 	})
 
+	// `ref_card_button` в этом списке НЕТ намеренно: загрузчик читает его только
+	// внутри блока `form:` (`internal/dsl/loader/managed_form_loader.go`, поле
+	// RefCardButton у тега yaml:"form"). Пока ключ был разрешён и в корне,
+	// конфигурация с ним проходила линт зелёно, а кнопка молча оставалась на
+	// месте — ровно та «тихая потеря», от которой этот линт и заведён (#1450).
+	action := obj("visible")
+	actions := with(obj(), map[string]*yamlLintSchema{
+		"delete": action,
+		"save":   action,
+		// ok.post — «ОК» проводит документ, как в 1С.
+		"ok":    obj("visible", "post"),
+		"close": action,
+		// attachments.visible:false скрывает панель вложений выбранной
+		// managed-формы (план 181C, #1621); attachment endpoint не меняется.
+		"attachments": action,
+	})
 	return with(obj("schema", "entity", "name", "kind", "layout_kind", "original_id", "auto_save_settings", "auto_save_data_in_settings", "vertical_scroll"), map[string]*yamlLintSchema{
 		"form":                   formHeader,
 		"title":                  freeMap(),
 		"events":                 freeMap(),
 		"elements":               seq(element),
-		"actions":                freeMap(),
+		"actions":                actions,
 		"attributes":             seq(attr),
 		"commands":               seq(command),
 		"command_bar":            commandBar,
@@ -663,6 +718,11 @@ type lintProgram struct {
 	roots       map[string]bool
 	rootAll     bool
 	testContext bool
+	// tpContextProcs — процедуры, привязанные к событию табличной части или её
+	// колонки. Только им платформа инжектирует ТекущаяСтрока и соседей, поэтому
+	// держать эти имена в commonDSLGlobals нельзя: опечатка в обычном модуле
+	// перестала бы ловиться (та же причина, что у testDSLGlobals).
+	tpContextProcs map[string]bool
 }
 
 // CheckLintDSL reports declared but unread DSL variables and procedures that
@@ -670,11 +730,13 @@ type lintProgram struct {
 func CheckLintDSL(dir string, proj *project.Project) []Issue {
 	programs := collectLintPrograms(dir, proj)
 	globals := knownGlobalNames(proj)
+	managers := metadataManagers(proj)
 	var issues []Issue
 	for _, lp := range programs {
 		issues = append(issues, lintUnusedVars(lp)...)
 		issues = append(issues, lintCrossScopeReads(lp)...)
 		issues = append(issues, lintUnknownGlobalMembers(lp, globals)...)
+		issues = append(issues, lintUnknownMetadataObjects(dir, lp, managers)...)
 	}
 	issues = append(issues, lintDeadProcedures(programs)...)
 	return issues
@@ -739,6 +801,17 @@ var commonDSLGlobals = map[string]bool{
 	"объект": true, "форма": true, "элементы": true, "элементыформы": true,
 	"отказ": true, "параметры": true, "параметрысеанса": true, "запрос_": true,
 }
+
+// formTPContextGlobals — контекст события табличной части, доступный только
+// внутри её обработчиков. Словарь имён живёт в metadata рядом с событиями форм,
+// значения инжектирует рантайм; расхождение сторожит тест в internal/ui.
+var formTPContextGlobals = func() map[string]bool {
+	set := map[string]bool{}
+	for _, name := range metadata.FormTablePartContextVars() {
+		set[strings.ToLower(name)] = true
+	}
+	return set
+}()
 
 // testDSLGlobals инжектируются только в обработки с kind: test. Держать их в
 // commonDSLGlobals нельзя: иначе опечатка/неподдерживаемый Мок.Email в обычном
@@ -867,9 +940,11 @@ func lintUnknownGlobalMembers(lp lintProgram, globals map[string]bool) []Issue {
 			names = append(names, name)
 		}
 		sort.Strings(names)
+		inTPHandler := lp.tpContextProcs[strings.ToLower(pr.Name.Literal)]
 		for _, name := range names {
 			if owned[name] || moduleVars[name] || procNames[name] || commonDSLGlobals[name] || globals[name] ||
-				lp.testContext && testDSLGlobals[name] {
+				lp.testContext && testDSLGlobals[name] ||
+				inTPHandler && formTPContextGlobals[name] {
 				continue
 			}
 			tok := bases[name]
@@ -1164,6 +1239,10 @@ func collectLintPrograms(dir string, proj *project.Project) []lintProgram {
 				"OnUnpost", "ОбработкаУдаленияПроведения",
 				"OnFill", "ОбработкаЗаполнения",
 				"OnCreate", "ПриСозданииНового",
+				// Хуки удаления вызывает entityservice.Delete; без них в списке
+				// корней ПередУдалением объявлялась мёртвой процедурой.
+				"BeforeDelete", "ПередУдалением",
+				"AfterDelete", "ПослеУдаления",
 				"Печать", "Print",
 			), false)
 		default:
@@ -1213,9 +1292,65 @@ func collectLintPrograms(dir string, proj *project.Project) []lintProgram {
 				formName = ent.Name
 			}
 			add(ent.Name+"/"+formName, "DSL форма", prog, roots, false)
+			// Контекст табличной части знает только её обработчик, поэтому
+			// список процедур прикладывается к уже добавленной программе, а не
+			// расширяет общий словарь глобалов.
+			out[len(out)-1].tpContextProcs = collectTablePartHandlerProcs(form)
+		}
+	}
+	// Формы обработок — такие же модули с обработчиками, что и формы объектов,
+	// но раньше в разбор не попадали: опечатка в них не ловилась ни одной
+	// DSL-проверкой.
+	for _, proc := range proj.Processors {
+		for _, form := range proc.Forms {
+			prog, _ := form.ProgramAST.(*ast.Program)
+			if prog == nil {
+				continue
+			}
+			roots := map[string]bool{}
+			collectFormHandlerRoots(form, roots)
+			formName := form.Name
+			if formName == "" {
+				formName = proc.Name
+			}
+			add(proc.Name+"/"+formName, "DSL форма обработки", prog, roots, false)
+			out[len(out)-1].tpContextProcs = collectTablePartHandlerProcs(form)
 		}
 	}
 	return out
+}
+
+// collectTablePartHandlerProcs — процедуры, привязанные к событию табличной
+// части или любого её потомка (колонки, кнопки подбора). Именно им рантайм
+// собирает контекст строки; какой конкретно набор имён доедет, зависит от
+// события и от того, что прислал клиент, поэтому разбирать это здесь не стоит:
+// проверка отвечает на вопрос «существует ли такое имя вообще», а не «заполнено
+// ли оно сейчас».
+func collectTablePartHandlerProcs(form *metadata.FormModule) map[string]bool {
+	if form == nil {
+		return nil
+	}
+	procs := map[string]bool{}
+	var walk func(elements []*metadata.FormElement, insideTablePart bool)
+	walk = func(elements []*metadata.FormElement, insideTablePart bool) {
+		for _, el := range elements {
+			if el == nil {
+				continue
+			}
+			inside := insideTablePart || el.Kind == metadata.FormElementTablePart
+			if inside {
+				for _, handler := range el.Handlers {
+					addRoot(procs, handler)
+				}
+			}
+			walk(el.Children, inside)
+		}
+	}
+	walk(form.Elements, false)
+	if len(procs) == 0 {
+		return nil
+	}
+	return procs
 }
 
 func collectFormHandlerRoots(form *metadata.FormModule, roots map[string]bool) {
@@ -1603,6 +1738,30 @@ func CheckLintRoles(dir string, proj *project.Project, roles []*auth.Role) []Iss
 	coveredProcessors := map[string]bool{}
 	processorsOpen := false
 
+	// Число доступных нетестовых обработок — для сообщений о ролях с
+	// allow-все-обработки (план 162): test-обработки пользователю не видны.
+	availableProcessors := 0
+	for _, proc := range proj.Processors {
+		if !proc.IsTest() {
+			availableProcessors++
+		}
+	}
+	roleProcessorWarning := func(role *auth.Role, code, message, fix string) Issue {
+		file := "roles"
+		if role.SourceFile != "" {
+			file = filepath.ToSlash(filepath.Join("roles", role.SourceFile))
+		}
+		return Issue{
+			File:         file,
+			Object:       role.Name,
+			Kind:         "Роль",
+			Code:         code,
+			Message:      message,
+			SuggestedFix: fix,
+		}
+	}
+	var processorRoleWarnings []Issue
+
 	mark := func(dst map[string]bool, src map[string][]string) {
 		for name, ops := range src {
 			if len(ops) > 0 {
@@ -1616,10 +1775,25 @@ func CheckLintRoles(dir string, proj *project.Project, roles []*auth.Role) []Iss
 		mark(coveredRegisters, role.Permissions.Registers)
 		mark(coveredInfoRegs, role.Permissions.InfoRegs)
 		mark(coveredReports, role.Permissions.Reports)
-		if role.Permissions.Processors == nil {
-			processorsOpen = true
-		} else {
+		switch auth.ProcessorPermissionMode(role.Permissions) {
+		case auth.ProcessorModeMap:
 			mark(coveredProcessors, role.Permissions.Processors)
+		case auth.ProcessorModeImplicitAllowAll:
+			// Переходный срез A плана 162: отсутствие секции пока разрешает все
+			// обработки. Доступ не меняем, но делаем его видимым по каждой роли.
+			processorsOpen = true
+			processorRoleWarnings = append(processorRoleWarnings, roleProcessorWarning(role,
+				"rbac.processors-implicit-allow",
+				fmt.Sprintf("роль %q не объявляет permissions.processors и поэтому сейчас получает все обработки (%d); задайте processors: {}, явную карту или processors_default: allow до следующего минорного релиза",
+					role.Name, availableProcessors),
+				"Задайте permissions.processors: {} (запретить всё), явную карту разрешённых обработок или permissions.processors_default: allow (осознанно сохранить глобальный доступ)."))
+		case auth.ProcessorModeExplicitAllowAll:
+			processorsOpen = true
+			processorRoleWarnings = append(processorRoleWarnings, roleProcessorWarning(role,
+				"rbac.processors-explicit-allow-all",
+				fmt.Sprintf("роль %q осознанно сохраняет доступ ко всем обработкам (%d) через permissions.processors_default: allow; это не блокирует переключение плана 162, но риск остаётся",
+					role.Name, availableProcessors),
+				"Если глобальный доступ больше не нужен, замените processors_default: allow на processors: {} или явную карту."))
 		}
 	}
 
@@ -1672,6 +1846,7 @@ func CheckLintRoles(dir string, proj *project.Project, roles []*auth.Role) []Iss
 			}
 		}
 	}
+	issues = append(issues, processorRoleWarnings...)
 	issues = append(issues, checkLintUnknownRoleRefs(proj, roles)...)
 	issues = append(issues, CheckLintRowAccess(dir, proj, roles)...)
 	issues = append(issues, CheckLintFieldAccess(dir, proj, roles)...)
@@ -2086,4 +2261,11 @@ func sourceLabelForToken(fallback string, tok token.Token) string {
 
 func tokenKey(tok token.Token) string {
 	return fmt.Sprintf("%s:%d:%d:%s", tok.File, tok.Line, tok.Col, strings.ToLower(tok.Literal))
+}
+
+func menuYAMLSchema() *yamlLintSchema {
+	item := with(obj("id", "target", "title", "icon"), map[string]*yamlLintSchema{"titles": freeMap()})
+	group := with(obj("id", "title", "icon"), map[string]*yamlLintSchema{"titles": freeMap(), "items": seq(item)})
+	section := with(obj("id", "title", "icon"), map[string]*yamlLintSchema{"titles": freeMap(), "items": seq(item), "groups": seq(group)})
+	return with(obj(), map[string]*yamlLintSchema{"sections": seq(section)})
 }

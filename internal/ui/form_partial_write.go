@@ -12,7 +12,9 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
+	"github.com/ivantit66/onebase/internal/entityservice"
 	"github.com/ivantit66/onebase/internal/metadata"
+	"github.com/ivantit66/onebase/internal/runtime"
 )
 
 type managedFormTablePayloadSource uint8
@@ -359,12 +361,26 @@ func formKeySubmitted(keys map[string]bool, name string) bool {
 	return keys[name] || keys[strings.ToLower(name)]
 }
 
+// managedFormCheckboxPresenceKey — префикс маркера присутствия редактируемого
+// Флажка. Скрытое поле рядом с флажком шаблон рисует давно (оно же служит
+// признаком присутствия булева параметра обработки), здесь оно читается как
+// ответ на вопрос «был ли этот флажок на отрисованной форме».
+const managedFormCheckboxPresenceKey = processorParamPresencePrefix
+
 // checkboxOmittedFields собирает поля сущности типа bool, отрисованные этой
 // формой как не-ReadOnly kind: Флажок. Только для них отсутствие ключа значит
 // «снято» — у ReadOnly-флажка контрол disabled, пользователь его не менял, и
 // восстановление обязано сработать. Обход рекурсивный: ГруппаФормы,
 // СтраницыФормы и Страница держат элементы в Children.
-func checkboxOmittedFields(form *metadata.FormModule, entity *metadata.Entity) map[string]bool {
+//
+// У флажка, на который влияет собственное readonly_when либо hidden_when (своё
+// или контейнера-предка), метаданные больше не описывают отрисованную форму:
+// скрытого флажка в разметке нет вовсе, а нередактируемый отрисован disabled —
+// браузер в обоих случаях не шлёт ни значения, ни маркера. Считать это «снято»
+// — молча затирать реквизит ложью при каждой записи, поэтому для таких флажков
+// решает факт отправки маркера, а не размещение на форме. Это то же правило, по
+// которому managedFormTableSubmitted судит о табличных частях.
+func checkboxOmittedFields(form *metadata.FormModule, entity *metadata.Entity, submitted map[string]bool) map[string]bool {
 	out := make(map[string]bool)
 	if form == nil || entity == nil {
 		return out
@@ -378,6 +394,9 @@ func checkboxOmittedFields(form *metadata.FormModule, entity *metadata.Entity) m
 			if strings.Count(el.DataPath, ".") <= 1 {
 				name := dpFieldName(el.DataPath)
 				if f, ok := entityFieldByName(entity, name); ok && f.Type == metadata.FieldTypeBool {
+					if visit.conditional && !formKeySubmitted(submitted, managedFormCheckboxPresenceKey+name) {
+						return
+					}
 					out[strings.ToLower(name)] = true
 				}
 			}
@@ -386,14 +405,55 @@ func checkboxOmittedFields(form *metadata.FormModule, entity *metadata.Entity) m
 	return out
 }
 
+// managedFormTableSubmitted — прислал ли браузер табличную часть в этом POST.
+// Смотрит на ПРИСУТСТВИЕ ключа, а не на его содержимое: пустой `tp_json.X`
+// значит «строк не осталось», а отсутствие ключа — «таблицы на отрисованной
+// форме не было» (скрыта hidden_when либо не размещена вовсе). Разница
+// существенная: в первом случае строки надо стереть, во втором — сохранить.
+//
+// Это то же правило, по которому restoreUnsubmittedFields решает судьбу
+// реквизита шапки. Табличные части шли по другому — по метаданным формы, — и
+// скрытая условием таблица затиралась пустым срезом при первой же записи.
+func managedFormTableSubmitted(keys map[string]bool, name string, source managedFormTablePayloadSource) bool {
+	switch source {
+	case managedFormTableJSONPayload:
+		// Скрытое поле tp_json.X шаблон рисует рядом с гридом всегда, когда
+		// таблица доступна на запись, — оно и есть признак присутствия.
+		return formKeySubmitted(keys, "tp_json."+name)
+	case managedFormTableNamedPayload:
+		// У простой таблицы (no_grid) строки и есть ключи tp.X.<i>.<колонка>,
+		// поэтому «строк не осталось» от «таблицы не было» отличает только
+		// маркер, который шаблон рисует рядом с таблицей.
+		if formKeySubmitted(keys, managedFormTablePresenceKey+name) {
+			return true
+		}
+		prefix := strings.ToLower("tp." + name + ".")
+		for key := range keys {
+			if strings.HasPrefix(strings.ToLower(key), prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// managedFormTablePresenceKey — префикс маркера присутствия простой (no_grid)
+// таблицы. Значение не используется, важен сам факт ключа в теле запроса.
+const managedFormTablePresenceKey = "tp_present."
+
 // restoreUneditableTableParts protects table parts which a managed form does
 // not allow the user to edit. For an existing object their persisted rows are
 // restored (partial-write preservation); for a new object forged rows are
 // removed. In both cases incomplete/forged browser state cannot reach form
 // hooks, Объект.Записать(), or the ordinary Save path. Server-side hooks remain
 // free to populate those tables after this boundary.
+//
+// «Не даёт править» — это не только readonly в метаданных, но и таблица,
+// которой на отрисованной форме не было: элемент, скрытый hidden_when, не
+// рендерится вовсе, и его строки в теле запроса не приходят.
 func (s *Server) restoreUneditableTableParts(
 	ctx context.Context,
+	r *http.Request,
 	entity *metadata.Entity,
 	form *metadata.FormModule,
 	id uuid.UUID,
@@ -408,8 +468,18 @@ func (s *Server) restoreUneditableTableParts(
 	if err != nil {
 		return err
 	}
+	var submitted map[string]bool
+	if r != nil {
+		submitted = submittedFormKeys(r)
+	}
 	for _, tablePart := range entity.TableParts {
-		editable[tablePart.Name] = authorities[tablePart.Name].source != 0
+		// Браузеру верим, только когда форма разрешает править таблицу И она
+		// действительно пришла в теле запроса. Результат hidden_when виден
+		// здесь именно фактом отправки: пересчитывать условие заново нельзя —
+		// пользователь мог тем же POST изменить поле, от которого оно зависит.
+		source := authorities[tablePart.Name].source
+		editable[tablePart.Name] = source != 0 &&
+			(submitted == nil || managedFormTableSubmitted(submitted, tablePart.Name, source))
 	}
 	for _, tablePart := range entity.TableParts {
 		if editable[tablePart.Name] {
@@ -480,7 +550,7 @@ func (s *Server) restoreUnsubmittedFields(
 		return nil
 	}
 	submitted := submittedFormKeys(r)
-	checkboxes := checkboxOmittedFields(form, entity)
+	checkboxes := checkboxOmittedFields(form, entity, submitted)
 
 	// Есть ли вообще что восстанавливать — чтобы не ходить в БД зря.
 	need := false
@@ -540,4 +610,110 @@ func (s *Server) restoreUnsubmittedFields(
 		}
 	}
 	return nil
+}
+
+// applyDefaultsToUnsubmittedFields — то же для НОВОГО объекта управляемой формы.
+// У существующего объекта неприсланный реквизит перечитывается из БД; у нового
+// читать неоткуда — строки ещё нет, и его значением обязано быть ровно то, что
+// вычислил бы GET формы: декларативный дефолт (план 153) плюс ПриСозданииНового.
+//
+// Без этого дефолт и хук доезжали до базы только через автоформу — она рисует
+// все реквизиты, и они возвращаются в POST. Управляемая форма рисует
+// размещённые, остальные до сервера не доходили и записывались пустыми — при
+// том что тот же реквизит через DSL и REST заполнялся, а
+// entityservice/defaults.go обещает единую реализацию на все пути создания
+// (#1189). Отказа не было, в логе тишина: расхождение находилось отчётами.
+//
+// Правило присутствия ключа общее с restoreUnsubmittedFields, включая
+// исключение для редактируемого Флажка: снятый пользователем флажок браузер не
+// шлёт, и дефолт `истина` не имеет права поставить его обратно.
+//
+// Ошибка вычисления или ПриСозданииНового останавливает POST: баннер на GET не
+// доказывает, что пользователь его видел, а продолжение записи сохранило бы
+// частично инициализированный объект. Результат возвращается вызывающему, чтобы
+// тот перерисовал форму с ошибкой и сообщениями хука до Save.
+//
+// Табличные части сюда не переносятся намеренно: строки, созданные хуком, всё
+// равно снял бы restoreUneditableTableParts — он для нового объекта чистит
+// таблицы, которых на форме не было, защищаясь от подделанных строк. Хук
+// заполняет такие таблицы после этой границы, в ПередЗаписью/ПриЗаписи.
+func (s *Server) applyDefaultsToUnsubmittedFields(
+	r *http.Request,
+	entity *metadata.Entity,
+	form *metadata.FormModule,
+	obj *runtime.Object,
+) (entityservice.NewObjectResult, error) {
+	if entity == nil || form == nil || obj == nil || s.entitySvc == nil {
+		return entityservice.NewObjectResult{}, nil
+	}
+	return s.overlayNewObjectDefaults(r.Context(), r, entity, form, obj, false, nil)
+}
+
+// overlayNewObjectDefaults — общая часть записи нового объекта управляемой
+// формы: вычисляет начальное состояние тем же entityservice.NewObject, что GET
+// формы, и переносит значения на реквизиты, которых форма не прислала.
+//
+// Путей записи нового объекта у управляемой формы несколько, и контракт
+// defaults.go обязан держаться на всех: «Записать» (parseSubmitForm), «ОК»,
+// «Да» в диалоге закрытия и «Записать и выбрать» (close-intent), а также
+// Объект.Записать() из обработчика формы. Раньше вызывал только первый — и
+// одна и та же форма писала разные данные в зависимости от нажатой кнопки.
+//
+// keepFilled оставляет значения, уже стоящие в объекте: обработчик формы мог
+// сам присвоить неразмещённый реквизит до Объект.Записать(), и дефолт не имеет
+// права его перетереть. Явное Неопределено по значению не отличить от
+// реквизита, которого форма не прислала, поэтому присвоенные обработчиком
+// реквизиты (assigned, ключи в нижнем регистре) остаются как есть при любом
+// значении. ctx — живой контекст исполнения: хук ПриСозданииНового обязан
+// попасть в открытую модулем транзакцию, а не ждать второго соединения (пул
+// SQLite — одно).
+func (s *Server) overlayNewObjectDefaults(
+	ctx context.Context,
+	r *http.Request,
+	entity *metadata.Entity,
+	form *metadata.FormModule,
+	obj *runtime.Object,
+	keepFilled bool,
+	assigned map[string]struct{},
+) (entityservice.NewObjectResult, error) {
+	if entity == nil || form == nil || obj == nil || s.entitySvc == nil {
+		return entityservice.NewObjectResult{}, nil
+	}
+	submitted := submittedFormKeys(r)
+	checkboxes := checkboxOmittedFields(form, entity, submitted)
+
+	// NewObject вызывается и когда форма прислала все реквизиты: на POST хук
+	// ПриСозданииНового служит самостоятельной серверной проверкой и его ошибка
+	// обязана остановить Save. Фильтр присутствия нужен только при переносе
+	// вычисленных значений ниже — ввод пользователя главнее и дефолта, и хука.
+	// Без Fields GET и POST вычисляют то же начальное состояние объекта.
+	newRes, err := s.entitySvc.NewObject(ctx, entityservice.NewObjectRequest{
+		Entity:    entity,
+		FormEntry: true,
+	})
+	if err != nil || newRes.DSLError != "" {
+		return newRes, err
+	}
+	if newRes.Object == nil {
+		return newRes, fmt.Errorf("создание объекта %s не вернуло объект", entity.Name)
+	}
+	for _, f := range entity.Fields {
+		if formKeySubmitted(submitted, f.Name) || checkboxes[strings.ToLower(f.Name)] {
+			continue
+		}
+		if keepFilled {
+			if _, ok := assigned[strings.ToLower(f.Name)]; ok {
+				continue
+			}
+			if current, ok := maskCIKeyValue(obj.Fields, f.Name); ok && current != nil {
+				continue
+			}
+		}
+		value, ok := maskCIKeyValue(newRes.Object.Fields, f.Name)
+		if !ok || value == nil {
+			continue
+		}
+		obj.Set(f.Name, value)
+	}
+	return newRes, nil
 }

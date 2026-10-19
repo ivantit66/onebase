@@ -55,7 +55,7 @@ func maskedIndexedFields(decisions map[string]access.FieldDecision, e *metadata.
 		return nil
 	}
 	var out []string
-	for _, f := range metadata.FullTextFields(e) {
+	for _, f := range metadata.HeaderFullTextFields(e) {
 		for name, dec := range decisions {
 			if strings.EqualFold(name, f.Name) && dec.Masked() {
 				out = append(out, f.Name)
@@ -165,7 +165,7 @@ func (s *Server) dslFullTextSearch(ctx context.Context, args []any) (any, error)
 			"Объект":          hit.Entity,
 			"Вид":             hit.Kind,
 			"Представление":   hit.Title,
-			"Ссылка":          &interpreter.Ref{UUID: hit.ID.String(), Name: hit.Title, Type: hit.Entity, Manager: s.refManagerFor(entity, ctx)},
+			"Ссылка":          &interpreter.Ref{UUID: hit.ID.String(), Name: hit.Title, Type: hit.Entity, Kind: refKind(entity), Manager: s.refManagerFor(entity, ctx)},
 			"ПометкаУдаления": hit.DeletionMark,
 			"Проведён":        hit.Posted,
 		}))

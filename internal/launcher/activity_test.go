@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ivantit66/onebase/internal/metadata"
 )
 
 func TestApplyFieldEdits_Activity(t *testing.T) {
@@ -18,7 +20,9 @@ func TestApplyFieldEdits_Activity(t *testing.T) {
 	target := &saveActivity{Field: "Активный", DefaultScope: "active", HideFromChoice: &hide}
 	activity := &target
 
-	applyFieldEdits(ent, ent.Fields, nil, nil, nil, nil, nil, nil, activity, nil)
+	if err := applyFieldEdits(ent, metadata.KindCatalog, ent.Fields, nil, nil, nil, nil, nil, nil, nil, activity, nil); err != nil {
+		t.Fatal(err)
+	}
 	if ent.Activity == nil {
 		t.Fatal("Activity = nil after explicit set")
 	}
@@ -27,7 +31,9 @@ func TestApplyFieldEdits_Activity(t *testing.T) {
 	}
 
 	target = nil
-	applyFieldEdits(ent, ent.Fields, nil, nil, nil, nil, nil, nil, activity, nil)
+	if err := applyFieldEdits(ent, metadata.KindCatalog, ent.Fields, nil, nil, nil, nil, nil, nil, nil, activity, nil); err != nil {
+		t.Fatal(err)
+	}
 	if ent.Activity != nil {
 		t.Fatalf("Activity was not cleared: %+v", ent.Activity)
 	}

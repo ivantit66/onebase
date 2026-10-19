@@ -190,6 +190,34 @@ func TestHandleProcessorFormEvent_FallbackReadsBrowserFileContent(t *testing.T) 
 	}
 }
 
+func TestHandleProcessorFormEvent_CommandPublishesDirtyMutation(t *testing.T) {
+	program := mustParse(t, `
+Процедура Изменить()
+	Объект.Имя = "after";
+КонецПроцедуры
+`)
+	form := processorExecutionForm(
+		&metadata.FormElement{Kind: metadata.FormElementField, Name: "Name", DataPath: "Объект.Имя"},
+		&metadata.FormElement{
+			Kind: metadata.FormElementButton, Name: "Change",
+			Handlers: map[metadata.FormEventType]string{metadata.FormEventOnClick: "Изменить"},
+		},
+	)
+	form.ProgramAST = program
+	proc := &processor.Processor{
+		Name: "ProcessorCommandDirty", Params: []processor.Param{{Name: "Имя", Type: "string"}}, Forms: []*metadata.FormModule{form},
+	}
+	srv, _ := newProcessorFormEventExecutionServer(t, proc, program)
+	body := processorClickBody("Change")
+	body.Set("Имя", "before")
+	recorder := postProcessorFormEventExecution(t, srv, proc.Name,
+		"application/x-www-form-urlencoded; charset=utf-8", strings.NewReader(body.Encode()))
+	response := decodeFormEventResponse(t, recorder.Body.Bytes())
+	if !response.OK || response.Dirty == nil || !*response.Dirty || response.Values["Имя"] != "after" {
+		t.Fatalf("processor command mutation was not published dirty: %+v", response)
+	}
+}
+
 func TestHandleProcessorFormEvent_ReadsMultipartFile(t *testing.T) {
 	form := processorExecutionForm(
 		&metadata.FormElement{
@@ -559,7 +587,7 @@ func TestHandleProcessorFormEvent_BoundHandlerRejectsQueryParamInjection(t *test
 	formProgram := mustParse(t, `
 Процедура RunCheck()
 	Сообщить("видимое:" + Объект.Visible);
-	Если Параметры.Hidden = Неопределено Тогда
+	Если Параметры.Hidden = "" Тогда
 		Сообщить("скрытое:нет");
 	Иначе
 		Сообщить("скрытое:" + Параметры.Hidden);
@@ -611,12 +639,12 @@ func TestHandleProcessorFormEvent_BoundHandlerRejectsReadOnlyAndUnrenderedParams
 	formProgram := mustParse(t, `
 Процедура RunCheck()
 	Сообщить("видимое:" + Объект.Visible);
-	Если Объект.ReadOnlyParam = Неопределено Тогда
+	Если Объект.ReadOnlyParam = "" Тогда
 		Сообщить("толькочтение:нет");
 	Иначе
 		Сообщить("толькочтение:" + Объект.ReadOnlyParam);
 	КонецЕсли;
-	Если Параметры.Hidden = Неопределено Тогда
+	Если Параметры.Hidden = "" Тогда
 		Сообщить("скрытое:нет");
 	Иначе
 		Сообщить("скрытое:" + Параметры.Hidden);

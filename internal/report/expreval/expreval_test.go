@@ -122,6 +122,7 @@ func TestEvaluator_ПрофильЗапрещаетВозможности(t *tes
 		{"поиск файлов", `НайтиФайлы("/", "*") <> Неопределено`, "файл"},
 		{"HTTP-запрос", `HTTPПолучить("http://example.com") <> Неопределено`, "http"},
 		{"команда ОС", `ВыполнитьКоманду("id") <> Неопределено`, "команд"},
+		{"расшифровка секрета", `РасшифроватьСекрет("enc:x") <> ""`, "секрет"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -152,6 +153,7 @@ func TestEvaluator_АрифметикаСтрокиДатыРаботают(t *t
 		{"смешанный регистр", `сТрСоДеРжИт(Клиент, "Ромашка")`},
 		{"математика", `Sqrt(Abs(-9)) = 3`},
 		{"даты", `Год(ТекущаяДата()) > 2000`},
+		{"литералы дат", `'20260101' < '20270101'`},
 		{"английский алиас даты", `Year(Today()) > 2000`},
 		{"формат", `Формат(Сумма, "ЧЦ=10") <> ""`},
 		{"чтение поля ЭтотОбъект", `ЭтотОбъект.Сумма = 150`},
@@ -217,6 +219,30 @@ func TestEvaluator_ОпасныеКонструкцииОтклоняютсяД�
 	}
 	if object.touched.Load() {
 		t.Fatal("метод объекта был вызван до отказа whitelist")
+	}
+}
+
+func TestEvaluator_ПропущенныйАргументНазванНаЯзыкеПользователя(t *testing.T) {
+	ev := New(interpreter.New(), DefaultProfile())
+	_, _, err := ev.EvalNum(`Строка(1,,2)`, compose.Row{})
+	if err == nil {
+		t.Fatal("формула с пропущенным аргументом принята")
+	}
+	if !strings.Contains(err.Error(), "пропущенный аргумент") {
+		t.Fatalf("ошибка не называет конструкцию языка: %v", err)
+	}
+	if strings.Contains(err.Error(), "MissingArg") || strings.Contains(err.Error(), "*ast.") {
+		t.Fatalf("ошибка раскрывает внутренний тип AST: %v", err)
+	}
+}
+
+func TestForbiddenFormulaExprDescription_НеРаскрываетНеизвестныйТип(t *testing.T) {
+	got := forbiddenFormulaExprDescription(&ast.Ident{})
+	if got != "неподдерживаемое выражение" {
+		t.Fatalf("fallback = %q", got)
+	}
+	if strings.Contains(got, "Ident") || strings.Contains(got, "*ast.") {
+		t.Fatalf("fallback раскрывает внутренний тип AST: %q", got)
 	}
 }
 

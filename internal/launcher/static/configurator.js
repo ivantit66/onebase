@@ -223,6 +223,78 @@ function cfgImportPdfLayout(action, entity) {
   };
 }
 
+// cfgImportXlsxLayout — «Создать макет из Excel» (план 155): модальный диалог
+// (имя + документ + файл + лист), затем multipart-POST на import-xlsx. Сервер
+// отвечает полной страницей конфигуратора с открытым редактором макета.
+// entity — документ/справочник, к которому привязывается форма: без привязки
+// форма не попадает в список печати, а импорту неизвестен состав табличных
+// частей, и строки таблицы не размножатся.
+function cfgImportXlsxLayout(action, entity) {
+  var overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center';
+  var box = document.createElement('div');
+  box.style.cssText = 'background:#fff;border-radius:8px;padding:20px;min-width:380px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,.3);font-size:13px';
+  var docBlock;
+  if (entity) {
+    docBlock = '<div style="margin-bottom:8px;color:#334155">'+T("Документ")+': <b>'+entity+'</b><input type="hidden" id="_xlsDoc" value="'+entity.replace(/"/g,'&quot;')+'"></div>';
+  } else {
+    var names = (window.__cfg && window.__cfg.entityNames) || [];
+    docBlock = '<label style="display:block;margin-bottom:8px">'+T("Документ")+'<br><select id="_xlsDoc" style="width:100%;padding:6px;border:1px solid #cbd5e1;border-radius:4px"><option value=""></option>' +
+      names.map(function(n){ return '<option>'+n+'</option>'; }).join('') + '</select></label>';
+  }
+  // Пример тегов — тот же язык выражений, что и в YAML-макете.
+  var sample = '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;padding:8px;font-size:11px;margin:0 0 12px;font-family:Consolas,monospace;overflow-x:auto;white-space:nowrap">' +
+    '<div>{{Номер}} &nbsp; {{Дата | date}} &nbsp; {{Контрагент.Наименование}}</div>' +
+    '<div>{{@row}} &nbsp; {{Товары.Номенклатура}} &nbsp; {{Товары.Цена | number:2}}</div>' +
+    '<div>{{Итог.Товары.Сумма | number:2}}</div></div>';
+  box.innerHTML =
+    '<div style="font-weight:600;font-size:15px;margin-bottom:12px">'+T("Создать макет из Excel")+'</div>' +
+    '<div style="color:#64748b;font-size:12px;margin-bottom:10px">'+T("Нарисуйте бланк в Excel и впишите в ячейки теги полей. Строку таблицы пометьте тегом с именем табличной части — она размножится по строкам документа.")+'</div>' +
+    sample +
+    '<label style="display:block;margin-bottom:8px">'+T("Имя макета")+'<br><input type="text" id="_xlsName" style="width:100%;padding:6px;border:1px solid #cbd5e1;border-radius:4px;box-sizing:border-box"></label>' +
+    docBlock +
+    '<label style="display:block;margin-bottom:8px">'+T("Файл Excel")+'<br><input type="file" id="_xlsFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="width:100%"></label>' +
+    '<label style="display:block;margin-bottom:14px">'+T("Лист (необязательно)")+'<br><input type="text" id="_xlsSheet" placeholder="'+T("первый лист книги")+'" style="width:100%;padding:6px;border:1px solid #cbd5e1;border-radius:4px;box-sizing:border-box"></label>' +
+    '<div id="_xlsErr" style="color:#dc2626;font-size:12px;margin-bottom:8px;display:none"></div>' +
+    '<div style="text-align:right">' +
+    '<button type="button" id="_xlsCancel" style="padding:6px 14px;margin-right:8px;background:#e2e8f0;border:none;border-radius:4px;cursor:pointer">'+T("Отмена")+'</button>' +
+    '<button type="button" id="_xlsOk" style="padding:6px 14px;background:#15803d;color:#fff;border:none;border-radius:4px;cursor:pointer">'+T("Импортировать")+'</button>' +
+    '</div>';
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  function close() { document.body.removeChild(overlay); }
+  document.getElementById('_xlsCancel').onclick = close;
+  // Клик по фону окно не закрывает — см. комментарий в cfgImportPdfLayout.
+  var okBtn = document.getElementById('_xlsOk');
+  okBtn.onclick = function() {
+    var name = (document.getElementById('_xlsName').value || '').trim();
+    var docVal = (document.getElementById('_xlsDoc').value || '').trim();
+    var fileInp = document.getElementById('_xlsFile');
+    var err = document.getElementById('_xlsErr');
+    err.style.display = 'none';
+    if (!name) { err.textContent = T("Имя макета обязательно"); err.style.display = ''; return; }
+    if (!docVal) { err.textContent = T("Для макета выберите документ/справочник"); err.style.display = ''; return; }
+    if (!fileInp.files || !fileInp.files[0]) { err.textContent = T("Выберите файл Excel (.xlsx)"); err.style.display = ''; return; }
+    var fd = new FormData();
+    fd.append('file', fileInp.files[0]);
+    fd.append('name', name);
+    fd.append('document', docVal);
+    fd.append('sheet', (document.getElementById('_xlsSheet').value || '').trim());
+    okBtn.disabled = true; okBtn.textContent = T("Импорт...");
+    fetch(action, {method:'POST', body:fd})
+      .then(function(resp){ return resp.text().then(function(html){ return {ok:resp.ok, html:html}; }); })
+      .then(function(res){
+        // Сервер всегда возвращает полную страницу конфигуратора (успех — с
+        // открытым редактором, ошибка — с баннером). Заменяем документ целиком.
+        document.open(); document.write(res.html); document.close();
+      })
+      .catch(function(e){
+        okBtn.disabled = false; okBtn.textContent = T("Импортировать");
+        err.textContent = String(e); err.style.display = '';
+      });
+  };
+}
+
 // ── Folder picker ──────────────────────────────────────────────
 function pickDir(inputId, title) {
   var btn = event.target;
@@ -2525,6 +2597,115 @@ require(['vs/editor/editor.main'], function() {
     var parts = d.params.map(function(p,i){ return '${'+(i+1)+':'+p.name+'}'; });
     return d.display + '(' + parts.join(', ') + ')';
   }
+  function _lrNameMatches(d,name){
+    if (d.name && d.name.toLowerCase()===name) return true;
+    return !!(d.aliases && d.aliases.some(function(a){return a.toLowerCase()===name;}));
+  }
+  // Контекст слева от имени: прямой receiver (Массив.) и составные объекты
+  // (Страница.График., Движения.ИмяРегистра.). Неизвестное выражение перед
+  // точкой отмечается как receiver без типа — по нему нельзя выбирать первый
+  // одноимённый метод из справочника.
+  var _lrDynamicObjects={
+    'движения':true,
+    'справочники':true,
+    'документы':true,
+    'регистрынакопления':true
+  };
+  function _lrReceiverContext(text,data){
+    var present = /\.\s*$/.test(text);
+    if (!present) return {present:false,object:null};
+    var m = /([A-Za-zА-Яа-яЁё0-9_]+(?:\s*\.\s*[A-Za-zА-Яа-яЁё0-9_]+)*)\s*\.\s*$/.exec(text);
+    if (!m) return {present:true,object:null};
+    var chain = m[1].replace(/\s*\.\s*/g,'.').toLowerCase();
+    var found = null;
+    data.forEach(function(d){
+      if (d.kind!=='method' || !d.object) return;
+      var obj=d.object.toLowerCase();
+      var dynamic=!!_lrDynamicObjects[obj] && chain.indexOf(obj+'.')===0 && chain.indexOf('.',obj.length+1)<0;
+      if (chain===obj || dynamic){
+        if (!found || obj.length>found.length) found=obj;
+      }
+    });
+    return {present:true,object:found};
+  }
+  function _lrResolveDescriptor(data,name,receiver){
+    var matches=data.filter(function(d){return _lrNameMatches(d,name);});
+    if (receiver.present){
+      if (!receiver.object) return null;
+      matches=matches.filter(function(d){
+        return d.kind==='method' && d.object && d.object.toLowerCase()===receiver.object;
+      });
+    }else{
+      // Голое имя — глобальная функция/конструкция. Одноимённый метод без
+      // receiver не должен вытеснять её только из-за порядка langref.
+      matches=matches.filter(function(d){return d.kind!=='method';});
+    }
+    return matches.length===1 ? matches[0] : null;
+  }
+  // _lrEachSignificant идёт по тексту так же, как лексер DSL: пропускает
+  // строковые литералы (с удвоенными кавычками), комментарии «//» до конца
+  // строки и строки директив «#», вызывая cb(символ, индекс) для остальных
+  // символов. Скобка или запятая в комментарии не должны ни прятать активный
+  // вызов, ни сдвигать номер параметра (#1562), поэтому подсказка сигнатуры
+  // смотрит только на значимые символы.
+  //
+  // «#» — директива только в начале строки (до него на строке пробелы/табы) —
+  // то же правило, что directiveLineStart в internal/dsl/lexer; в середине
+  // выражения «#» значим. «//» и «#» внутри строки остаются текстом.
+  function _lrEachSignificant(text, cb){
+    var quoted=false, lineIndent=true;
+    for(var i=0;i<text.length;i++){
+      var ch=text[i];
+      if(quoted){
+        if(ch==='"' && text[i+1]==='"'){i++;continue;}
+        if(ch==='"')quoted=false;
+        continue;
+      }
+      if(ch==='"'){quoted=true;continue;}
+      if(ch==='/' && text[i+1]==='/'){
+        while(i<text.length && text[i] !== '\n')i++;
+        continue; // сам перевод строки обработается следующей итерацией
+      }
+      if(ch==='#' && lineIndent){
+        while(i<text.length && text[i] !== '\n')i++;
+        continue;
+      }
+      if(ch==='\n')lineIndent=true;
+      else if(ch!==' ' && ch!=='\t' && ch!=='\r')lineIndent=false;
+      cb(ch,i);
+    }
+  }
+  function _lrScanCalls(text){
+    var stack=[];
+    _lrEachSignificant(text,function(ch,i){
+      if(ch==='(')stack.push(i);
+      else if(ch===')' && stack.length)stack.pop();
+    });
+    return stack.length ? stack[stack.length-1] : -1;
+  }
+  function _lrActiveParameter(args){
+    var depth=0,active=0;
+    _lrEachSignificant(args,function(ch){
+      if(ch==='(')depth++;
+      else if(ch===')' && depth>0)depth--;
+      else if(ch===',' && depth===0)active++;
+    });
+    return active;
+  }
+  function _lrCallContext(text,data){
+    var open=_lrScanCalls(text);
+    if(open<0)return null;
+    var end=open;
+    while(end>0 && /\s/.test(text[end-1]))end--;
+    var start=end;
+    while(start>0 && /[A-Za-zА-Яа-яЁё0-9_]/.test(text[start-1]))start--;
+    if(start===end)return null;
+    var name=text.slice(start,end).toLowerCase();
+    return {
+      descriptor:_lrResolveDescriptor(data,name,_lrReceiverContext(text.slice(0,start),data)),
+      activeParameter:_lrActiveParameter(text.slice(open+1))
+    };
+  }
   // Auto-completion (данные из langref, лениво)
   monaco.languages.registerCompletionItemProvider('onebase-dsl', {
     triggerCharacters: ['.'],
@@ -2534,12 +2715,10 @@ require(['vs/editor/editor.main'], function() {
       var word = model.getWordUntilPosition(position);
       var range = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber, startColumn: word.startColumn, endColumn: word.endColumn };
       var line = model.getLineContent(position.lineNumber).substring(0, word.startColumn - 1);
-      var dot = /([A-Za-zА-Яа-яЁё0-9_]+)\.\s*$/.exec(line);
-      var obj = dot ? dot[1].toLowerCase() : null;
-      var objExists = obj && data.some(function(d){ return d.kind==='method' && d.object && d.object.toLowerCase()===obj; });
+      var receiver = _lrReceiverContext(line,data);
       var suggestions = [];
       data.forEach(function(d){
-        if (objExists && !(d.kind==='method' && d.object && d.object.toLowerCase()===obj)) return;
+        if (receiver.object && !(d.kind==='method' && d.object && d.object.toLowerCase()===receiver.object)) return;
         suggestions.push({
           label: d.display,
           kind: _lrKind(d.kind),
@@ -2561,12 +2740,9 @@ require(['vs/editor/editor.main'], function() {
       if (!word) return null;
       var w = word.word.toLowerCase();
       var data = window._langref || [];
-      var d = null;
-      for (var i=0;i<data.length;i++){
-        var x=data[i];
-        if (x.name && x.name.toLowerCase()===w){ d=x; break; }
-        if (x.aliases && x.aliases.some(function(a){return a.toLowerCase()===w;})){ d=x; break; }
-      }
+      var line=model.getLineContent(position.lineNumber);
+      var receiver=_lrReceiverContext(line.substring(0,word.startColumn-1),data);
+      var d=_lrResolveDescriptor(data,w,receiver);
       if (!d) return null;
       var md = '**' + (d.signature||d.display) + '**\n\n' + (d.doc||'');
       if (d.returns) md += '\n\n_Возвращает:_ ' + d.returns;
@@ -2580,22 +2756,16 @@ require(['vs/editor/editor.main'], function() {
     provideSignatureHelp: function(model, position) {
       loadLangref();
       var textBefore = model.getValueInRange({startLineNumber:1,startColumn:1,endLineNumber:position.lineNumber,endColumn:position.column});
-      var m = /([A-Za-zА-Яа-яЁё0-9_]+)\s*\(([^()]*)$/.exec(textBefore);
-      if (!m) return null;
-      var name = m[1].toLowerCase();
       var data = window._langref || [];
-      var d = null;
-      for (var i=0;i<data.length;i++){
-        var x=data[i];
-        if ((x.name && x.name.toLowerCase()===name) || (x.aliases && x.aliases.some(function(a){return a.toLowerCase()===name;}))){ d=x; break; }
-      }
+      var call=_lrCallContext(textBefore,data);
+      if(!call)return null;
+      var d=call.descriptor;
       if (!d || !d.params || !d.params.length) return null;
-      var active = (m[2].match(/,/g) || []).length;
       return { value: { signatures: [{
         label: d.signature || d.display,
         documentation: d.doc || '',
         parameters: d.params.map(function(p){ return { label: p.name, documentation: (p.type||'') + (p.doc ? ' — '+p.doc : '') }; })
-      }], activeSignature: 0, activeParameter: Math.min(active, d.params.length-1) }, dispose: function(){} };
+      }], activeSignature: 0, activeParameter: Math.min(call.activeParameter, d.params.length-1) }, dispose: function(){} };
     }
   });
   // Темы кода — общие с конструктором форм (/static/code-theme.js).
@@ -2714,7 +2884,7 @@ function repAddParam(tableId) {
   var tr = document.createElement('tr');
   tr.innerHTML = '<td><input type="text" name="param.' + i + '.name" value="" style="width:100%;padding:3px 5px;border:1px solid #ccd0d8;border-radius:3px;font-size:12px" placeholder="ИмяПараметра"></td>'
     + '<td><select name="param.' + i + '.type" style="padding:3px 5px;border:1px solid #ccd0d8;border-radius:3px;font-size:12px">'
-    + '<option value="string">'+T("строка")+'</option><option value="date">'+T("дата")+'</option><option value="number">'+T("число")+'</option><option value="select">'+T("список")+'</option>'
+    + '<option value="string">'+T("строка")+'</option><option value="date">'+T("дата")+'</option><option value="datetime">'+T("Дата и время")+'</option><option value="number">'+T("число")+'</option><option value="bool">'+T("булево")+'</option><option value="select">'+T("список")+'</option>'
     + window.__cfg.entityNames.map(function(n){return '<option value="reference:'+n+'">ссылка: '+n+'</option>';}).join('')
     + '</select></td>'
     + '<td><input type="text" name="param.' + i + '.label" value="" style="width:100%;padding:3px 5px;border:1px solid #ccd0d8;border-radius:3px;font-size:12px" placeholder="Заголовок"></td>'

@@ -62,9 +62,21 @@ func langFromCtx(ctx context.Context) string {
 // со статическим контекстом такой вызов уходит за вторым соединением, а пул
 // SQLite — одно соединение, и запрос виснет до таймаута.
 func (s *Server) buildDSLVarsTx(ctx context.Context, mc *runtime.MovementsCollector) (map[string]any, *interpreter.TxState) {
+	// Сборщик исполнения: блокировки, взятые кодом вне записи документа
+	// (обработка, событие формы, задание, тест), отпускаются в конце
+	// исполнения. Без него ключ без явного Разблокировать() жил до конца
+	// процесса, и следующий запрос с тем же ключом висел навсегда.
+	var execLocks *runtime.LockCollector
+	if runtime.LockCollectorFromContext(ctx) == nil && runtime.ExecutionLockCollectorFromContext(ctx) == nil {
+		execLocks = runtime.NewLockCollector()
+		ctx = runtime.ContextWithExecutionLockCollector(ctx, execLocks)
+	}
 	// TxState is created before the common variable set so path resolvers and
 	// all write-capable DSL objects observe the same live transaction context.
 	txState := interpreter.NewTxState(ctx)
+	if execLocks != nil {
+		txState.AddExecutionCleanup(execLocks.ReleaseAll)
+	}
 	// Базовый набор (Перечисления, Константы, Запрос, Предопределённые,
 	// Движения, HTTP, Email) — общий с scheduler, см. internal/dslvars.
 	vars := dslvars.Common{
@@ -74,6 +86,9 @@ func (s *Server) buildDSLVarsTx(ctx context.Context, mc *runtime.MovementsCollec
 		Notifier:          s.notifier(),
 		Interp:            s.interp, // для hook-правила конфликта в ПланыОбмена.ЗагрузитьПакет
 		EmailFileResolver: s.emailAttachmentPathResolver(txState.Ctx),
+		// Подписи ссылочных констант: живой контекст, RowLabel, полевая
+		// политика роли — в отличие от доверенного StoreRefPresenter (#1536).
+		ConstantRefPresenter: s.constantsRefPresenter(txState),
 	}.Build()
 
 	// TxState несёт «живой» контекст. Транзакционные функции
@@ -103,7 +118,11 @@ func (s *Server) buildDSLVarsTx(ctx context.Context, mc *runtime.MovementsCollec
 	// транзакции (обработка без НачатьТранзакцию) поведение прежнее:
 	// только внутрипроцессный мьютекс.
 	lockFactory := interpreter.BuiltinFunc(func(_ []any, _ string, _ int) (any, error) {
-		lo := runtime.NewLockObjectWithCollector(s.lockMgr, runtime.LockCollectorFromContext(ctx))
+		collector := runtime.LockCollectorFromContext(ctx)
+		if collector == nil {
+			collector = runtime.ExecutionLockCollectorFromContext(ctx)
+		}
+		lo := runtime.NewLockObjectWithCollector(s.lockMgr, collector)
 		lo.WithAdvisory(func(keys []string) {
 			c := txState.Ctx()
 			if !storage.HasTx(c) {
@@ -117,16 +136,28 @@ func (s *Server) buildDSLVarsTx(ctx context.Context, mc *runtime.MovementsCollec
 	})
 
 	// API текущего пользователя для персональных настроек.
-	// ТекущийПользователь() → объект {ИД, Имя, ПолноеИмя, Админ}.
+	// ТекущийПользователь() → объект {ИД, Имя, ПолноеИмя, Админ, Ссылка}.
 	// ИмяПользователя()     → строка-логин (или "" для фоновых заданий).
+	// Ссылка — типизированная ссылка на учётную запись (_users, issue #1646):
+	// её можно писать в реквизит типа reference:_users и искать по ней элемент
+	// справочника сотрудников через НайтиПоРеквизиту("УчётнаяЗапись", …).
+	// Для фоновых заданий ссылка пустая — ЗначениеЗаполнено() = Ложь.
 	var curUserID, curUserLogin, curUserFullName string
 	var curUserAdmin bool
+	curUserRef := &interpreter.Ref{Type: metadata.SystemUsersEntity}
 	if u := auth.UserFromContext(ctx); u != nil {
 		curUserID, curUserLogin, curUserFullName, curUserAdmin = u.ID, u.Login, u.FullName, u.IsAdmin
+		label := u.FullName
+		if label == "" {
+			label = u.Login
+		}
+		curUserRef = &interpreter.Ref{UUID: u.ID, Name: label, Type: metadata.SystemUsersEntity}
 	}
 	userObj := &interpreter.MapThis{M: map[string]any{
 		"ИД": curUserID, "Имя": curUserLogin, "ПолноеИмя": curUserFullName, "Админ": curUserAdmin,
-		"ID": curUserID, "Login": curUserLogin, "FullName": curUserFullName, "IsAdmin": curUserAdmin,
+		"Ссылка": curUserRef,
+		"ID":     curUserID, "Login": curUserLogin, "FullName": curUserFullName, "IsAdmin": curUserAdmin,
+		"Ref": curUserRef,
 	}}
 	currentUserFn := interpreter.BuiltinFunc(func(_ []any, _ string, _ int) (any, error) {
 		return userObj, nil
@@ -316,7 +347,7 @@ func (s *Server) buildDSLVarsTx(ctx context.Context, mc *runtime.MovementsCollec
 	// Сброс кэша ответов HTTP-сервисов (план 126) — зовётся из ПриЗаписи
 	// контентных справочников, иначе правка не видна до истечения TTL.
 	s.registerServiceCacheBuiltins(vars)
-	queryFactory := interpreter.NewQueryFactoryGuarded(txState.Ctx(), s.store, s.reg, s.compileDSLQueryWithRowAccess, s.dslQueryGuard)
+	queryFactory := interpreter.NewQueryFactoryGuardedSource(txState, s.store, s.reg, s.compileDSLQueryWithRowAccess, s.dslQueryGuard)
 	vars["__factory_Запрос"] = queryFactory
 	vars["__factory_Query"] = queryFactory
 
@@ -372,6 +403,52 @@ func (s *Server) buildDSLVarsWithMessagesTx(ctx context.Context, mc *runtime.Mov
 	return vars, txState
 }
 
+type entityHookThis struct {
+	*runtime.Object
+	entity   *metadata.Entity
+	resolver *dslRefAttrResolver
+}
+
+func (o *entityHookThis) Get(name string) any {
+	if o == nil || o.Object == nil {
+		return nil
+	}
+	if o.entity != nil {
+		for i := range o.entity.TableParts {
+			tp := &o.entity.TableParts[i]
+			if strings.EqualFold(tp.Name, name) {
+				return &formTpProxy{obj: o.Object, tpName: tp.Name, tp: tp, refResolver: o.resolver}
+			}
+		}
+		if field := findObjectAttributeField(o.entity, name); field != nil {
+			return declaredDSLValue(o.Object.Get(name), mustFieldDescriptor(field), o.resolver)
+		}
+	}
+	return o.Object.Get(name)
+}
+
+func (o *entityHookThis) GetDynamicField(name string) (any, bool) {
+	if o == nil || o.Object == nil || o.entity == nil || findObjectAttributeField(o.entity, name) == nil {
+		return nil, false
+	}
+	return o.Get(name), true
+}
+
+func (o *entityHookThis) SetDynamicField(name string, value any) bool {
+	if o == nil || o.Object == nil || o.entity == nil || findObjectAttributeField(o.entity, name) == nil {
+		return false
+	}
+	o.Set(name, value)
+	return true
+}
+
+func (o *entityHookThis) runtimeObject() *runtime.Object {
+	if o == nil {
+		return nil
+	}
+	return o.Object
+}
+
 // runEntityHook исполняет хук записи/проведения с тем же пределом, что и
 // entityservice.runHook (#962).
 //
@@ -388,10 +465,22 @@ func (s *Server) buildDSLVarsWithMessagesTx(ctx context.Context, mc *runtime.Mov
 // ненастроенном лимите поведение прежнее — нулевое значение означает «предел не
 // задан», и менять на нём поведение молча нельзя.
 func (s *Server) runEntityHook(ctx context.Context, proc *ast.ProcedureDecl, obj *runtime.Object, vars map[string]any) error {
-	if wall := interpreter.ClampWallClock(ctx, s.operationTimeout(opEntitySave)); wall > 0 {
-		return s.interp.RunSandboxed(proc, obj, interpreter.SandboxProfile{Context: ctx, MaxWallClock: wall}, nil, vars)
+	this := interpreter.This(obj)
+	if obj != nil {
+		entity := s.reg.GetEntity(obj.Type)
+		if entity != nil {
+			// runtime.Object deliberately does not retain the metadata graph. Hooks
+			// still need it to distinguish an unset declared requisit from an unknown
+			// name when this["Field"] is used, so opt in only at this execution edge.
+			resolver := s.newDSLRefAttrResolver(ctx)
+			resolver.attachObject(entity, obj)
+			this = &entityHookThis{Object: obj, entity: entity, resolver: resolver}
+		}
 	}
-	return s.interp.Run(proc, obj, vars)
+	if wall := interpreter.ClampWallClock(ctx, s.operationTimeout(opEntitySave)); wall > 0 {
+		return s.interp.RunSandboxed(proc, this, interpreter.SandboxProfile{Context: ctx, MaxWallClock: wall}, nil, vars)
+	}
+	return s.interp.Run(proc, this, vars)
 }
 
 func (s *Server) runOnWriteCtx(ctx context.Context, obj *runtime.Object, mc *runtime.MovementsCollector) (string, []string) {

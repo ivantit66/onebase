@@ -603,7 +603,9 @@ const cfgTabTree = `{{define "tab-tree"}}
                 <select name="param.{{$i}}.type" style="padding:3px 5px;border:1px solid #ccd0d8;border-radius:3px;font-size:12px">
                   <option value="string" {{if eq $p.Type "string"}}selected{{end}}>{{t $.Lang "строка"}}</option>
                   <option value="date"   {{if eq $p.Type "date"}}selected{{end}}>{{t $.Lang "дата"}}</option>
+                  <option value="datetime" {{if eq $p.Type "datetime"}}selected{{end}}>{{t $.Lang "Дата и время"}}</option>
                   <option value="number" {{if eq $p.Type "number"}}selected{{end}}>{{t $.Lang "число"}}</option>
+                  <option value="bool" {{if eq $p.Type "bool"}}selected{{end}}>{{t $.Lang "булево"}}</option>
                   <option value="select" {{if eq $p.Type "select"}}selected{{end}}>{{t $.Lang "список"}}</option>
                   {{range $.AllEntityNames}}<option value="reference:{{.}}" {{if eq $p.Type (print "reference:" .)}}selected{{end}}>ссылка: {{.}}</option>
                   {{end}}
@@ -981,6 +983,7 @@ const cfgTabTree = `{{define "tab-tree"}}
         <button type="button" onclick="ldPreview('{{.Name}}','{{.Document}}','pdf')"  title="{{t $.Lang "Откроется во внешнем приложении (системный просмотрщик PDF)"}}" style="font-size:12px;padding:4px 10px;background:#fff;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer">{{t $.Lang "Предпросмотр PDF"}}</button>
         <span style="width:1px;background:#d1d5db;align-self:stretch"></span>
         <button type="button" onclick="cfgImportPdfLayout('/bases/{{$.Base.ID}}/configurator/layout/import-pdf','{{.Document}}')" title="{{t $.Lang "Извлечь черновик макета из PDF (выгрузка 1С/Excel с текстовым слоем)"}}" style="font-size:12px;padding:4px 10px;background:#fff;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer">&#x1F4C4; {{t $.Lang "Из PDF"}}</button>
+        <button type="button" onclick="cfgImportXlsxLayout('/bases/{{$.Base.ID}}/configurator/layout/import-xlsx','{{.Document}}')" title="{{t $.Lang "Собрать макет из бланка Excel с тегами полей"}}" style="font-size:12px;padding:4px 10px;background:#fff;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer">&#x1F4D7; {{t $.Lang "Из Excel"}}</button>
       </div>
 
       {{/* Параметры листа: формат/ориентация/поля → печатная граница в конструкторе */}}
@@ -1126,6 +1129,7 @@ const cfgTabTree = `{{define "tab-tree"}}
   <div class="cfg-panel" id="sub-{{$sub.Name}}">
     <div class="panel-title">🗂 {{$sub.Title}}</div>
     <div class="panel-kind">{{t $.Lang "Подсистема"}}</div>
+    <p><a class="btn" href="/bases/{{$.Base.ID}}/configurator/navigation?subsystem={{$sub.Name}}">{{t $.Lang "Редактор меню"}}</a></p>
     <form method="POST" action="/bases/{{$.Base.ID}}/configurator/subsystem" data-home-key="sub-{{$sub.Name}}">
       <input type="hidden" name="subsystem_name" value="{{$sub.Name}}">
       <div class="fg" style="margin-top:12px">
@@ -1359,6 +1363,7 @@ const cfgTabTree = `{{define "tab-tree"}}
   <div class="cfg-panel" id="home-page">
     <div class="panel-title">🏠 {{t $.Lang "Главная страница"}}</div>
     <div class="panel-kind">{{t $.Lang "Раскладка стартового дашборда"}} (<code>config/home_page.yaml</code>)</div>
+    <p><a class="btn" href="/bases/{{.Base.ID}}/configurator/navigation">{{t $.Lang "Редактор меню"}}</a></p>
     <form method="POST" action="/bases/{{.Base.ID}}/configurator/home-page" data-home-key="home">
       <div class="fg" style="margin-top:12px">
         <label>{{t $.Lang "Заголовок"}}</label>
@@ -1521,6 +1526,21 @@ const cfgTabTree = `{{define "tab-tree"}}
     После включения требуется миграция БД: появятся колонки <code>is_folder</code> и <code>parent_id</code>.
   </div>
 </div>
+<div style="margin-bottom:10px">
+  <input type="hidden" name="owner_present" value="1">
+  <label style="display:block;font-size:13px;margin-bottom:4px">{{t $.Lang "Подчинён справочнику (владелец)"}}</label>
+  <select name="owner" style="padding:5px 6px;border:1px solid #ccd0d8;border-radius:3px;font-size:13px;min-width:260px">
+    <option value="">{{t $.Lang "— самостоятельный —"}}</option>
+    {{range $c := $.Catalogs}}{{if ne $c.Name $e.Name}}
+    <option value="{{$c.Name}}" {{if eq $e.Owner $c.Name}}selected{{end}}>{{$c.Name}}</option>
+    {{end}}{{end}}
+  </select>
+  <div style="color:#94a3b8;font-size:11px;margin-top:2px">
+    {{t $.Lang "Как в 1С, у элемента появляется реквизит «Владелец»."}}
+    {{t $.Lang "При подборе показываются только элементы выбранного владельца. Настраивать отбор на формах не нужно."}}
+    {{t $.Lang "После включения требуется миграция БД: появится колонка"}} <code>владелец_id</code>.
+  </div>
+</div>
 <details {{if $e.Activity}}open{{end}} style="margin-bottom:10px">
   <summary class="section-hd" style="cursor:pointer">Активность</summary>
   <input type="hidden" name="activity_present" value="1">
@@ -1556,6 +1576,7 @@ const cfgTabTree = `{{define "tab-tree"}}
 <details {{if $e.Numerator}}open{{end}} style="margin-bottom:10px">
   <summary class="section-hd" style="cursor:pointer">{{t $.Lang "Нумерация"}}</summary>
   <input type="hidden" name="numerator_present" value="1">
+  <input type="hidden" name="numerator_field_present" value="1">
   <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin:6px 0">
     <input type="checkbox" name="numerator_enabled" value="1" {{if $e.Numerator}}checked{{end}}>
     <span>{{if eq $e.Kind "Справочник"}}{{t $.Lang "Выдавать код автоматически"}}{{else}}{{t $.Lang "Выдавать номер автоматически"}}{{end}}</span>
@@ -1565,6 +1586,8 @@ const cfgTabTree = `{{define "tab-tree"}}
     <input type="text" name="numerator_prefix" value="{{if $e.Numerator}}{{$e.Numerator.Prefix}}{{end}}" placeholder="К-" style="padding:5px 6px;border:1px solid #ccd0d8;border-radius:3px;font-size:12px">
     <label style="color:#475569">{{t $.Lang "Разрядность"}}</label>
     <input type="number" min="1" max="18" name="numerator_length" value="{{if $e.Numerator}}{{$e.Numerator.Length}}{{end}}" placeholder="6" style="padding:5px 6px;border:1px solid #ccd0d8;border-radius:3px;font-size:12px">
+    <label style="color:#475569">{{t $.Lang "Синоним стандартного поля"}}</label>
+    <input type="text" name="numerator_field_title" value="{{$e.StandardFieldTitle}}" style="padding:5px 6px;border:1px solid #ccd0d8;border-radius:3px;font-size:12px">
     <label style="color:#475569">{{t $.Lang "Сброс счётчика"}}</label>
     <select name="numerator_period" style="padding:5px 6px;border:1px solid #ccd0d8;border-radius:3px;font-size:12px">
       <option value="none"  {{if and $e.Numerator (eq $e.Numerator.Period "none")}}selected{{end}}>{{t $.Lang "не сбрасывать"}}</option>
@@ -1590,16 +1613,21 @@ const cfgTabTree = `{{define "tab-tree"}}
       <span>{{t $.Lang "Подставлять префикс базы"}}</span>
     </label>
   </div>
+  {{if $availLangs}}
+  <input type="hidden" name="numerator_field_titles_present" value="1">
+  <div style="margin:6px 0 0 24px">{{template "titles-block" (dict "Lang" $lang "Langs" $availLangs "Prefix" "numerator_field_titles" "Values" $e.StandardFieldTitles)}}</div>
+  {{end}}
   <div style="color:#94a3b8;font-size:11px;margin-left:24px;margin-top:6px">
     {{t $.Lang "В префиксе работают маски даты: {YYYY}, {YY}, {MM}, {DD}. Уникальность при сбросе счётчика требует маски — иначе значение повторится в следующем периоде. Уже существующие записи остаются без значения: дозаполняет команда onebase renumber."}}
   </div>
 </details>
 
-{{if $e.Fields}}
-<details open><summary class="section-hd" style="cursor:pointer">{{t $.Lang "Реквизиты"}} ({{len $e.Fields}})</summary>
+{{if or $e.RegularFieldCount $e.Numerator}}
+<details open><summary class="section-hd" style="cursor:pointer">{{t $.Lang "Реквизиты"}} ({{$e.RegularFieldCount}})</summary>
 <table class="fields-tbl" id="ft-{{$e.Name}}">
 <tr><th>{{t $.Lang "Поле"}}</th><th>{{t $.Lang "Тип"}}</th><th style="min-width:150px">{{t $.Lang "Объект"}}</th><th title="{{t $.Lang "Кнопка «+ Создать» в picker'е для ссылочного поля. По умолчанию включена для шапки документа."}}">{{t $.Lang "+ в picker'е"}}</th><th style="width:44px"></th></tr>
 {{range $i, $f := $e.Fields}}
+{{if not $f.Standard}}
 <tr>
   <td><input type="hidden" name="field.{{$i}}.name" value="{{$f.Name}}">{{$f.Name}}</td>
   <td>
@@ -1638,6 +1666,7 @@ const cfgTabTree = `{{define "tab-tree"}}
   <td style="text-align:center"><button type="button" onclick="cfgDeleteField(this)" title="{{t $.Lang "Удалить поле"}}" style="background:none;border:none;color:#c00;cursor:pointer;font-size:14px;line-height:1;padding:0 4px">&times;</button></td>
 </tr>
 {{if $availLangs}}<tr data-cfg-field-extra="1"><td colspan="5" style="padding:0 0 4px">{{template "titles-block" (dict "Lang" $lang "Langs" $availLangs "Prefix" (printf "field.%d.titles" $i) "Values" $f.Titles)}}</td></tr>{{end}}
+{{end}}
 {{end}}
 </table>
 <button type="button" onclick="cfgAddField('ft-{{$e.Name}}','new_field','{{$e.Name}}','entity')" style="font-size:11px;color:#1a4a80;background:none;border:1px dashed #c0c8d8;padding:2px 8px;border-radius:3px;cursor:pointer;margin:4px 0">+ {{t $.Lang "Добавить поле"}}</button>
@@ -1885,6 +1914,11 @@ const cfgTabTree = `{{define "tab-tree"}}
               style="font-size:12px;padding:5px 12px;background:#0369a1;color:#fff;border:none;border-radius:4px;cursor:pointer;margin-left:6px"
               title="{{t $.Lang "Извлечь черновик макета из PDF (выгрузка 1С/Excel с текстовым слоем)"}}">
         &#x1F4C4; {{t $.Lang "Создать макет из PDF"}}
+      </button>
+      <button type="button" onclick="cfgImportXlsxLayout('/bases/{{.BaseID}}/configurator/layout/import-xlsx','{{$e.Name}}')"
+              style="font-size:12px;padding:5px 12px;background:#15803d;color:#fff;border:none;border-radius:4px;cursor:pointer;margin-left:6px"
+              title="{{t $.Lang "Собрать макет из бланка Excel с тегами полей"}}">
+        &#x1F4D7; {{t $.Lang "Создать макет из Excel"}}
       </button>
     </div>
   </div>{{/* end ot-print */}}

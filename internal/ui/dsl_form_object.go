@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/runtime"
 	"github.com/ivantit66/onebase/internal/storage"
+	"github.com/ivantit66/onebase/internal/typedempty"
 )
 
 // formObjectThis — обёртка над *runtime.Object, используемая как this/Объект
@@ -46,9 +48,29 @@ type formObjectThis struct {
 	// ctxSrc — «живой» контекст DSL-исполнения: собственная запись объекта тоже
 	// должна попадать в открытую модулем транзакцию, а не ждать второго
 	// соединения (пул SQLite — одно).
-	ctxSrc docsCtxSource
-	isNew  bool
-	saved  bool
+	ctxSrc              docsCtxSource
+	isNew               bool
+	saved               bool
+	expectedVersion     *int64
+	lastSavedFields     map[string]string
+	lastSavedTableParts map[string][]map[string]any
+	// onCommitted propagates a handler-initiated write to the close-intent
+	// ledger at the true durable boundary, before fallible notifications.
+	onCommitted func(entityservice.SaveResult)
+	// finalPreflight is installed by close-intent so an Object.Write performed
+	// by BeforeClose cannot commit a row which the same caller may no longer
+	// read. It runs against the authoritative row inside the save transaction.
+	finalPreflight func(context.Context, *runtime.Object) error
+	// prepareNew достраивает НОВЫЙ объект перед первой записью: неразмещённые
+	// на форме реквизиты получают default и ПриСозданииНового так же, как при
+	// «Записать» (#1189). Ставит form-event для формы новой записи; nil — у
+	// существующей записи восстанавливать нечего, её поля дочитаны из базы.
+	prepareNew func(context.Context) error
+	// assigned — реквизиты (в нижнем регистре), которым обработчик присвоил
+	// значение, в том числе Неопределено. По значению явное очищение не
+	// отличить от реквизита, которого форма не прислала: оба nil, а умолчание
+	// вправе заполнить только второй.
+	assigned map[string]struct{}
 	// writeBlocked prevents a form write lifecycle handler from recursively
 	// saving the same object and then letting the outer Save persist it again.
 	writeBlocked bool
@@ -87,6 +109,16 @@ func (f *formObjectThis) String() string {
 	return f.obj.String()
 }
 
+// TypeName делегирует имя типа обёрнутому объекту, чтобы
+// ТипЗнч(ЭтотОбъект) в обработчике формы называл «Документ.X», а не
+// Go-имя обёртки (issue #1137).
+func (f *formObjectThis) TypeName() string {
+	if f == nil || f.obj == nil {
+		return "Неопределено"
+	}
+	return f.obj.TypeName()
+}
+
 // CallMethod делегирует объектные методы (например, МоментВремени) исходному
 // runtime.Object. Специальное поведение формовой обёртки относится к Get/Set и
 // табличным частям, остальные возможности объекта должны оставаться доступны.
@@ -100,7 +132,11 @@ func (f *formObjectThis) CallMethod(method string, args []any) any {
 			interpreter.RaiseUserError("Записать недоступно внутри обработчика записи формы")
 		}
 		if err := f.write(); err != nil {
-			interpreter.RaiseUserError("Записать(" + f.entity.Name + "): " + err.Error())
+			message := err.Error()
+			if errors.Is(err, errCloseResultUnreadable) {
+				message = f.srv.tr(f.srv.resolveLangCtx(f.liveCtx()), "доступ запрещён")
+			}
+			interpreter.RaiseUserError("Записать(" + f.entity.Name + "): " + message)
 		}
 		return f.selfRef()
 	case "этоновый", "isnew":
@@ -123,6 +159,51 @@ func (f *formObjectThis) write() error {
 		if err := f.srv.checkDSLRowAccess(ctx, f.entity, "write", f.obj.ID, f.obj.Fields); err != nil {
 			return err
 		}
+	} else if f.prepareNew != nil {
+		if err := f.prepareNew(ctx); err != nil {
+			return err
+		}
+	}
+	wasSaved := f.saved
+	previousExpectedVersion := f.expectedVersion
+	previousSavedFields := f.lastSavedFields
+	previousSavedTableParts := f.lastSavedTableParts
+	previousSelfRef, hadSelfRef := f.obj.Fields["ссылка"]
+	previousReference, hadReference := f.obj.Fields["reference"]
+	previousVersionField, hadVersionField := f.obj.Fields["_version"]
+	markCommitted := func(result entityservice.SaveResult) {
+		f.obj.ID = result.ID
+		f.saved = true
+		f.obj.Fields["ссылка"] = f.selfRef()
+		f.obj.Fields["reference"] = f.obj.Fields["ссылка"]
+		if result.Version > 0 {
+			version := result.Version
+			f.expectedVersion = &version
+			f.obj.Fields["_version"] = version
+		}
+		f.lastSavedFields = snapshotFieldValues(f.obj.Fields)
+		f.lastSavedTableParts = tablePartRowsSnapshot(f.obj.TablePartRows)
+		storage.DeferUntilTxRollback(ctx, func() {
+			f.saved = wasSaved
+			f.expectedVersion = previousExpectedVersion
+			f.lastSavedFields = previousSavedFields
+			f.lastSavedTableParts = previousSavedTableParts
+			if hadSelfRef {
+				f.obj.Fields["ссылка"] = previousSelfRef
+			} else {
+				delete(f.obj.Fields, "ссылка")
+			}
+			if hadReference {
+				f.obj.Fields["reference"] = previousReference
+			} else {
+				delete(f.obj.Fields, "reference")
+			}
+			if hadVersionField {
+				f.obj.Fields["_version"] = previousVersionField
+			} else {
+				delete(f.obj.Fields, "_version")
+			}
+		})
 	}
 	result, err := f.srv.entitySvc.Save(ctx, entityservice.SaveRequest{
 		Entity:        f.entity,
@@ -130,6 +211,12 @@ func (f *formObjectThis) write() error {
 		IsNew:         isNew,
 		Fields:        f.obj.Fields,
 		TablePartRows: f.obj.TablePartRows,
+		ExpectedVersion: func() *int64 {
+			if isNew {
+				return nil
+			}
+			return f.expectedVersion
+		}(),
 		Preflight: func(txCtx context.Context, obj *runtime.Object) error {
 			if !isNew {
 				return nil
@@ -139,6 +226,13 @@ func (f *formObjectThis) write() error {
 			}
 			return f.srv.checkDSLRowAccess(txCtx, f.entity, "write", uuid.Nil, obj.Fields)
 		},
+		FinalPreflight: f.finalPreflight,
+		OnPersisted:    markCommitted,
+		OnCommitted: func(result entityservice.SaveResult) {
+			if f.onCommitted != nil {
+				f.onCommitted(result)
+			}
+		},
 	})
 	if err != nil {
 		return err
@@ -146,19 +240,11 @@ func (f *formObjectThis) write() error {
 	if result.DSLError != "" {
 		return fmt.Errorf("%s", result.DSLError)
 	}
-	wasSaved := f.saved
-	f.saved = true
-	// Ссылка появляется только после записи — до неё её нет ни в объекте, ни
-	// у резолвера. Ставим здесь же, чтобы следующая строка обработчика могла
-	// сразу писать Модуль.Действие(Объект.Ссылка).
-	f.obj.Fields["ссылка"] = f.selfRef()
-	f.obj.Fields["reference"] = f.obj.Fields["ссылка"]
-	storage.DeferUntilTxRollback(ctx, func() { f.saved = wasSaved })
 	return nil
 }
 
 func (f *formObjectThis) selfRef() *interpreter.Ref {
-	ref := &interpreter.Ref{UUID: f.obj.ID.String(), Type: f.entity.Name}
+	ref := &interpreter.Ref{UUID: f.obj.ID.String(), Type: f.entity.Name, Kind: f.entity.Kind}
 	if f.refResolver != nil {
 		return f.refResolver.bindRefToContext(ref, f.entity.Name)
 	}
@@ -194,10 +280,15 @@ func (f *formObjectThis) Get(name string) any {
 	}
 	// Дальше — обычные поля (через Object.Get который ищет в Fields).
 	v := f.obj.Get(name)
-	if ref, ok := v.(*interpreter.Ref); ok && f.refResolver != nil {
-		if fd := entityField(f.entity, name); fd != nil && fd.RefEntity != "" {
-			return f.refResolver.bindRefToContext(ref, fd.RefEntity)
+	if fd := entityField(f.entity, name); fd != nil {
+		return declaredDSLValue(v, mustFieldDescriptor(fd), f.refResolver)
+	}
+	if attr := findScalarFormAttribute(f.form, name); attr != nil {
+		if desc, ok := formAttributeDescriptor(attr); ok {
+			return declaredDSLValue(v, desc, f.refResolver)
 		}
+	}
+	if ref, ok := v.(*interpreter.Ref); ok && f.refResolver != nil {
 		if f.entity != nil && (strings.EqualFold(name, "Ссылка") || strings.EqualFold(name, "Reference")) {
 			return f.refResolver.bindRefToContext(ref, f.entity.Name)
 		}
@@ -208,25 +299,12 @@ func (f *formObjectThis) Get(name string) any {
 			return f.refResolver.bindRefToContext(ref, refName)
 		}
 	}
-	// Дефолты по типу: пустой numeric → 0, иначе `Объект.Сумма + 100` в DSL
-	// даст concat-строку «<nil>100» (DSL `+` для nil-операнда склеивает
-	// строкой), потом форма попытается записать её в PostgreSQL numeric →
-	// ERROR 22P02 invalid input syntax for type numeric.
-	if v == nil && f.entity != nil {
-		for _, fd := range f.entity.Fields {
-			if !strings.EqualFold(fd.Name, name) {
-				continue
-			}
-			switch fd.Type {
-			case metadata.FieldTypeNumber:
-				return float64(0)
-			case metadata.FieldTypeBool:
-				return false
-			}
-			break
-		}
-	}
 	return v
+}
+
+func mustFieldDescriptor(field *metadata.Field) typedempty.Descriptor {
+	desc, _ := typedempty.FromField(field)
+	return desc
 }
 
 // formAttributeTablePart даёт ValueTable тот же metadata-aware row proxy, что
@@ -241,10 +319,8 @@ func formAttributeTablePart(attr *metadata.FormAttribute) *metadata.TablePart {
 		if column == nil {
 			continue
 		}
-		tp.Fields = append(tp.Fields, metadata.Field{
-			Name:      column.Name,
-			RefEntity: attrRefEntityName(column.TypeRef),
-		})
+		desc, _ := typedempty.FromFormType(column.TypeRef, column.Length, column.Precision)
+		tp.Fields = append(tp.Fields, desc.Field(column.Name))
 	}
 	return tp
 }
@@ -253,7 +329,26 @@ func (f *formObjectThis) Set(name string, v any) {
 	if f == nil || f.obj == nil {
 		return
 	}
+	if f.assigned == nil {
+		f.assigned = map[string]struct{}{}
+	}
+	f.assigned[strings.ToLower(name)] = struct{}{}
 	f.obj.Set(name, v)
+}
+
+func (f *formObjectThis) GetDynamicField(name string) (any, bool) {
+	if f == nil || f.obj == nil || f.entity == nil || findObjectAttributeField(f.entity, name) == nil {
+		return nil, false
+	}
+	return f.Get(name), true
+}
+
+func (f *formObjectThis) SetDynamicField(name string, value any) bool {
+	if f == nil || f.obj == nil || f.entity == nil || findObjectAttributeField(f.entity, name) == nil {
+		return false
+	}
+	f.Set(name, value)
+	return true
 }
 
 // formTpProxy — proxy табличной части для рантайма событий формы. В отличие

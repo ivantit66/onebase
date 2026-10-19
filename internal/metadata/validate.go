@@ -21,7 +21,7 @@ func ValidateConstants(constants []*Constant, entities []*Entity, enums []*Enum)
 		enumNames[en.Name] = true
 	}
 	for _, c := range constants {
-		if c.RefEntity != "" && !entityNames[c.RefEntity] {
+		if c.RefEntity != "" && !entityNames[c.RefEntity] && !IsSystemRefTarget(c.RefEntity) {
 			return fmt.Errorf("constant %s references unknown entity %s", c.Name, c.RefEntity)
 		}
 		if c.EnumName != "" && !enumNames[c.EnumName] {
@@ -33,8 +33,10 @@ func ValidateConstants(constants []*Constant, entities []*Entity, enums []*Enum)
 
 func Validate(entities []*Entity, enums []*Enum) error {
 	entityNames := make(map[string]bool, len(entities))
+	entityKinds := make(map[string]Kind, len(entities))
 	for _, e := range entities {
 		entityNames[e.Name] = true
+		entityKinds[e.Name] = e.Kind
 	}
 	enumNames := make(map[string]bool, len(enums))
 	for _, en := range enums {
@@ -42,7 +44,7 @@ func Validate(entities []*Entity, enums []*Enum) error {
 	}
 	for _, e := range entities {
 		for _, f := range e.Fields {
-			if f.RefEntity != "" && !entityNames[f.RefEntity] {
+			if f.RefEntity != "" && !entityNames[f.RefEntity] && !IsSystemRefTarget(f.RefEntity) {
 				return fmt.Errorf("entity %s: field %s references unknown entity %s", e.Name, f.Name, f.RefEntity)
 			}
 			if f.EnumName != "" && len(enums) > 0 && !enumNames[f.EnumName] {
@@ -70,6 +72,67 @@ func Validate(entities []*Entity, enums []*Enum) error {
 			if f.Type != FieldTypeString {
 				return fmt.Errorf("entity %s: presentation реквизит %s должен быть строковым (сейчас %s)", e.Name, name, f.Type)
 			}
+		}
+		// Подчинённый справочник: владелец обязан существовать, быть справочником
+		// и не быть самим собой. Опечатка иначе выглядела бы как «отбор в подборе
+		// не работает» — а это не отличить от «данные не заполнены».
+		if owner := strings.TrimSpace(e.Owner); owner != "" {
+			if e.Kind != KindCatalog {
+				return fmt.Errorf("entity %s: owner допустим только у справочника (сейчас %s)", e.Name, e.Kind)
+			}
+			if owner == e.Name {
+				return fmt.Errorf("entity %s: owner ссылается на сам справочник", e.Name)
+			}
+			if !entityNames[owner] {
+				return fmt.Errorf("entity %s: owner ссылается на несуществующую сущность %s", e.Name, owner)
+			}
+			// Владельцем бывает только справочник — как в 1С. Документ-владелец
+			// означал бы, что состав НСИ зависит от оперативных данных.
+			if entityKinds[owner] != KindCatalog {
+				return fmt.Errorf("entity %s: владельцем может быть только справочник, а %s — %s", e.Name, owner, entityKinds[owner])
+			}
+			f := findEntityFieldFold(e, StandardOwnerField)
+			if f == nil {
+				return fmt.Errorf("entity %s: owner объявлен, но реквизита %s нет", e.Name, StandardOwnerField)
+			}
+			if f.RefEntity != owner {
+				return fmt.Errorf("entity %s: реквизит %s ссылается на %s, а owner — на %s", e.Name, StandardOwnerField, f.RefEntity, owner)
+			}
+		}
+		// order_by меняет порядок СРАЗУ ВЕЗДЕ — список, подбор, REST. Опечатка иначе
+		// выглядит как «сортировка не применилась», а это не отличить от «значения
+		// не заполнены».
+		for _, spec := range e.OrderBy {
+			name, _ := splitOrderSpec(spec)
+			if name == "" {
+				return fmt.Errorf("entity %s: order_by содержит пустое имя реквизита", e.Name)
+			}
+			if findEntityFieldFold(e, name) == nil {
+				return fmt.Errorf("entity %s: order_by ссылается на несуществующий реквизит %s", e.Name, name)
+			}
+		}
+		// choice_preview: имя реквизита проверяем здесь же. Опечатка иначе выглядит
+		// как «область просмотра в подборе пустая» — а это не отличить от «текст
+		// не заполнили».
+		if name := strings.TrimSpace(e.ChoicePreview); name != "" {
+			f := findEntityFieldFold(e, name)
+			if f == nil {
+				return fmt.Errorf("entity %s: choice_preview ссылается на несуществующий реквизит %s", e.Name, name)
+			}
+			if f.Type != FieldTypeString && f.Type != FieldTypeRichText {
+				return fmt.Errorf("entity %s: choice_preview реквизит %s должен быть текстовым (сейчас %s)", e.Name, name, f.Type)
+			}
+		}
+		// choice_preview_proc: строго квалифицированное имя экспортной функции
+		// общего модуля вида `Модуль.Функция` (план 168). Короткое имя позволил бы
+		// вызов обработчика формы, а опечатка в модуле выглядела бы как
+		// «область просмотра пустая».
+		if proc := strings.TrimSpace(e.ChoicePreviewProc); proc != "" {
+			mod, fn, ok := strings.Cut(proc, ".")
+			if !ok || strings.TrimSpace(mod) == "" || strings.TrimSpace(fn) == "" || strings.Contains(fn, ".") || strings.ContainsAny(mod, " 	") || strings.ContainsAny(fn, " 	") {
+				return fmt.Errorf("entity %s: choice_preview_proc должен быть вида Модуль.Функция (сейчас %q)", e.Name, proc)
+			}
+			_ = fn
 		}
 		if err := validateFieldIDs(e); err != nil {
 			return err
@@ -108,6 +171,15 @@ func Validate(entities []*Entity, enums []*Enum) error {
 				}
 				if IsImage(f.Type) {
 					return fmt.Errorf("поле %s.%s: тип image не поддерживается в табличных частях", tp.Name, f.Name)
+				}
+				// pii у поля ТЧ отвергается, а не игнорируется: маскирование
+				// адресует только шапку объекта и поля регистров, поля
+				// табличных частей не видит ни одна политика field_access.
+				// Принятый и никогда не исполняемый признак ПДн опаснее
+				// отсутствующего — он читается как «поле защищено», а защиты
+				// нет (см. Field.PII).
+				if f.PII {
+					return fmt.Errorf("поле %s.%s: признак pii не поддерживается в табличных частях — маскирование их не адресует; перенесите реквизит в шапку объекта или снимите pii", tp.Name, f.Name)
 				}
 			}
 		}
@@ -234,62 +306,23 @@ func validateTileView(e *Entity) error {
 	return nil
 }
 
-// validateFullText проверяет блок `fulltext:` (план 82): перечисленные поля
-// должны существовать в шапке и нести текст. Ссылочные и перечислимые поля
-// хранят UUID/код — индексировать их бессмысленно, а молча пропустить значит
-// оставить пользователя с пустой выдачей и без объяснения.
+// validateFullText rejects table-part indexing until the atomic FTS writer is shipped.
 func validateFullText(e *Entity) error {
-	if !e.FullTextSet {
-		return nil
+	paths, err := FullTextFieldPaths(e)
+	if err != nil {
+		return err
 	}
-	seen := make(map[string]bool, len(e.FullText))
-	for _, name := range e.FullText {
-		f := findEntityFieldFold(e, name)
-		if f == nil {
-			return fmt.Errorf("entity %s: fulltext ссылается на неизвестный реквизит %s", e.Name, name)
+	for i, path := range paths {
+		if path.TablePart != nil {
+			return fmt.Errorf("entity %s: fulltext путь %q пока не поддерживается; поиск по табличным частям доступен только в search_fields", e.Name, e.FullText[i])
 		}
-		if f.RefEntity != "" || f.EnumName != "" || (f.Type != FieldTypeString && !IsRichText(f.Type)) {
-			return fmt.Errorf("entity %s: реквизит %s нельзя индексировать полнотекстовым поиском — нужен тип string или richtext",
-				e.Name, f.Name)
-		}
-		key := strings.ToLower(f.Name)
-		if seen[key] {
-			return fmt.Errorf("entity %s: реквизит %s указан в fulltext дважды", e.Name, f.Name)
-		}
-		seen[key] = true
 	}
 	return nil
 }
 
-// validateSearchFields проверяет блок `search_fields:`: перечисленные реквизиты
-// должны существовать в шапке и не быть ссылками. Тип здесь, в отличие от
-// fulltext, не ограничен строкой — смысл блока как раз в том, чтобы добавить в
-// поиск артикул или штрихкод, которые часто хранят числом.
-//
-// Ссылка отклоняется: в колонке лежит UUID, поиск подстроки по нему всегда даёт
-// пустую выдачу. Молча пропустить такой реквизит значит оставить автора
-// конфигурации с неработающим поиском и без объяснения причины.
 func validateSearchFields(e *Entity) error {
-	if !e.SearchSet {
-		return nil
-	}
-	seen := make(map[string]bool, len(e.Search))
-	for _, name := range e.Search {
-		f := findEntityFieldFold(e, name)
-		if f == nil {
-			return fmt.Errorf("entity %s: search_fields ссылается на неизвестный реквизит %s", e.Name, name)
-		}
-		if f.RefEntity != "" {
-			return fmt.Errorf("entity %s: реквизит %s — ссылка, искать по ней подстроку нельзя (в колонке UUID); укажите реквизит справочника-владельца",
-				e.Name, f.Name)
-		}
-		key := strings.ToLower(f.Name)
-		if seen[key] {
-			return fmt.Errorf("entity %s: реквизит %s указан в search_fields дважды", e.Name, f.Name)
-		}
-		seen[key] = true
-	}
-	return nil
+	_, err := SearchFieldPaths(e)
+	return err
 }
 
 // validateNumerator проверяет блок `numerator:` (план 117B). У справочника он

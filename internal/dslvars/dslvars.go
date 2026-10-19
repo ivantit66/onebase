@@ -22,6 +22,7 @@ import (
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
 	"github.com/ivantit66/onebase/internal/runtime"
 	"github.com/ivantit66/onebase/internal/storage"
+	"github.com/ivantit66/onebase/internal/typedempty"
 )
 
 // Common — параметры базовой DSL-карты. Заполните поля и вызовите Build().
@@ -55,6 +56,18 @@ type Common struct {
 	// DSL (ЗагрузитьПакет). nil → hook на DSL-пути откатывается к by_time (как
 	// прежде); остальные DSL-переменные от Interp не зависят.
 	Interp *interpreter.Interpreter
+	// TxState — живое состояние транзакций исполнения (#1272). Фабрика запросов
+	// использует его только для обнаружения self-deadlock: запрос с контекстом,
+	// снятым до НачатьТранзакцию, возвращает управляемую ошибку вместо
+	// фатального ожидания. nil → прежнее поведение. Живое ЧТЕНИЕ через
+	// транзакцию даёт CtxSource/план 161, не это поле.
+	TxState *interpreter.TxState
+	// ConstantRefPresenter достаёт подпись ссылочной константы (entity, uuid).
+	// Хост решает правила чтения: права, маскирование, живой контекст транзакции.
+	// nil → ссылочная константа остаётся без подписи: UUID, выданный за
+	// наименование, молча уезжал в письма и печатные формы (#1536), и пустое
+	// представление честнее.
+	ConstantRefPresenter func(ctx context.Context, entityName, uuid string) string
 }
 
 // Build возвращает map с пересечением DSL-переменных, общих для UI и scheduler.
@@ -77,13 +90,34 @@ func (c Common) Build() map[string]any {
 	if vals, err := c.Store.ListConstants(c.Ctx); err == nil {
 		constsMap = vals
 	}
-	declaredConsts := make([]string, 0)
+	declaredConsts := make([]interpreter.DeclaredConstant, 0)
 	for _, k := range c.Reg.Constants() {
 		if k != nil {
-			declaredConsts = append(declaredConsts, k.Name)
+			desc, _ := typedempty.FromConstant(k)
+			declaredConsts = append(declaredConsts, interpreter.DeclaredConstant{Name: k.Name, Descriptor: desc})
 		}
 	}
-	queryFactory := interpreter.NewQueryFactory(c.Ctx, c.Store, c.Reg)
+	constantRef := func(desc typedempty.Descriptor) any {
+		ref := &interpreter.Ref{Type: desc.RefEntity}
+		if entity := c.Reg.GetEntity(desc.RefEntity); entity != nil {
+			ref.Kind = entity.Kind
+		}
+		return ref
+	}
+	constants := interpreter.NewTypedConstantsRoot(c.Ctx, c.Store, declaredConsts, constsMap, constantRef)
+	if c.ConstantRefPresenter != nil {
+		constants = constants.WithRefPresenter(c.ConstantRefPresenter).WithRefCtxSource(ctxSource)
+	}
+	// #1272: при известном живом состоянии транзакций фабрика запросов
+	// получает страховку от self-deadlock — контекст всё ещё снимается здесь,
+	// но Выполнить() с рассогласованным контекстом даёт управляемую ошибку,
+	// а не фатальное ожидание собственного соединения SQLite.
+	var queryFactory func(args []any) any
+	if c.TxState != nil {
+		queryFactory = interpreter.NewQueryFactoryWithTxState(c.Ctx, c.Store, c.Reg, c.TxState)
+	} else {
+		queryFactory = interpreter.NewQueryFactory(c.Ctx, c.Store, c.Reg)
+	}
 	predefined := interpreter.NewPredefinedRoot(c.Ctx, c.Store)
 
 	vars := map[string]any{
@@ -92,7 +126,7 @@ func (c Common) Build() map[string]any {
 		// Не MapThis: тот писал бы присвоенное значение только в память
 		// процесса, и `Константы.Имя = Значение` молча не доезжало до базы
 		// (#719). ConstantsRoot пишет сквозь.
-		"Константы":                interpreter.NewConstantsRoot(c.Ctx, c.Store, declaredConsts, constsMap),
+		"Константы":                constants,
 		"__factory_Запрос":         queryFactory,
 		"__factory_Query":          queryFactory,
 		"ПредопределённыеЗначения": predefined,

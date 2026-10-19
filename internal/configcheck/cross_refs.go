@@ -65,6 +65,10 @@ func CheckCrossRefs(proj *project.Project, roles []*auth.Role) []Issue {
 	for _, j := range proj.Journals {
 		journals.add(j.Name)
 	}
+	pages := nameSet{}
+	for _, pg := range proj.Pages {
+		pages.add(pg.Name)
+	}
 
 	var issues []Issue
 	add := func(file, object, kind, msg string) {
@@ -132,6 +136,9 @@ func CheckCrossRefs(proj *project.Project, roles []*auth.Role) []Issue {
 		checkRefs("subsystems", s.Name, "Подсистема", c.Registers, registers, "регистр")
 		checkRefs("subsystems", s.Name, "Подсистема", c.Processors, processors, "обработка")
 		checkRefs("subsystems", s.Name, "Подсистема", c.Journals, journals, "журнал")
+		if s.Page != "" && !pages.has(s.Page) {
+			add("subsystems", s.Name, "Подсистема", fmt.Sprintf("страница %q (page) не найдена", s.Page))
+		}
 	}
 
 	// Главная страница (глобальная и подсистемные) → виджеты.
@@ -252,6 +259,7 @@ func CheckCrossRefs(proj *project.Project, roles []*auth.Role) []Issue {
 		checkRefs("roles", r.Name, "Роль", keys(r.Permissions.Processors), processors, "обработка")
 	}
 
+	issues = append(issues, checkNavigation(proj, false)...)
 	return issues
 }
 

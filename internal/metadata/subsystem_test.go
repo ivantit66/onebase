@@ -36,6 +36,30 @@ contents:
 	if len(s.Contents.Catalogs) != 2 {
 		t.Errorf("catalogs: got %v", s.Contents.Catalogs)
 	}
+	if s.Page != "" {
+		t.Errorf("page: got %q, want empty", s.Page)
+	}
+}
+
+func TestLoadSubsystemFile_WithPage(t *testing.T) {
+	dir := t.TempDir()
+	yaml := `name: ВзносыДолги
+title: Взносы и долги
+page: ВзносыДолги
+contents:
+  pages: [ВзносыДолги]
+`
+	path := filepath.Join(dir, "взносыдолги.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadSubsystemFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Page != "ВзносыДолги" {
+		t.Errorf("page: got %q, want ВзносыДолги", s.Page)
+	}
 }
 
 func TestLoadSubsystemFile_Roles(t *testing.T) {

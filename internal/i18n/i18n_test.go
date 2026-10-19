@@ -263,3 +263,55 @@ func TestResolve_Normalization(t *testing.T) {
 		t.Errorf("Resolve('  en  ') = %q, want %q", got, "en")
 	}
 }
+
+// Белорусский заведён одним машинным ярусом: человеческого файла у него нет,
+// пока перевод не прошёл ревью носителем. Такой язык обязан быть полноценным —
+// попадать в переключатель под родным названием и переводить строки. Проверка
+// идёт через Load/Available/T, то есть тем же путём, что и интерфейс: имя языка
+// берётся из langName только при отсутствии «__native__», и опечатка в коде
+// языка или потерянный файл проявились бы именно здесь.
+func TestBelarusianAvailableFromMachineTier(t *testing.T) {
+	b, err := Load(EmbeddedLocales, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var native string
+	for _, l := range b.Available() {
+		if l.Code == "be" {
+			native = l.Native
+		}
+	}
+	if native != "Беларуская" {
+		t.Errorf("be в Available() = %q, want %q", native, "Беларуская")
+	}
+	if got := b.T("be", "Записать"); got != "Запісаць" {
+		t.Errorf("T(be, Записать) = %q, want %q", got, "Запісаць")
+	}
+	// Региональный вариант берёт словарь базового языка.
+	if got := b.T("be-by", "Записать"); got != "Запісаць" {
+		t.Errorf("T(be-by, Записать) = %q, want %q", got, "Запісаць")
+	}
+}
+
+// Каждый язык в переключателе обязан значиться родным названием — проверка по
+// классу, а не по списку кодов. Имя берётся из «__native__», а при его
+// отсутствии из langName, где перечисление поимённое и default возвращает сам
+// код: язык, добавленный без case, встал бы в переключатель голым «uz» вместо
+// «O'zbekcha». Сторож на это был написан под конкретный язык (be, см. выше) и
+// следующего такого языка не заметил бы — ровно то, о чём #1163.
+func TestAvailableLanguagesHaveNativeName(t *testing.T) {
+	b, err := Load(EmbeddedLocales, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	avail := b.Available()
+	if len(avail) == 0 {
+		t.Fatal("Available() пуст — встроенные словари не загрузились")
+	}
+	for _, l := range avail {
+		if strings.TrimSpace(l.Native) == "" || l.Native == l.Code {
+			t.Errorf("язык %q попадёт в переключатель без родного названия (Native=%q): "+
+				"добавьте case %q в langName или ключ \"__native__\" в словарь", l.Code, l.Native, l.Code)
+		}
+	}
+}

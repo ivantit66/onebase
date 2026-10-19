@@ -155,6 +155,16 @@ func (i *Interpreter) Call(proc *ast.ProcedureDecl, this This, args []any, extra
 	return
 }
 
+// EntryCallResult is the result of invoking a DSL entry procedure together
+// with the final values of its declared parameters. Ordinary user-procedure
+// calls deliberately keep parameters inside the callee frame; lifecycle
+// entrypoints with output parameters (for example ПередЗакрытием(Отказ)) need
+// an explicit, narrow way to observe those values after the call.
+type EntryCallResult struct {
+	Value    any
+	Bindings map[string]any
+}
+
 // RunWithResult executes a function procedure and captures its return value.
 func (i *Interpreter) RunWithResult(proc *ast.ProcedureDecl, this This, result *any, extraVars ...map[string]any) (err error) {
 	e := i.startEnv(this)
@@ -395,6 +405,13 @@ func (i *Interpreter) execStmt(s ast.Stmt, e *env) {
 		}
 	case *ast.ForEachStmt:
 		coll := i.evalExpr(v.Collection, e)
+		// Debugger conditions wrap a native structure snapshot to forbid writes.
+		// Unwrap only that data snapshot, keeping external capabilities guarded.
+		if wrapped, ok := coll.(*readOnlyThis); ok {
+			if structure, ok := wrapped.inner.(*Struct); ok {
+				coll = structure
+			}
+		}
 		switch items := coll.(type) {
 		case []map[string]any:
 			for _, row := range items {
@@ -413,6 +430,13 @@ func (i *Interpreter) execStmt(s ast.Stmt, e *env) {
 		case *Array:
 			for _, item := range items.Iterate() {
 				e.setLocal(v.Var.Literal, item)
+				if !i.execLoopBody(v.Body, e) {
+					break
+				}
+			}
+		case *Struct:
+			for _, key := range items.keys {
+				e.setLocal(v.Var.Literal, &KeyValue{Key: key, Value: items.vals[key]})
 				if !i.execLoopBody(v.Body, e) {
 					break
 				}
@@ -449,6 +473,8 @@ func (i *Interpreter) execStmt(s ast.Stmt, e *env) {
 						break
 					}
 				}
+			} else {
+				RaiseUserError("Цикл «Для Каждого»: значение не является коллекцией")
 			}
 		}
 	case *ast.AssignStmt:
@@ -545,6 +571,16 @@ func (i *Interpreter) assign(target ast.Expr, val any, e *env) {
 			o.SetIndex(int(toFloatOr0(idx)), val)
 		case *Map:
 			o.CallMethod("вставить", []any{idx, val})
+		case DynamicFieldAccessor:
+			name, ok := idx.(string)
+			if !ok {
+				RaiseUserError("Имя реквизита в индексной записи должно быть строкой")
+			}
+			if !o.SetDynamicField(name, val) {
+				RaiseUserError("Неизвестный реквизит «" + name + "» у объекта " + getTypeName(obj))
+			}
+		default:
+			RaiseUserError("Тип «" + getTypeName(obj) + "» не поддерживает индексную запись")
 		}
 	}
 }
@@ -558,6 +594,8 @@ func (i *Interpreter) evalExpr(expr ast.Expr, e *env) any {
 func (i *Interpreter) evalExprUnchecked(expr ast.Expr, e *env) any {
 	switch v := expr.(type) {
 	case *ast.StringLit:
+		return v.Value
+	case *ast.DateLit:
 		return v.Value
 	case *ast.NumberLit:
 		d, err := decimal.NewFromString(v.Value)
@@ -577,7 +615,13 @@ func (i *Interpreter) evalExprUnchecked(expr ast.Expr, e *env) any {
 		case This:
 			return protectReadOnly(e.ec, o.Get(field))
 		case *Ref:
-			return protectReadOnly(e.ec, o.Get(field))
+			value, ok := o.Lookup(field)
+			if !ok {
+				RaiseUserError("Реквизит ссылки «" + v.Field.Literal +
+					"» недоступен через точку — используйте ЗначениеРеквизитаОбъекта(Ссылка, \"" +
+					v.Field.Literal + "\")")
+			}
+			return protectReadOnly(e.ec, value)
 		case *Map:
 			// Соответствие не поддерживает чтение по точке (как в 1С) — частая
 			// ошибка с результатом ПрочитатьJSON. Раньше тихо возвращали
@@ -594,8 +638,19 @@ func (i *Interpreter) evalExprUnchecked(expr ast.Expr, e *env) any {
 			return protectReadOnly(e.ec, o.Index(int(toFloatOr0(idx))))
 		case *Map:
 			return protectReadOnly(e.ec, o.CallMethod("получить", []any{idx}))
+		case DynamicFieldAccessor:
+			name, ok := idx.(string)
+			if !ok {
+				RaiseUserError("Имя реквизита в индексном чтении должно быть строкой")
+			}
+			value, ok := o.GetDynamicField(name)
+			if !ok {
+				RaiseUserError("Неизвестный реквизит «" + name + "» у объекта " + getTypeName(obj))
+			}
+			return protectReadOnly(e.ec, value)
+		default:
+			RaiseUserError("Тип «" + getTypeName(obj) + "» не поддерживает индексное чтение")
 		}
-		return nil
 	case *ast.ArrayLit:
 		items := make([]any, 0, len(v.Elements))
 		for _, elem := range v.Elements {
@@ -615,13 +670,28 @@ func (i *Interpreter) evalExprUnchecked(expr ast.Expr, e *env) any {
 		return i.evalBinary(v, e)
 	case *ast.CallExpr:
 		return i.evalCall(v, e)
+	case *ast.MissingArg:
+		// Страховка инварианта. Пропуск разбирается в evalArgsKeepMissing, до
+		// общего вычисления выражений, и сюда попасть не должен; если всё же
+		// попал — это Неопределено, а не внутренний sentinel: наружу тип
+		// интерпретатора не выходит ни по какому пути.
+		return nil
 	}
 	return nil
 }
 
 func (i *Interpreter) evalNew(n *ast.NewExpr, e *env) any {
 	args := i.evalArgs(n.Args, e)
-	typeName := strings.ToLower(n.TypeName.Literal)
+	// План 173, срез A: dispatch вынесен в construct, чтобы динамическая форма
+	// Новый(<Тип>, <Параметры>) в срезе B пошла через ту же точку создания.
+	return i.construct(strings.ToLower(n.TypeName.Literal), args, e, n.TypeName.Literal)
+}
+
+// construct создаёт объект по нормализованному имени типа и готовым аргументам.
+// typeName ожидается в нижнем регистре (единственная нормализация —
+// normalizeTypeName для публичных имён типов значений); displayName — имя так,
+// как его написал автор модуля, для текстов ошибок.
+func (i *Interpreter) construct(typeName string, args []any, e *env, displayName string) any {
 	switch typeName {
 	case "массив", "array":
 		return &Array{}
@@ -643,11 +713,11 @@ func (i *Interpreter) evalNew(n *ast.NewExpr, e *env) any {
 	// Расширяемые типы через env: "__factory_<ИмяТипа>"
 	if factory, ok := e.get("__factory_" + typeName); ok {
 		if fn, ok := factory.(func([]any) any); ok {
-			refuseReadOnly(e.ec, "создание объекта «"+n.TypeName.Literal+"» через внешнюю фабрику")
+			refuseReadOnly(e.ec, "создание объекта «"+displayName+"» через внешнюю фабрику")
 			return fn(args)
 		}
 	}
-	panic(userError{Msg: "Новый: неизвестный тип " + n.TypeName.Literal})
+	panic(userError{Msg: "Новый: неизвестный тип " + displayName})
 }
 
 func (i *Interpreter) evalUnary(u *ast.UnaryExpr, e *env) any {
@@ -691,17 +761,17 @@ func (i *Interpreter) evalBinary(b *ast.BinaryExpr, e *env) any {
 	}
 	switch b.Op.Type {
 	case token.ASSIGN: // equality in conditions
-		return equalSandboxed(l, r, e.ec, b.Op.Line)
+		return equalOperator(l, r, e.ec, b.Op.Line)
 	case token.NEQ:
-		return !equalSandboxed(l, r, e.ec, b.Op.Line)
+		return !equalOperator(l, r, e.ec, b.Op.Line)
 	case token.LT:
-		return compareSandboxed(l, r, e.ec, b.Op.Line) < 0
+		return compareOperator(l, r, e.ec, b.Op.Line) < 0
 	case token.GT:
-		return compareSandboxed(l, r, e.ec, b.Op.Line) > 0
+		return compareOperator(l, r, e.ec, b.Op.Line) > 0
 	case token.LTE:
-		return compareSandboxed(l, r, e.ec, b.Op.Line) <= 0
+		return compareOperator(l, r, e.ec, b.Op.Line) <= 0
 	case token.GTE:
-		return compareSandboxed(l, r, e.ec, b.Op.Line) >= 0
+		return compareOperator(l, r, e.ec, b.Op.Line) >= 0
 	case token.PLUS:
 		// Дата + Число → сдвиг на N секунд (семантика 1С/OneScript).
 		if lt, ok := l.(time.Time); ok {
@@ -853,7 +923,13 @@ func (i *Interpreter) evalBinary(b *ast.BinaryExpr, e *env) any {
 }
 
 func (i *Interpreter) evalCall(c *ast.CallExpr, e *env) any {
-	args := i.evalArgs(c.Args, e)
+	// Два списка на один вызов: пользовательская процедура получает пропуски
+	// (userArgs) и подставляет по ним значения по умолчанию параметров, все
+	// остальные приёмники — уже нормализованные в Неопределено (args). Куда
+	// именно уйдёт вызов, выясняется ниже, а вычислять аргументы дважды нельзя:
+	// у них бывают побочные эффекты.
+	userArgs := i.evalArgsKeepMissing(c.Args, e)
+	args := clearMissingArgs(userArgs)
 	switch callee := c.Callee.(type) {
 	case *ast.Ident:
 		fnName := callee.Tok.Literal
@@ -908,7 +984,7 @@ func (i *Interpreter) evalCall(c *ast.CallExpr, e *env) any {
 		if fpAny, ok2 := e.rawFormProcs(); ok2 {
 			if fp, ok3 := fpAny.(map[string]*ast.ProcedureDecl); ok3 {
 				if proc, ok4 := fp[strings.ToLower(fnName)]; ok4 && sourceFile != "" && proc.Name.File == sourceFile {
-					return i.callUserProc(proc, e, args)
+					return i.callUserProc(proc, e, userArgs)
 				}
 			}
 		}
@@ -927,12 +1003,12 @@ func (i *Interpreter) evalCall(c *ast.CallExpr, e *env) any {
 		//
 		if i.LookupSiblingProc != nil && sourceFile != "" {
 			if proc := i.LookupSiblingProc(sourceFile, fnName); proc != nil {
-				return i.callUserProc(proc, e, args)
+				return i.callUserProc(proc, e, userArgs)
 			}
 		}
 		if i.LookupProc != nil {
 			if proc := i.LookupProc(fnName); proc != nil {
-				return i.callUserProc(proc, e, args)
+				return i.callUserProc(proc, e, userArgs)
 			}
 		}
 		if fallback != nil {
@@ -1006,7 +1082,7 @@ func (i *Interpreter) evalCall(c *ast.CallExpr, e *env) any {
 		if recv == nil && i.LookupModuleProc != nil {
 			if objIdent, ok := callee.Object.(*ast.Ident); ok {
 				if proc := i.LookupModuleProc(objIdent.Tok.Literal, callee.Field.Literal); proc != nil {
-					return i.callUserProc(proc, e, args)
+					return i.callUserProc(proc, e, userArgs)
 				}
 			}
 		}
@@ -1109,11 +1185,17 @@ func (i *Interpreter) evalEvalBuiltin(args []any, e *env) any {
 }
 
 func (i *Interpreter) callUserProc(proc *ast.ProcedureDecl, callEnv *env, args []any) (retVal any) {
-	return i.callUserProcAtDepth(proc, callEnv, args, callEnv.depth+1)
+	retVal, _ = i.callUserProcAtDepthWithBindings(proc, callEnv, args, callEnv.depth+1)
+	return retVal
 }
 
 func (i *Interpreter) callEntryProc(proc *ast.ProcedureDecl, root *env, args []any) (retVal any) {
-	return i.callUserProcAtDepth(proc, root, args, root.depth)
+	retVal, _ = i.callUserProcAtDepthWithBindings(proc, root, args, root.depth)
+	return retVal
+}
+
+func (i *Interpreter) callEntryProcWithBindings(proc *ast.ProcedureDecl, root *env, args []any) (retVal any, bindings map[string]any) {
+	return i.callUserProcAtDepthWithBindings(proc, root, args, root.depth)
 }
 
 func (i *Interpreter) moduleEnvFor(proc *ast.ProcedureDecl, root *env) *env {
@@ -1155,7 +1237,7 @@ func (i *Interpreter) moduleEnvFor(proc *ast.ProcedureDecl, root *env) *env {
 	return me
 }
 
-func (i *Interpreter) callUserProcAtDepth(proc *ast.ProcedureDecl, callEnv *env, args []any, frameDepth int) (retVal any) {
+func (i *Interpreter) callUserProcAtDepthWithBindings(proc *ast.ProcedureDecl, callEnv *env, args []any, frameDepth int) (retVal any, bindings map[string]any) {
 	// Страж рекурсии: env нового кадра будет на уровень глубже вызывающего.
 	// Обрываем ДО создания кадра и проброса в отладчик, иначе бесконечная
 	// рекурсия переполнит стек горутины и аварийно уронит процесс (мимо Попытки).
@@ -1170,7 +1252,14 @@ func (i *Interpreter) callUserProcAtDepth(proc *ast.ProcedureDecl, callEnv *env,
 		hook.HookPushFrame(proc.Name.Literal, 0)
 		defer hook.HookPopFrame()
 	}
+	var child *env
 	defer func() {
+		if child != nil {
+			bindings = make(map[string]any, len(proc.Params))
+			for _, param := range proc.Params {
+				bindings[param.Literal] = child.vars[strings.ToLower(param.Literal)]
+			}
+		}
 		if r := recover(); r != nil {
 			switch s := r.(type) {
 			case dslReturn:
@@ -1192,7 +1281,7 @@ func (i *Interpreter) callUserProcAtDepth(proc *ast.ProcedureDecl, callEnv *env,
 	} else if moduleEnv != nil {
 		defaultEnv = callEnv.frameWithModule(callEnv, moduleEnv, callEnv.depth)
 	}
-	child := callEnv.frameWithModule(parentEnv, moduleEnv, frameDepth)
+	child = callEnv.frameWithModule(parentEnv, moduleEnv, frameDepth)
 	child.sourceFile = proc.Name.File
 	for idx, param := range proc.Params {
 		if idx < len(args) {
@@ -1218,15 +1307,57 @@ func (i *Interpreter) callUserProcAtDepth(proc *ast.ProcedureDecl, callEnv *env,
 		}
 	}
 	i.execBlock(proc.Body, child)
-	return nil
+	return nil, bindings
 }
 
+// evalArgs — аргументы для всех, кроме пользовательской процедуры: пропуск
+// («Метод(А,,Б)») здесь уже нормализован в nil, то есть Неопределено.
 func (i *Interpreter) evalArgs(exprs []ast.Expr, e *env) []any {
+	return clearMissingArgs(i.evalArgsKeepMissing(exprs, e))
+}
+
+// evalArgsKeepMissing вычисляет аргументы, сохраняя пропуски как внутренний
+// sentinel missingNamedArg. Такой список принимает ТОЛЬКО callUserProc: он
+// отличает «значение не передали» от «передали Неопределено» и в первом случае
+// вычисляет Defaults[idx] — ровно то различие, ради которого пропуск и пишут
+// (issue #1160). Механизм не новый: тем же sentinel помечает дыры BindNamedArgs.
+func (i *Interpreter) evalArgsKeepMissing(exprs []ast.Expr, e *env) []any {
 	args := make([]any, len(exprs))
 	for idx, a := range exprs {
+		if _, skipped := a.(*ast.MissingArg); skipped {
+			args[idx] = missingNamedArg{}
+			continue
+		}
 		args[idx] = i.evalExpr(a, e)
 	}
 	return args
+}
+
+// clearMissingArgs заменяет sentinel пропуска на nil. Инвариант: за пределы
+// callUserProc sentinel не выходит — встроенная функция, метод объекта или
+// фабрика увидели бы вместо Неопределено внутренний тип интерпретатора и
+// свалились бы на нём непонятной ошибкой. Копия делается только когда пропуск
+// действительно есть: обычный вызов идёт прежним путём, без лишней аллокации,
+// и без риска, что нормализация отзеркалится в список для callUserProc.
+func clearMissingArgs(args []any) []any {
+	skipped := false
+	for _, a := range args {
+		if _, ok := a.(missingNamedArg); ok {
+			skipped = true
+			break
+		}
+	}
+	if !skipped {
+		return args
+	}
+	out := make([]any, len(args))
+	copy(out, args)
+	for idx, a := range out {
+		if _, ok := a.(missingNamedArg); ok {
+			out[idx] = nil
+		}
+	}
+	return out
 }
 
 func truthy(v any) bool {
@@ -1249,8 +1380,34 @@ func truthy(v any) bool {
 	return true
 }
 
+// equalOperator и compareOperator — путь операторов «=», «<>», «<», «>», «<=»,
+// «>=». Подстановка нуля вместо незаполненного числа (#1136) живёт здесь, а не
+// внутри equalSandboxed/compareSandboxed, и это граница правки, а не деталь
+// оформления: тот же comparator обслуживает поиск и сортировку коллекций
+// (compareAny → Массив.Найти/Сортировать, ТаблицаЗначений.Найти/НайтиСтроки/
+// Сортировать). Просочись правило туда — ТЗ.НайтиСтроки(Новый Структура("Цена",
+// 0)) начал бы возвращать незаполненные строки, а отбор по Неопределено —
+// заполненные нули, то есть оба естественных способа разделить «пусто» и «ноль»
+// перестали бы работать разом. Соответствие при этом ищет своим путём (refKey) и
+// на подстановку не реагирует вовсе, так что платформа разошлась бы сама с собой:
+// Соответствие.Получить(0) пустой ключ не находит, а ТЗ.НайтиСтроки — находил бы.
+func equalOperator(a, b any, ec *execCtx, line int) bool {
+	a, b = nilAsNumericZero(a, b)
+	return equalSandboxed(a, b, ec, line)
+}
+
+func compareOperator(a, b any, ec *execCtx, line int) int {
+	a, b = nilAsNumericZero(a, b)
+	return compareSandboxed(a, b, ec, line)
+}
+
+// equal — равенство с семантикой оператора «=». Единственный вызывающий —
+// утверждения (Утверждать.Равно/НеРавно, МаскаПоля): проверка конфигурации
+// обязана видеть ровно то, что увидит модуль, иначе `Утверждать.Равно(Стр.Цена, 0)`
+// краснел бы там, где `Если Стр.Цена = 0` выбирает ветку. Поиск по коллекциям
+// сюда не ходит — он идёт через compare и refKey.
 func equal(a, b any) bool {
-	return equalSandboxed(a, b, nil, 0)
+	return equalOperator(a, b, nil, 0)
 }
 
 func equalSandboxed(a, b any, ec *execCtx, line int) bool {
@@ -1292,6 +1449,10 @@ func dateAddSeconds(t time.Time, sec float64) time.Time {
 	return safeDateResult(t.Add(time.Duration(sec * float64(time.Second))))
 }
 
+// compare — порядок БЕЗ подстановки нуля вместо незаполненного числа. Отсюда
+// работает compareAny, а через него поиск и сортировка коллекций: «нет значения»
+// остаётся значением, отличным от нуля, как и до #1136. Операторы ходят не сюда,
+// а через compareOperator.
 func compare(a, b any) int {
 	return compareSandboxed(a, b, nil, 0)
 }

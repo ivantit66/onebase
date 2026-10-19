@@ -7,6 +7,7 @@ import (
 	"html"
 	"html/template"
 	"net/http"
+	"strings"
 
 	"github.com/ivantit66/onebase/internal/metadata"
 )
@@ -20,6 +21,7 @@ import (
 //   - "forms-list"   — список managed-форм проекта (минимальный)
 var formsTmpl = template.Must(template.New("forms").Funcs(template.FuncMap{
 	"esc": func(s string) string { return html.EscapeString(s) },
+	"t":   tr,
 	// jsString — встраивание произвольной строки как JS-литерала через
 	// json.Marshal. Возвращает с обрамляющими кавычками: `"...escaped..."`.
 	// Корректно работает с кириллицей, переносами строк, кавычками,
@@ -266,21 +268,38 @@ const tplFormsEditor = `
 .fc-pick:hover{background:#f5f8ff}
 .fc-group{border:1px solid #e2e8f0;padding:5px 9px;margin:1px 0}
 .fc-group>legend{font-weight:600;color:#475569;padding:0 5px;font-size:12px}
-.fc-group-horizontal>.fc-children{flex-direction:row;flex-wrap:wrap;gap:8px;align-items:flex-start}
-.fc-group-horizontal>.fc-children>.fc-drop{width:8px;height:auto;align-self:stretch;min-height:32px}
+/* Раскладка горизонтальной группы на холсте повторяет рантайм
+   (managed-group-horizontal в internal/ui/templates_managed.go): те же flex,
+   min-width и gap — иначе форма с шириной 400 у полей переносилась в
+   конструкторе, но стояла в один ряд в «Предприятии» (#1575). */
+.fc-group-horizontal>.fc-children{flex-direction:row;flex-wrap:wrap;gap:12px;align-items:flex-start}
+/* Зоны вставки не должны менять измеряемую раскладку: в покое они нулевой
+   ширины, видимой зона становится только на время перетаскивания
+   (класс ob-dragging вешает document-level dragstart ниже). */
+.fc-group-horizontal>.fc-children>.fc-drop{width:0;height:auto;align-self:stretch;min-height:32px}
+body.ob-dragging .fc-group-horizontal>.fc-children>.fc-drop{width:8px}
 .fc-group-horizontal>.fc-children>.fc-drop.fc-drop-over{width:16px;height:auto}
-.fc-group-horizontal>.fc-children>.fc-el{flex:1 1 220px;min-width:180px}
+.fc-group-horizontal>.fc-children>.fc-el{flex:0 1 260px;min-width:180px}
+/* Колонка-группа делит ширину строки, как form-group-box в рантайме. */
+.fc-group-horizontal>.fc-children>.fc-el.fc-group{flex:1 1 auto;min-width:0}
 .fc-pages{border:1px dashed #c7d8f5;border-radius:6px;padding:4px}
 .fc-page{border:1px solid #eef0f5;border-radius:6px;margin:3px 0;padding:4px 6px}
 .fc-tab{font-size:11px;color:#1a4a80;font-weight:600;margin-bottom:3px}
 .fc-field label{display:block;color:#475569;font-size:12px;margin-bottom:2px}
 .fc-field input{width:100%;padding:5px 8px;border:1px solid #d0d7e3;border-radius:5px;background:#f8fafc;pointer-events:none}
+/* Заданная высота (#1185): холст растягивает сам ввод — как рантайм и как
+   предпросмотр, иначе конструктор показывал бы другую форму, чем пользователь. */
+.fc-el.ob-el-fill{display:flex;flex-direction:column}
+.fc-el.ob-el-fill>label{flex:0 0 auto}
+.fc-el.ob-el-fill>input{flex:1 1 auto;min-height:0}
 .fc-req{color:#dc2626}
 .fc-check{display:flex;align-items:center;gap:6px}
 .fc-label{color:#475569}
 .fc-btn button{padding:5px 10px;border:1px solid #d0d7e3;border-radius:5px;background:#f8fafc;pointer-events:none}
 .fc-table .fc-tp{background:#fef9c3;color:#92400e;padding:6px 8px;border-radius:6px;font-size:12px}
-.fc-pic{background:#eef2ff;color:#3730a3;border:1px dashed #c7d2fe;border-radius:6px;padding:10px;text-align:center;font-size:12px}
+.fc-pic-wrap{width:max-content;max-width:100%;padding:0}
+.fc-pic{box-sizing:border-box;background:#eef2ff;color:#3730a3;border:1px dashed #c7d2fe;border-radius:6px;padding:10px;text-align:center;font-size:12px;overflow:hidden}
+.fc-pic-image{display:block}
 .fc-cols{display:flex;flex-wrap:wrap;gap:4px;padding:4px 2px 0}
 .fc-col{font-size:11px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:4px;padding:2px 7px;color:#475569}
 .fc-col.fc-selected{outline:2px solid #1a4a80;background:#eef4ff}
@@ -311,6 +330,9 @@ const tplFormsEditor = `
 .prop-row.prop-opt{display:flex;gap:4px;align-items:center}
 .prop-row.prop-opt input{flex:1}
 .prop-row.prop-opt .btn{padding:2px 8px}
+.prop-choice-card{border:1px solid #e2e8f0;border-radius:6px;background:#fff;padding:8px;margin-bottom:8px}
+.prop-choice-card .prop-actions{display:flex;gap:4px;margin-top:8px;padding-top:8px}
+.prop-choice-card .prop-actions .btn{padding:3px 9px}
 .prop-actions{margin-top:12px;border-top:1px solid #eef0f5;padding-top:10px}
 @media (max-width: 900px){
   .designer-split{grid-template-columns:1fr;grid-template-rows:minmax(260px,1fr) 6px var(--forms-prop-w,320px)}
@@ -322,6 +344,7 @@ const tplFormsEditor = `
 #cfg-code-theme-toggle .cth-to-dark{display:none}
 html.cfg-code-light #cfg-code-theme-toggle .cth-to-dark{display:inline}
 html.cfg-code-light #cfg-code-theme-toggle .cth-to-light{display:none}
+` + metadata.FormEqualColumnsCSS + `
 </style>
 <script>
 // Тема редактора кода общая с конфигуратором (один origin — один localStorage),
@@ -525,8 +548,16 @@ function ensureProcedure(name, eventName, info) {
   var src = getOS();
   if (src && !/\n$/.test(src)) src += '\n';
   var body = '\t\n';
-  if (info && info.kind === 'ТабличнаяЧасть' && eventName === 'ПриИзменении') {
-    body = '\t// Доступно: ИмяТабличнойЧасти, НомерСтроки, ТекущаяКолонка, ТекущаяСтрока\n\t\n';
+  // Подсказка о контексте зависит от события, а не только от вида элемента:
+  // события правки ячейки и активизации строки везут номер строки и колонку,
+  // а добавление/удаление строки шлёт лишь имя ТЧ (obFireRowEvent).
+  var kind = info && info.kind;
+  if (kind === 'ТабличнаяЧасть' || kind === 'Колонка') {
+    if (eventName === 'ПриИзменении' || eventName === 'ПриИзмененииСтроки' || eventName === 'ПриАктивизацииСтроки') {
+      body = '\t// Доступно: ИмяТабличнойЧасти, НомерСтроки, ТекущаяКолонка, ТекущаяСтрока\n\t\n';
+    } else {
+      body = '\t// Доступно: ИмяТабличнойЧасти\n\t\n';
+    }
   }
   setOS(src + '\nПроцедура ' + name + '()\n' + body + 'КонецПроцедуры\n');
 }
@@ -952,6 +983,12 @@ function renderCanvasHTML(html) {
     e.stopPropagation();
     selectNode(el.getAttribute('data-node-id'));
   });
+  // На время любого перетаскивания на странице зоны вставки раскрываются
+  // (body.ob-dragging): в покое они нулевой ширины и не сдвигают раскладку
+  // холста относительно рантайма (#1575). dragend срабатывает всегда, даже
+  // если бросили мимо цели.
+  document.addEventListener('dragstart', function () { document.body.classList.add('ob-dragging'); });
+  document.addEventListener('dragend', function () { document.body.classList.remove('ob-dragging'); });
   // Перетаскивание элемента холста — для переноса в другой контейнер. Свой mime
   // text/onebase-node, чтобы не путать с палитрами (attr/struct/tablepart).
   host.addEventListener('dragstart', function (e) {
@@ -1092,8 +1129,11 @@ function renderProps() {
   addTextProp(panel, 'Имя', 'name', info.name || '');
   if (info.kind === 'ПолеКартинки') {
     addTextProp(panel, 'Картинка (путь)', 'picture', info.picture || '');
-    addNumProp(panel, 'Ширина, px', 'width', info.width);
-    addNumProp(panel, 'Высота, px', 'height', info.height);
+    // У картинки width/height ограничивают её саму, а не блок вокруг (так было
+    // до общего контракта раскладки, #1185) — подписаны отдельно, чтобы это не
+    // читалось как «размер элемента».
+    addNumProp(panel, 'Ширина картинки, px', 'width', info.width);
+    addNumProp(panel, 'Высота картинки, px', 'height', info.height);
   } else if (!info.container) {
     addTextProp(panel, 'Поле данных (data_path)', 'data_path', info.dataPath || '');
     addTextProp(panel, 'Подсказка', 'hint', info.hint || '');
@@ -1106,9 +1146,15 @@ function renderProps() {
       addTextProp(panel, 'Шаблон ввода (00.00.00)', 'input_mask', info.inputMask || '');
       addTextProp(panel, 'Проверка значения (регулярное выражение)', 'mask', info.mask || '');
       addCheckRaw(panel, 'Файловое поле', info.fileType, function (ch) { setProp('type', ch ? 'file' : ''); });
+      addTextProp(panel, {{jsString (t $.Lang "Устойчивый id элемента")}}, 'id', info.id || '');
+      addChoiceFilterEditor(panel, info);
     }
   }
+  if (info.kind === 'ГруппаФормы' || info.kind === 'Кнопка') {
+    addTextProp(panel, {{jsString (t $.Lang "Фон (CSS-цвет)")}}, 'background', info.background || '');
+  }
   if (info.kind === 'ГруппаФормы') {
+    addCheckProp(panel, {{jsString (t $.Lang "Равные колонки")}}, 'equal_columns', info.equalColumns);
     addSelectRaw(panel, 'Расположение реквизитов', info.orientation === 'horizontal' ? 'horizontal' : 'vertical', [
       { value: 'vertical', label: 'Вертикально' },
       { value: 'horizontal', label: 'Горизонтально' }
@@ -1119,11 +1165,53 @@ function renderProps() {
   }
   if (info.kind === 'ТабличнаяЧасть') {
     addCheckRaw(panel, 'Простая таблица (без SlickGrid)', info.noGrid, function (ch) { setProp('no_grid', ch ? 'true' : ''); });
+    // auto_sum умеет рантайм с #215.1 и используют пять примеров, но в панели
+    // его не было — настройку ставили руками в YAML, поэтому и не находили.
+    addCheckRaw(panel, 'Считать Сумма = Количество × Цена', info.autoSum, function (ch) { setProp('auto_sum', ch ? 'true' : ''); });
     addColumnsEditor(panel);
   }
   if (info.kind === 'Переключатель') { addOptionsEditor(panel, info); }
+  addLayoutSection(panel, info);
   addEventsSection(panel, info);
   addElementActions(panel, info);
+}
+
+// addLayoutSection — размеры и выравнивание элемента (#1185). До него эти ключи
+// правились только руками в YAML, а действовали и вовсе нигде; теперь контракт
+// один на рантайм, предпросмотр и холст, поэтому и в панели они общие для всех
+// видов. Пустое значение выравнивания = ключа нет (delProp), а не halign: "".
+function addLayoutSection(panel, info) {
+  // Виды без собственного блока в форме: колонка описывает колонку таблицы,
+  // командная панель разворачивается в тулбар. Предлагать им размер значило бы
+  // звать написать ключ, который снова ничего не делает.
+  if (info.kind === 'Колонка' || info.kind === 'КоманднаяПанель' || info.kind === 'КнопкаКП') return;
+  var hd = document.createElement('div'); hd.className = 'prop-row prop-section'; hd.textContent = 'Раскладка';
+  panel.appendChild(hd);
+  if (info.kind !== 'ПолеКартинки') {
+    addNumProp(panel, 'Ширина, px', 'width', info.width);
+    addNumProp(panel, 'Высота, px', 'height', info.height);
+  }
+  addAlignProp(panel, 'По горизонтали', 'halign', info.halign, [
+    { value: '', label: '— по умолчанию —' },
+    { value: 'left', label: 'Слева' },
+    { value: 'center', label: 'По центру' },
+    { value: 'right', label: 'Справа' },
+    { value: 'stretch', label: 'Растянуть' }
+  ]);
+  addAlignProp(panel, 'По вертикали', 'valign', info.valign, [
+    { value: '', label: '— по умолчанию —' },
+    { value: 'top', label: 'Сверху' },
+    { value: 'center', label: 'По центру' },
+    { value: 'bottom', label: 'Снизу' }
+  ]);
+}
+function addAlignProp(panel, label, key, value, options) {
+  var cur = (value || '').toLowerCase();
+  if (cur === 'middle') cur = 'center'; // синоним из макетов печатных форм
+  addSelectRaw(panel, label, cur, options, function (v) {
+    if (v) setProp(key, v);
+    else editOp({ op: 'delProp', node: _selected, key: key }, true);
+  });
 }
 
 // ── Свойства формы (batch B2/B3) ────────────────────────────────────────────
@@ -1164,9 +1252,18 @@ function addFormActionsSection(panel, f) {
 // applicableEvents — какие события показывать для элемента данного вида.
 function applicableEvents(kind) {
   switch (kind) {
-    case 'Кнопка': case 'КнопкаКП': return ['Нажатие'];
+    case 'Кнопка': return ['Нажатие'];
     case 'ПолеВвода': case 'Флажок': case 'ПолеДаты': case 'Переключатель':
-    case 'ПолеСписка': case 'ТабличнаяЧасть': return ['ПриИзменении'];
+    case 'ПолеСписка': return ['ПриИзменении'];
+    // Табличная часть отправляет шесть событий (metadata.BrowserFormEventsFor
+    // на сервере — единственный источник правды). Панель предлагала одно, а
+    // остальные пять работали в рантайме и писались руками в YAML.
+    case 'ТабличнаяЧасть': return ['ПриИзменении', 'ПриИзмененииСтроки',
+      'ПриДобавленииСтроки', 'ПослеДобавленияСтроки', 'ПриУдаленииСтроки',
+      'ПриАктивизацииСтроки'];
+    // Колонка ТЧ: обработчик срабатывает на правку ячейки именно этой колонки
+    // (план 154, Р4). Обработчик самой ТЧ при этом не отключается.
+    case 'Колонка': return ['ПриИзменении'];
     default: return [];
   }
 }
@@ -1252,6 +1349,138 @@ function addOptionsEditor(panel, info) {
   }
   redraw();
 }
+
+// ── Зависимый подбор choice_filter (plan 170/C) ────────────────────────
+// Список пишется одной операцией: порядок стабилен, а value:false
+// остаётся boolean, а не строкой. Пустой список удаляет ключ.
+function addChoiceFilterEditor(panel, info) {
+  var hd = document.createElement('div'); hd.className = 'prop-row prop-section'; hd.textContent = {{jsString (t $.Lang "Зависимый подбор")}};
+  panel.appendChild(hd);
+  var note = document.createElement('div'); note.className = 'prop-hint';
+  note.textContent = {{jsString (t $.Lang "Условия идут по порядку и соединяются через И. Для подбора обязателен уникальный id выше.")}};
+  panel.appendChild(note);
+  var conditions = (info.choiceFilter || []).map(function (condition) {
+    var hasValue = Object.prototype.hasOwnProperty.call(condition, 'value') && typeof condition.value === 'boolean';
+    var hasRef = typeof condition.ref === 'string' && condition.ref !== '';
+    return {
+      field: condition.field || '',
+      op: ['in_hierarchy', 'not_in_hierarchy', 'eq_or_empty'].indexOf(condition.op) >= 0 ? condition.op : 'eq',
+      mode: hasValue ? 'value' : (hasRef ? 'ref' : 'from'),
+      from: condition.from || '',
+      value: hasValue ? condition.value : false,
+      ref: hasRef ? condition.ref : ''
+    };
+  });
+  var nodeAtEdit = _selected;
+  function payload() {
+    return conditions.map(function (condition) {
+      var out = { field: condition.field, op: condition.op };
+      if (condition.mode === 'value') out.value = !!condition.value;
+      else if (condition.mode === 'ref') out.ref = condition.ref;
+      else out.from = condition.from;
+      return out;
+    });
+  }
+  function commit() {
+    return editOp({ op: 'setChoiceFilter', node: nodeAtEdit,
+      choice_filter: JSON.stringify(payload()) }, true);
+  }
+  var wrap = document.createElement('div'); panel.appendChild(wrap);
+  function redraw() {
+    wrap.innerHTML = '';
+    conditions.forEach(function (condition, index) {
+      var card = document.createElement('div'); card.className = 'prop-choice-card';
+
+      var fieldRow = document.createElement('div'); fieldRow.className = 'prop-row';
+      var fieldLabel = document.createElement('label'); fieldLabel.textContent = 'field';
+      var field = document.createElement('input'); field.type = 'text'; field.value = condition.field;
+      field.placeholder = {{jsString (t $.Lang "Направление / is_folder")}};
+      field.addEventListener('change', function () { condition.field = field.value; commit(); });
+      fieldRow.appendChild(fieldLabel); fieldRow.appendChild(field); card.appendChild(fieldRow);
+
+      var opRow = document.createElement('div'); opRow.className = 'prop-row';
+      var opLabel = document.createElement('label'); opLabel.textContent = {{jsString (t $.Lang "Оператор")}};
+      var op = document.createElement('select');
+      op.appendChild(new Option('eq', 'eq'));
+      op.appendChild(new Option('eq_or_empty', 'eq_or_empty'));
+      op.appendChild(new Option('in_hierarchy', 'in_hierarchy'));
+      op.appendChild(new Option('not_in_hierarchy', 'not_in_hierarchy'));
+      op.value = condition.op;
+      op.addEventListener('change', function () {
+        condition.op = op.value;
+        if (condition.op !== 'eq' && condition.mode === 'value') {
+          condition.mode = 'from'; condition.from = condition.from || 'Объект.';
+        }
+        commit();
+        redraw();
+      });
+      opRow.appendChild(opLabel); opRow.appendChild(op); card.appendChild(opRow);
+
+      var modeRow = document.createElement('div'); modeRow.className = 'prop-row';
+      var modeLabel = document.createElement('label'); modeLabel.textContent = {{jsString (t $.Lang "Источник")}};
+      var mode = document.createElement('select');
+      mode.appendChild(new Option({{jsString (t $.Lang "Поле формы (from)")}}, 'from'));
+      var valueOption = new Option({{jsString (t $.Lang "Булево (value)")}}, 'value');
+      // Булев литерал — только у eq; ссылка (from или ref) — у любого оператора.
+      valueOption.disabled = condition.op !== 'eq';
+      mode.appendChild(valueOption);
+      mode.appendChild(new Option({{jsString (t $.Lang "Постоянная ссылка (ref)")}}, 'ref'));
+      mode.value = condition.mode;
+      mode.addEventListener('change', function () {
+        condition.mode = mode.value;
+        if (condition.mode === 'from' && !condition.from) condition.from = 'Объект.';
+        // Пустой ref не пишется: сервер отклонит условие без источника.
+        // Запись — когда в поле появится UUID.
+        if (condition.mode === 'ref' && !condition.ref) { redraw(); return; }
+        commit();
+      });
+      modeRow.appendChild(modeLabel); modeRow.appendChild(mode); card.appendChild(modeRow);
+
+      var valueRow = document.createElement('div'); valueRow.className = 'prop-row';
+      var valueLabel = document.createElement('label'); valueLabel.textContent = condition.mode;
+      if (condition.mode === 'ref') {
+        var ref = document.createElement('input'); ref.type = 'text'; ref.value = condition.ref;
+        ref.placeholder = {{jsString (t $.Lang "UUID записи справочника")}};
+        ref.addEventListener('change', function () { condition.ref = ref.value.trim(); if (condition.ref) commit(); });
+        valueRow.appendChild(valueLabel); valueRow.appendChild(ref);
+      } else if (condition.mode === 'value') {
+        var value = document.createElement('select');
+        value.appendChild(new Option('false', 'false'));
+        value.appendChild(new Option('true', 'true'));
+        value.value = condition.value ? 'true' : 'false';
+        value.addEventListener('change', function () { condition.value = value.value === 'true'; commit(); });
+        valueRow.appendChild(valueLabel); valueRow.appendChild(value);
+      } else {
+        var from = document.createElement('input'); from.type = 'text'; from.value = condition.from;
+        from.placeholder = 'Объект.Направление';
+        from.addEventListener('change', function () { condition.from = from.value; commit(); });
+        valueRow.appendChild(valueLabel); valueRow.appendChild(from);
+      }
+      card.appendChild(valueRow);
+
+      var actions = document.createElement('div'); actions.className = 'prop-row prop-actions';
+      var up = mkBtn('↑', function () {
+        if (index <= 0) return;
+        var item = conditions.splice(index, 1)[0]; conditions.splice(index - 1, 0, item); commit();
+      });
+      var down = mkBtn('↓', function () {
+        if (index >= conditions.length - 1) return;
+        var item = conditions.splice(index, 1)[0]; conditions.splice(index + 1, 0, item); commit();
+      });
+      var remove = mkBtn('×', function () { conditions.splice(index, 1); commit(); });
+      remove.className = 'btn btn-danger';
+      actions.appendChild(up); actions.appendChild(down); actions.appendChild(remove); card.appendChild(actions);
+      wrap.appendChild(card);
+    });
+    if (conditions.length < 8) {
+      wrap.appendChild(mkBtn({{jsString (t $.Lang "+ условие")}}, function () {
+        conditions.push({ field: '', op: 'eq', mode: 'from', from: 'Объект.', value: false });
+        commit();
+      }));
+    }
+  }
+  redraw();
+}
 // Кнопки порядка и удаления элемента (follow-up #164, слайсы B1/B2): «выше/ниже»
 // переставляют узел в соседний индекс того же родителя; «удалить» вырезает узел
 // (контейнер — вместе с детьми, с подтверждением).
@@ -1321,48 +1550,100 @@ function tablePartName() {
   var i = dp.lastIndexOf('.');
   return i >= 0 ? dp.slice(i + 1) : dp;
 }
-// Уже добавленные колонки ТЧ tpNodeId: поле (последний сегмент data_path) → node-id.
-function presentColumns(tpNodeId) {
-  var map = {}, prefix = tpNodeId + '.children.';
+// colKey — ключ сопоставления колонки реквизиту. Регистронезависимый, потому что
+// таков рантайм (managedTPFieldIndexForColumn сравнивает через strings.EqualFold).
+function colKey(s) { return (s || '').trim().toLowerCase(); }
+
+// columnChildren — прямые дети kind:Колонка табличной части, в порядке YAML.
+// Порядок восстанавливаем по числовому индексу в node-id, а не по обходу
+// Object.keys(_model): модель приходит из Go-map, порядок ключей в JSON случаен.
+function columnChildren(tpNodeId) {
+  var prefix = tpNodeId + '.children.', out = [];
   Object.keys(_model).forEach(function (id) {
     if (id.indexOf(prefix) !== 0) return;
-    var inf = _model[id];
-    if ((inf.kind || '') !== 'Колонка') return;
-    var dp = inf.dataPath || '', j = dp.lastIndexOf('.');
-    var seg = j >= 0 ? dp.slice(j + 1) : dp;
-    if (seg) map[seg] = id;
+    var rest = id.slice(prefix.length);
+    if (!/^[0-9]+$/.test(rest)) return;   // только прямые дети, не внуки
+    if ((_model[id].kind || '') !== 'Колонка') return;
+    out.push({ id: id, idx: parseInt(rest, 10), info: _model[id] });
   });
-  return map;
+  out.sort(function (a, b) { return a.idx - b.idx; });
+  return out;
+}
+
+// Уже объявленные колонки ТЧ: {map: реквизит → node-id, order: [реквизит]}.
+// Сопоставление повторяет managedTPFieldIndexForColumn — data_path, затем field,
+// затем имя элемента, первое совпадение с реальным реквизитом ТЧ. Раньше
+// смотрели только data_path, поэтому колонка, объявленная ключом field, в
+// рантайме была видна, а в панели стояла без галочки (#1123).
+function presentColumns(tpNodeId, cols) {
+  var known = {};
+  (cols || []).forEach(function (c) { known[colKey(c.name)] = c.name; });
+  var map = {}, order = [];
+  columnChildren(tpNodeId).forEach(function (ch) {
+    var dp = ch.info.dataPath || '', j = dp.lastIndexOf('.');
+    var cands = [j >= 0 ? dp.slice(j + 1) : dp, ch.info.field, ch.info.name];
+    for (var k = 0; k < cands.length; k++) {
+      var name = known[colKey(cands[k])];
+      if (!name) continue;
+      if (!map[name]) { map[name] = ch.id; order.push(name); }
+      return;
+    }
+  });
+  return { map: map, order: order };
 }
 function addColumnsEditor(panel) {
   var tp = tablePartName();
   var cols = _tableParts[tp] || [];
-  var present = presentColumns(_selected);
   var hd = document.createElement('div'); hd.className = 'prop-row';
   var l = document.createElement('label'); l.textContent = 'Колонки (показывать):';
   hd.appendChild(l); panel.appendChild(hd);
   if (!cols.length) {
-    var note = document.createElement('div'); note.className = 'prop-empty';
-    note.textContent = 'Состав колонок неизвестен (метаданные ТЧ не загружены).';
-    panel.appendChild(note); return;
+    var unknown = document.createElement('div'); unknown.className = 'prop-empty';
+    unknown.textContent = 'Состав колонок неизвестен (метаданные ТЧ не загружены).';
+    panel.appendChild(unknown); return;
   }
+  var st = presentColumns(_selected, cols);
+  // Явного состава нет — рантайм показывает ВСЕ реквизиты (managedTPColumnPlan:
+  // «ничего не выбрано» = «показать всё»). Галочки в этом состоянии обязаны
+  // стоять: снятые читались как «не показывается ничего», хотя пользователь
+  // видит полную таблицу, — и подталкивали поставить одну, что на самом деле
+  // убирает все остальные колонки (#1123).
+  var explicit = st.order.length > 0;
+  var note = document.createElement('div'); note.className = 'prop-empty';
+  note.textContent = explicit
+    ? 'Состав задан явно. Снимете все галочки — вернётся показ всех колонок.'
+    : 'Состав не задан — показываются все колонки. Снимите галочку, чтобы задать состав явно.';
+  panel.appendChild(note);
   cols.forEach(function (c) {
     var row = document.createElement('div'); row.className = 'prop-row prop-check';
-    var cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!present[c.name];
-    cb.addEventListener('change', function () { toggleColumn(tp, c, cb.checked, present[c.name]); });
+    var cb = document.createElement('input'); cb.type = 'checkbox';
+    cb.checked = explicit ? !!st.map[c.name] : true;
+    cb.addEventListener('change', function () { toggleColumn(tp, cols, c, cb.checked, st, explicit); });
     var lab = document.createElement('label'); lab.textContent = c.title || c.name;
     row.appendChild(cb); row.appendChild(lab); panel.appendChild(row);
   });
 }
 // Включение колонки → insert kind:Колонка в конец ТЧ; выключение → delete её узла.
 // Выделение удерживаем на ТЧ, чтобы можно было щёлкать чекбоксы подряд.
-function toggleColumn(tp, col, on, existingId) {
+//
+// Особый случай — снятие галочки, когда явного состава ещё нет: удалять нечего,
+// а один insert оставил бы ровно одну колонку вместо «всех минус снятая».
+// Поэтому здесь материализуем весь состав без снятой колонки, и одной командой
+// insertColumns: серия запросов при обрыве на середине тихо спрятала бы
+// колонки, которых никто не снимал (#1123).
+function toggleColumn(tp, cols, col, on, st, explicit) {
   var tpId = _selected, p;
-  if (on) {
+  if (!explicit && !on) {
+    var rest = cols.filter(function (c) { return c.name !== col.name; });
+    if (!rest.length) return;   // единственная колонка: «спрятать всё» состава не имеет
+    p = editOp({ op: 'insertColumns', parent: tpId, columns: JSON.stringify(rest.map(function (c) {
+      return { name: 'Кол' + c.name, title: c.title || '', data_path: 'Объект.' + tp + '.' + c.name };
+    })) }, true);
+  } else if (on) {
     p = editOp({ op: 'insert', parent: tpId, index: 9999, kind: 'Колонка',
       name: 'Кол' + col.name, data_path: 'Объект.' + tp + '.' + col.name, title_ru: col.title || '' }, true);
-  } else if (existingId) {
-    p = editOp({ op: 'delete', node: existingId }, true);
+  } else if (st.map[col.name]) {
+    p = editOp({ op: 'delete', node: st.map[col.name] }, true);
   } else { return; }
   p.then(function (resp) { if (resp && resp.ok) selectNode(tpId); });
 }
@@ -1446,14 +1727,21 @@ func previewErrorHTML(msg string) string {
 		html.EscapeString(msg))
 }
 
+// previewTableParts — состав табличных частей объекта (имя ТЧ → реквизиты) для
+// предпросмотра. Нужен ровно там, где колонки в форме явно не объявлены: рантайм
+// в этом случае показывает все реквизиты, и предпросмотр обязан показывать то же
+// (#1123). nil — метаданные недоступны, предпросмотр честно говорит об этом.
+type previewTableParts map[string][]formScaffoldAttr
+
 // renderManagedFormPreview генерирует упрощённый HTML-предпросмотр
-// дерева элементов формы. Не использует metadata.Entity — отрисовывает
-// абстрактные input/checkbox/group на основе FormModule.Elements.
+// дерева элементов формы. Отрисовывает абстрактные input/checkbox/group на
+// основе FormModule.Elements; из metadata.Entity берёт только состав табличных
+// частей (tps) — чтобы ТЧ без явных колонок выглядела как в рантайме.
 //
 // Этого достаточно для UI-редактора чтобы оценить структуру формы;
 // полноценный рендер с реальными данными доступен после сохранения
 // через рантайм-handler /ui/.../form (этап 3).
-func renderManagedFormPreview(fm *metadata.FormModule) string {
+func renderManagedFormPreview(fm *metadata.FormModule, tps previewTableParts) string {
 	var buf bytes.Buffer
 	buf.WriteString(`<!doctype html><html><head><meta charset="utf-8"><style>
 body{margin:0;padding:18px;font-family:-apple-system,sans-serif;background:#fff;color:#334;font-size:13px}
@@ -1462,7 +1750,11 @@ h2{margin:0 0 14px;color:#1a4a80;font-size:16px;display:flex;align-items:center;
 fieldset{border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:12px}
 legend{font-weight:600;color:#475569;padding:0 6px;font-size:12px}
 .group-horizontal>.group-body{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start}
-.group-horizontal>.group-body>.fg{flex:1 1 220px;min-width:180px;margin-bottom:0}
+/* Flex, min-width и вложенные группы — как в рантайме
+   (managed-group-horizontal в internal/ui/templates_managed.go), иначе
+   предпросмотр переносил поля там, где «Предприятие» стоит в один ряд (#1575). */
+.group-horizontal>.group-body>.fg{flex:0 1 260px;min-width:180px;margin-bottom:0}
+.group-horizontal>.group-body>fieldset{flex:1 1 auto;min-width:0;margin-bottom:0}
 .tabs{margin-bottom:10px}
 .tabs-hd{display:flex;border-bottom:2px solid #e2e8f0;margin-bottom:10px;gap:2px;flex-wrap:wrap}
 .tab{padding:6px 12px;font-size:12px;color:#64748b;border-bottom:2px solid transparent;margin-bottom:-2px;cursor:pointer;user-select:none;background:none;border-left:none;border-right:none;border-top:none;font-family:inherit}
@@ -1472,11 +1764,21 @@ legend{font-weight:600;color:#475569;padding:0 6px;font-size:12px}
 .tab-page.active{display:block}
 .fg{margin-bottom:10px}
 .fg label{display:block;color:#475569;margin-bottom:4px;font-size:12px}
+/* Заданная высота (#1185) растягивает сам ввод, а не пустое место под ним —
+   зеркало правила рантайма для .form-group.ob-el-fill. */
+.fg.ob-el-fill{display:flex;flex-direction:column}
+.fg.ob-el-fill>label{flex:0 0 auto}
+.fg.ob-el-fill>input,.fg.ob-el-fill>select,.fg.ob-el-fill>textarea{flex:1 1 auto;min-height:0}
 .fg input,.fg select{width:100%;padding:6px 10px;border:1px solid #d0d7e3;border-radius:5px;font-size:13px;background:#fff}
 .req{color:#dc2626}
 .hint{display:block;color:#94a3b8;font-size:11px;margin-top:3px}
+.form-picture-preview{width:max-content;max-width:100%}
+.form-picture-image{display:block}
+.form-picture-placeholder{box-sizing:border-box;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#eef2ff;border:1px dashed #c7d2fe;border-radius:6px;padding:8px;text-align:center}
 .deco{padding:6px 0;color:#475569;font-size:13px}
 .btn{padding:6px 12px;border:1px solid #d0d7e3;background:#f8fafc;border-radius:5px;cursor:pointer;margin-right:4px;font-size:12px}
+.btn-layout{width:max-content;max-width:100%;margin-right:4px}
+.btn-layout>.btn{width:100%;height:100%;margin:0}
 .tp-prev{margin:8px 0}
 .tp-prev-hd{font-size:12px;font-weight:600;color:#475569;margin-bottom:4px}
 .tp-prev-tbl{width:100%;border-collapse:collapse;font-size:12px}
@@ -1484,6 +1786,7 @@ legend{font-weight:600;color:#475569;padding:0 6px;font-size:12px}
 .tp-prev-tbl th{background:#f8fafc;color:#475569;font-weight:600}
 .tp-prev-tbl td{height:24px}
 .unknown{background:#fef2f2;padding:8px;border-radius:6px;font-size:11px;color:#991b1b;margin:6px 0}
+` + metadata.FormEqualColumnsCSS + `
 </style></head><body>`)
 
 	title := "Карточка"
@@ -1496,7 +1799,7 @@ legend{font-weight:600;color:#475569;padding:0 6px;font-size:12px}
 
 	tabsCounter := 0
 	for _, el := range fm.Elements {
-		renderPreviewElement(&buf, el, &tabsCounter)
+		renderPreviewElement(&buf, el, &tabsCounter, tps)
 	}
 
 	// Inline-JS для переключения вкладок. Работает в iframe sandbox
@@ -1521,7 +1824,7 @@ legend{font-weight:600;color:#475569;padding:0 6px;font-size:12px}
 	return buf.String()
 }
 
-func renderPreviewElement(buf *bytes.Buffer, el *metadata.FormElement, tabsCounter *int) {
+func renderPreviewElement(buf *bytes.Buffer, el *metadata.FormElement, tabsCounter *int, tps previewTableParts) {
 	if el == nil {
 		return
 	}
@@ -1536,10 +1839,13 @@ func renderPreviewElement(buf *bytes.Buffer, el *metadata.FormElement, tabsCount
 		cls := ""
 		if el.Orientation == "horizontal" {
 			cls = ` class="group-horizontal"`
+			if el.UsesEqualColumns() {
+				cls = ` class="group-horizontal ob-equal-columns"`
+			}
 		}
-		fmt.Fprintf(buf, `<fieldset%s><legend>%s</legend><div class="group-body">`, cls, html.EscapeString(title))
+		fmt.Fprintf(buf, `<fieldset%s%s><legend>%s</legend><div class="group-body">`, cls, groupStyleAttr(el), html.EscapeString(title))
 		for _, c := range el.Children {
-			renderPreviewElement(buf, c, tabsCounter)
+			renderPreviewElement(buf, c, tabsCounter, tps)
 		}
 		buf.WriteString(`</div></fieldset>`)
 	case metadata.FormElementPages:
@@ -1548,7 +1854,7 @@ func renderPreviewElement(buf *bytes.Buffer, el *metadata.FormElement, tabsCount
 		setID := *tabsCounter
 		*tabsCounter++
 		// Заголовки вкладок.
-		fmt.Fprintf(buf, `<div class="tabs"><div class="tabs-hd" data-tabset-hdr="%d">`, setID)
+		fmt.Fprintf(buf, `<div class="tabs"%s><div class="tabs-hd" data-tabset-hdr="%d">`, layoutStyleAttr(el), setID)
 		pageIdx := 0
 		for _, p := range el.Children {
 			if p.Kind != metadata.FormElementPage {
@@ -1578,9 +1884,9 @@ func renderPreviewElement(buf *bytes.Buffer, el *metadata.FormElement, tabsCount
 			if pageIdx == 0 {
 				cls += " active"
 			}
-			fmt.Fprintf(buf, `<div class="%s">`, cls)
+			fmt.Fprintf(buf, `<div class="%s"%s>`, cls, layoutStyleAttr(p))
 			for _, c := range p.Children {
-				renderPreviewElement(buf, c, tabsCounter)
+				renderPreviewElement(buf, c, tabsCounter, tps)
 			}
 			buf.WriteString(`</div>`)
 			pageIdx++
@@ -1589,9 +1895,9 @@ func renderPreviewElement(buf *bytes.Buffer, el *metadata.FormElement, tabsCount
 	case metadata.FormElementPage:
 		// Отдельная страница вне набора СтраницыФормы (её можно бросить на холст) —
 		// рисуем именованным блоком с детьми, а не «предпросмотр не реализован».
-		fmt.Fprintf(buf, `<fieldset><legend>%s</legend>`, html.EscapeString(title))
+		fmt.Fprintf(buf, `<fieldset%s><legend>%s</legend>`, layoutStyleAttr(el), html.EscapeString(title))
 		for _, c := range el.Children {
-			renderPreviewElement(buf, c, tabsCounter)
+			renderPreviewElement(buf, c, tabsCounter, tps)
 		}
 		buf.WriteString(`</fieldset>`)
 	case metadata.FormElementField:
@@ -1603,52 +1909,99 @@ func renderPreviewElement(buf *bytes.Buffer, el *metadata.FormElement, tabsCount
 		if field == "" {
 			field = el.Name
 		}
-		fmt.Fprintf(buf, `<div class="fg"><label>%s%s</label><input type="text" placeholder="%s"`, html.EscapeString(title), req, html.EscapeString(field))
+		fmt.Fprintf(buf, `<div class="fg%s"%s><label>%s%s</label><input type="text" placeholder="%s"`,
+			layoutFillClass(el), layoutStyleAttr(el), html.EscapeString(title), req, html.EscapeString(field))
 		if el.ReadOnly {
 			buf.WriteString(` readonly`)
 		}
-		buf.WriteString(`></div>`)
+		buf.WriteString(`>`)
 		if el.Hint != "" {
-			fmt.Fprintf(buf, `<div class="hint" style="margin-top:-8px">%s</div>`, html.EscapeString(el.Hint))
+			fmt.Fprintf(buf, `<div class="hint">%s</div>`, html.EscapeString(el.Hint))
 		}
+		buf.WriteString(`</div>`)
 	case metadata.FormElementCheckbox:
 		field := lastSegment(el.DataPath)
 		if field == "" {
 			field = el.Name
 		}
-		fmt.Fprintf(buf, `<div class="fg" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="cb-%s"`, html.EscapeString(field))
+		fmt.Fprintf(buf, `<div class="fg" style="display:flex;align-items:center;gap:8px;%s"><input type="checkbox" id="cb-%s"`,
+			html.EscapeString(metadata.FormElementLayoutCSS(el)), html.EscapeString(field))
 		if el.ReadOnly {
 			buf.WriteString(` disabled`)
 		}
 		fmt.Fprintf(buf, `><label for="cb-%s" style="margin-bottom:0">%s</label></div>`, html.EscapeString(field), html.EscapeString(title))
 	case metadata.FormElementLabel:
-		fmt.Fprintf(buf, `<div class="deco">%s</div>`, html.EscapeString(title))
+		fmt.Fprintf(buf, `<div class="deco"%s>%s</div>`, layoutStyleAttr(el), html.EscapeString(title))
 	case metadata.FormElementButton:
-		fmt.Fprintf(buf, `<button type="button" class="btn">%s</button>`, html.EscapeString(title))
+		layout := metadata.FormElementLayoutCSS(el)
+		if layout == "" {
+			fmt.Fprintf(buf, `<button type="button" class="btn"%s>%s</button>`,
+				styleAttr(metadata.FormElementBackgroundCSS(el)), html.EscapeString(title))
+			break
+		}
+		fmt.Fprintf(buf, `<div class="btn-layout"%s><button type="button" class="btn"%s>%s</button></div>`,
+			styleAttr(layout), styleAttr(metadata.FormElementBackgroundCSS(el)), html.EscapeString(title))
 	case metadata.FormElementPicture:
-		fmt.Fprintf(buf, `<div class="hint">[Картинка: %s]</div>`, html.EscapeString(el.Name))
+		// width/height у картинки — размер самой картинки (см. рантайм), поэтому
+		// shrink-to-fit обёртка получает выравнивание, а настоящий img — те же
+		// max-width/max-height, что в runtime. Заглушка нужна только без asset.
+		fmt.Fprintf(buf, `<div class="hint form-picture-preview" data-preview-picture="%s"%s>`,
+			html.EscapeString(el.Name), alignStyleAttr(el))
+		if el.Picture != "" {
+			fmt.Fprintf(buf, `<img class="form-picture-image" src="/static/forms/%s" alt="%s"%s>`,
+				html.EscapeString(el.Picture), html.EscapeString(el.Name), pictureSizeStyleAttr(el))
+		} else {
+			fmt.Fprintf(buf, `<div class="form-picture-placeholder">[Картинка: %s]</div>`, html.EscapeString(el.Name))
+		}
+		buf.WriteString(`</div>`)
 	case metadata.FormElementTable, metadata.FormElementTablePart:
 		// Колонки, выбранные в конструкторе (дочерние kind:Колонка), рисуем
-		// реальной таблицей-каркасом с парой пустых строк. Без явных колонок —
-		// подсказка (в рантайме они подставятся из метаданных автоматически).
+		// реальной таблицей-каркасом с парой пустых строк.
 		var cols []*metadata.FormElement
 		for _, c := range el.Children {
 			if c != nil && c.Kind == metadata.FormElementColumn {
 				cols = append(cols, c)
 			}
 		}
-		fmt.Fprintf(buf, `<div class="tp-prev"><div class="tp-prev-hd">▦ %s</div>`, html.EscapeString(title))
-		if len(cols) == 0 {
-			buf.WriteString(`<div class="hint">Колонки не выбраны — отметьте состав в свойствах табличной части (в рантайме иначе показываются все поля).</div>`)
-		} else {
-			buf.WriteString(`<table class="tp-prev-tbl"><thead><tr>`)
+		// Без явных колонок рантайм показывает ВСЕ реквизиты табличной части
+		// (managedTPColumnPlan). Раньше предпросмотр в этом месте рисовал
+		// подсказку вместо таблицы — то есть показывал пустоту там, где
+		// пользователь увидит полный набор колонок, и подталкивал «исправить»
+		// это галочкой, которая на самом деле убирает все колонки, кроме
+		// отмеченной (#1123). Заголовки берём из метаданных ТЧ.
+		headers := make([]string, 0, len(cols))
+		fallback := ""
+		if len(cols) > 0 {
 			for _, c := range cols {
-				fmt.Fprintf(buf, `<th>%s</th>`, html.EscapeString(columnLabel(c)))
+				headers = append(headers, columnLabel(c))
+			}
+		} else if attrs := tps[previewTablePartName(el)]; len(attrs) > 0 {
+			for _, a := range attrs {
+				name := a.Title
+				if strings.TrimSpace(name) == "" {
+					name = a.Name
+				}
+				headers = append(headers, name)
+			}
+			fallback = "Состав не задан — показываются все реквизиты табличной части."
+		}
+		fmt.Fprintf(buf, `<div class="tp-prev"%s><div class="tp-prev-hd">▦ %s</div>`, layoutStyleAttr(el), html.EscapeString(title))
+		if len(headers) == 0 {
+			// Метаданные ТЧ недоступны (предпросмотр без базы или ТЧ не найдена):
+			// перечислить нечего, но соглашение назвать обязаны.
+			buf.WriteString(`<div class="hint">Состав не задан — в рантайме показываются все реквизиты табличной части.</div>`)
+		} else {
+			if fallback != "" {
+				fmt.Fprintf(buf, `<div class="hint">%s</div>`, html.EscapeString(fallback))
+			}
+			buf.WriteString(`<table class="tp-prev-tbl"><thead><tr>`)
+			for _, h := range headers {
+				fmt.Fprintf(buf, `<th>%s</th>`, html.EscapeString(h))
 			}
 			buf.WriteString(`</tr></thead><tbody>`)
 			for r := 0; r < 2; r++ {
 				buf.WriteString(`<tr>`)
-				for range cols {
+				for range headers {
 					buf.WriteString(`<td></td>`)
 				}
 				buf.WriteString(`</tr>`)
@@ -1660,12 +2013,22 @@ func renderPreviewElement(buf *bytes.Buffer, el *metadata.FormElement, tabsCount
 		// командная панель — обычно рендерится в toolbar над формой;
 		// в preview просто рисуем кнопки в ряд.
 		for _, c := range el.Children {
-			renderPreviewElement(buf, c, tabsCounter)
+			renderPreviewElement(buf, c, tabsCounter, tps)
 		}
 	default:
 		fmt.Fprintf(buf, `<div class="unknown">Элемент «%s» типа «%s»: предпросмотр не реализован.</div>`,
 			html.EscapeString(el.Name), html.EscapeString(string(el.Kind)))
 	}
+}
+
+// previewTablePartName — имя табличной части элемента формы: последний сегмент
+// data_path ("Объект.Товары" → "Товары"), иначе имя элемента. Тот же вывод, что
+// у tablePartName() в клиенте конструктора, — ключ для previewTableParts.
+func previewTablePartName(el *metadata.FormElement) string {
+	if dp := strings.TrimSpace(el.DataPath); dp != "" {
+		return lastSegment(dp)
+	}
+	return strings.TrimSpace(el.Name)
 }
 
 // lastSegment — последний компонент пути "Объект.Контрагент" → "Контрагент".

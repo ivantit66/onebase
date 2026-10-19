@@ -19,6 +19,7 @@ var (
 	errSubmitRowAccessDenied = errors.New("submit row access denied")
 	errSubmitFormHook        = errors.New("submit form hook failed")
 	errCreateRowAccessDenied = errors.New("create row access denied")
+	errCloseResultUnreadable = errors.New("close save result is unreadable")
 )
 
 func (s *Server) rowDecision(ctx context.Context, entity *metadata.Entity, op string) (access.Decision, error) {
@@ -29,7 +30,7 @@ func (s *Server) rowDecision(ctx context.Context, entity *metadata.Entity, op st
 }
 
 func (s *Server) rowDecisionFor(ctx context.Context, kind, name, op string, meta *metadata.Entity) (access.Decision, error) {
-	return access.DecideWithLookup(auth.UserFromContext(ctx), kind, name, op, meta, s.reg)
+	return access.DecideWithContext(ctx, auth.UserFromContext(ctx), kind, name, op, meta, access.RuntimeContext(s.reg, s.store))
 }
 
 func (s *Server) applyRowFilter(w http.ResponseWriter, r *http.Request, entity *metadata.Entity, op string, params storage.ListParams) (storage.ListParams, bool) {
@@ -51,11 +52,26 @@ func (s *Server) rowAllowed(w http.ResponseWriter, r *http.Request, entity *meta
 }
 
 func (s *Server) rowAllowedContext(ctx context.Context, entity *metadata.Entity, op string, row map[string]any) bool {
+	allowed, err := s.rowAllowedContextResult(ctx, entity, op, row)
+	return err == nil && allowed
+}
+
+// rowAllowedContextResult preserves the distinction between a proven policy
+// denial and a technical failure while resolving a reference predicate. Close
+// intent may destroy a form only for the former; treating an unavailable
+// referenced row lookup as false would lose unsaved client edits.
+func (s *Server) rowAllowedContextResult(ctx context.Context, entity *metadata.Entity, op string, row map[string]any) (bool, error) {
 	dec, err := s.rowDecision(ctx, entity, op)
-	if err != nil || !dec.Allowed {
-		return false
+	if err != nil {
+		return false, err
 	}
-	return dec.Unrestricted || s.matchRowPredicate(ctx, row, dec.Predicate)
+	if !dec.Allowed {
+		return false, nil
+	}
+	if dec.Unrestricted {
+		return true, nil
+	}
+	return s.matchRowPredicateResult(ctx, row, dec.Predicate)
 }
 
 func (s *Server) rowAllowedFor(w http.ResponseWriter, r *http.Request, kind, name, op string, meta *metadata.Entity, row map[string]any) bool {
@@ -156,15 +172,26 @@ func (s *Server) ownerEntity(ownerKind, ownerName string) *metadata.Entity {
 }
 
 func (s *Server) rowAllowsID(ctx context.Context, entity *metadata.Entity, op string, id uuid.UUID) bool {
+	allowed, err := s.rowAllowsIDResult(ctx, entity, op, id)
+	return err == nil && allowed
+}
+
+func (s *Server) rowAllowsIDResult(ctx context.Context, entity *metadata.Entity, op string, id uuid.UUID) (bool, error) {
 	dec, err := s.rowDecision(ctx, entity, op)
-	if err != nil || !dec.Allowed {
-		return false
+	if err != nil {
+		return false, err
+	}
+	if !dec.Allowed {
+		return false, nil
 	}
 	if dec.Unrestricted {
-		return true
+		return true, nil
 	}
 	row, err := s.store.GetByID(ctx, entity.Name, id, entity)
-	return err == nil && s.matchRowPredicate(ctx, row, dec.Predicate)
+	if err != nil {
+		return false, err
+	}
+	return s.matchRowPredicateResult(ctx, row, dec.Predicate)
 }
 
 func (s *Server) rowAccessRestricted(ctx context.Context, entity *metadata.Entity, op string) bool {
@@ -198,13 +225,13 @@ func (s *Server) rowFilterFor(ctx context.Context, entity *metadata.Entity, op s
 }
 
 func (s *Server) queryRowFilters(ctx context.Context) (map[query.SourceRef]*storage.Predicate, error) {
-	return access.QueryRowFiltersWithLookup(
+	return access.QueryRowFiltersWithContext(ctx,
 		auth.UserFromContext(ctx),
 		s.reg.Entities(),
 		s.reg.Registers(),
 		s.reg.InfoRegisters(),
 		s.reg.AccountRegisters(),
-		s.reg,
+		access.RuntimeContext(s.reg, s.store),
 	)
 }
 
@@ -250,13 +277,31 @@ func (s *Server) deniedQuerySource(ctx context.Context, sources []query.SourceRe
 }
 
 func (s *Server) matchRowPredicate(ctx context.Context, row map[string]any, p *storage.Predicate) bool {
-	return storage.MatchPredicateWithRefs(row, p, func(entity *metadata.Entity, id uuid.UUID) (map[string]any, bool) {
+	matched, err := s.matchRowPredicateResult(ctx, row, p)
+	return err == nil && matched
+}
+
+func (s *Server) matchRowPredicateResult(ctx context.Context, row map[string]any, p *storage.Predicate) (bool, error) {
+	var lookupErr error
+	matched := storage.MatchPredicateWithRefs(row, p, func(entity *metadata.Entity, id uuid.UUID) (map[string]any, bool) {
 		if entity == nil {
 			return nil, false
 		}
 		refRow, err := s.store.GetByID(ctx, entity.Name, id, entity)
-		return refRow, err == nil
+		if err != nil {
+			// A missing referenced row makes SQL EXISTS false. Any other storage
+			// error is indeterminate and must not be collapsed into policy denial.
+			if !storage.IsNotFound(err) && lookupErr == nil {
+				lookupErr = err
+			}
+			return nil, false
+		}
+		return refRow, true
 	})
+	if lookupErr != nil {
+		return false, lookupErr
+	}
+	return matched, nil
 }
 
 func (s *Server) autoFillRowAccessFields(ctx context.Context, entity *metadata.Entity, op string, fields map[string]any) error {

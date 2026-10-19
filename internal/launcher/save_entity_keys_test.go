@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Конфигуратор сохраняет объект round-trip'ом через saveEntity: Unmarshal →
@@ -96,6 +98,59 @@ func TestSaveEntity_CoversAllRawKeys(t *testing.T) {
 	}
 }
 
+func TestSaveEntity_PreservesOrderByForms(t *testing.T) {
+	tests := []struct {
+		name       string
+		orderByYML string
+		wantKind   yaml.Kind
+		wantValues []string
+	}{
+		{
+			name:       "scalar",
+			orderByYML: "order_by: ПорядокВОтчётах\n",
+			wantKind:   yaml.ScalarNode,
+			wantValues: []string{"ПорядокВОтчётах"},
+		},
+		{
+			name:       "sequence",
+			orderByYML: "order_by: [ПорядокВОтчётах, Наименование desc]\n",
+			wantKind:   yaml.SequenceNode,
+			wantValues: []string{"ПорядокВОтчётах", "Наименование desc"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := "name: Направление\n" + tt.orderByYML + "fields: []\n"
+			var entity saveEntity
+			if err := yaml.Unmarshal([]byte(source), &entity); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			encoded, err := yaml.Marshal(&entity)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			var roundTrip saveEntity
+			if err := yaml.Unmarshal(encoded, &roundTrip); err != nil {
+				t.Fatalf("повторный Unmarshal: %v", err)
+			}
+			if roundTrip.OrderBy.Kind != tt.wantKind {
+				t.Fatalf("kind order_by = %v, want %v; YAML:\n%s", roundTrip.OrderBy.Kind, tt.wantKind, encoded)
+			}
+			var got []string
+			if roundTrip.OrderBy.Kind == yaml.ScalarNode {
+				got = []string{roundTrip.OrderBy.Value}
+			} else {
+				for _, node := range roundTrip.OrderBy.Content {
+					got = append(got, node.Value)
+				}
+			}
+			if !reflect.DeepEqual(got, tt.wantValues) {
+				t.Fatalf("order_by = %v, want %v; YAML:\n%s", got, tt.wantValues, encoded)
+			}
+		})
+	}
+}
+
 // Список исключений не должен превращаться в свалку: запись про ключ, которого
 // в rawEntity уже нет, вводит в заблуждение.
 func TestSaveEntityExempt_IsAlive(t *testing.T) {
@@ -116,6 +171,87 @@ func TestSaveEntityExempt_IsAlive(t *testing.T) {
 	sort.Strings(stale)
 	if len(stale) > 0 {
 		t.Fatalf("протухшие записи в saveEntityExempt (%d):\n  %s", len(stale), strings.Join(stale, "\n  "))
+	}
+}
+
+// saveFieldKnownLoss — ключи rawField, которых в saveField нет и которые
+// поэтому теряются при сохранении объекта из конфигуратора. Ключ карты — имя
+// yaml-тега, значение — что именно про эту потерю известно.
+//
+// Это НЕ «терять разрешено». Список существует, чтобы потеря была названа и
+// сосчитана, а новый ключ не уехал в ту же дыру молча: добавили ключ в
+// rawField — либо добавьте его в saveField, либо впишите сюда, чем эта потеря
+// обоснована и куда заведена.
+//
+// Сейчас список пуст: `label` и `required` были в нём последними, их закрыл
+// перенос в ensureFieldIDs (#1207). Пустой список — не повод удалить механизм:
+// он и сторож TestSaveField_CoversAllRawKeys ловят следующий ключ, который
+// добавят в rawField.
+var saveFieldKnownLoss = map[string]string{}
+
+// Полнота ключей ОДНОГО РЕКВИЗИТА. Сторож верхнего уровня
+// (TestSaveEntity_CoversAllRawKeys) сверяет только ключи rawEntity и видит
+// `fields` целиком — потеря ключа ВНУТРИ реквизита для него невидима. Так
+// конфигуратор молча стирал `pii`: файл оставался корректным, `onebase check`
+// молчал, а fail-closed реквизит просто открывался всем ролям.
+func TestSaveField_CoversAllRawKeys(t *testing.T) {
+	raw := yamlTagsOfStruct(t, "../metadata/yaml.go", "rawField")
+	save := yamlTagsOfStruct(t, "configurator_types.go", "saveField")
+
+	have := make(map[string]bool, len(save))
+	for _, k := range save {
+		have[k] = true
+	}
+	var missing []string
+	for _, k := range raw {
+		if have[k] {
+			continue
+		}
+		if _, ok := saveFieldKnownLoss[k]; ok {
+			continue
+		}
+		missing = append(missing, k)
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Fatalf("saveField не знает ключи rawField (%d): %s\n\n"+
+			"При сохранении объекта из конфигуратора они молча пропадут из YAML.\n"+
+			"Добавьте их в saveField (и перенос из прежнего состояния файла — в\n"+
+			"carryFieldKeys, как сделано для id, title, label, required, default и\n"+
+			"pii) либо впишите в saveFieldKnownLoss с описанием потери.",
+			len(missing), strings.Join(missing, ", "))
+	}
+}
+
+// Список известных потерь не должен превращаться в свалку: запись про ключ,
+// которого в rawField уже нет или который в saveField уже добавлен, вводит в
+// заблуждение сильнее, чем её отсутствие.
+func TestSaveFieldKnownLoss_IsAlive(t *testing.T) {
+	raw := yamlTagsOfStruct(t, "../metadata/yaml.go", "rawField")
+	save := yamlTagsOfStruct(t, "configurator_types.go", "saveField")
+	known := make(map[string]bool, len(raw))
+	for _, k := range raw {
+		known[k] = true
+	}
+	covered := make(map[string]bool, len(save))
+	for _, k := range save {
+		covered[k] = true
+	}
+	var stale []string
+	for k, reason := range saveFieldKnownLoss {
+		if !known[k] {
+			stale = append(stale, k+" — такого ключа в rawField нет")
+		}
+		if covered[k] {
+			stale = append(stale, k+" — ключ уже есть в saveField, потери нет")
+		}
+		if strings.TrimSpace(reason) == "" {
+			stale = append(stale, k+" — запись без описания")
+		}
+	}
+	sort.Strings(stale)
+	if len(stale) > 0 {
+		t.Fatalf("протухшие записи в saveFieldKnownLoss (%d):\n  %s", len(stale), strings.Join(stale, "\n  "))
 	}
 }
 

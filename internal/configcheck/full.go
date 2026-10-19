@@ -9,6 +9,7 @@ import (
 	"github.com/ivantit66/onebase/internal/auth"
 	"github.com/ivantit66/onebase/internal/project"
 	"github.com/ivantit66/onebase/internal/storage"
+	"github.com/ivantit66/onebase/internal/version"
 )
 
 // Options tunes the complete configuration validation.
@@ -29,7 +30,7 @@ func RunFull(dir string) Result {
 // RunFullWithOptions is RunFull plus opt-in advisory lint warnings.
 func RunFullWithOptions(dir string, opts Options) Result {
 	dirIssues, dirWarnings := CheckDir(dir)
-	issues := dirIssues
+	issues := append(dirIssues, CheckFormChoiceFilterYAML(dir)...)
 	warnings := dirWarnings
 	if opts.Lint {
 		warnings = append(warnings, CheckLintYAML(dir)...)
@@ -40,28 +41,52 @@ func RunFullWithOptions(dir string, opts Options) Result {
 	}
 	if appCfgErr == nil {
 		warnings = append(warnings, deprecatedAppConfigWarnings(appCfg)...)
+		if warning := version.MinimumWarning(appCfg.MinEngineVersion); warning != nil {
+			warnings = append(warnings, Issue{
+				File: "config/app.yaml", Code: "config.min-engine-version",
+				Message:      warning.Error(),
+				SuggestedFix: "Проверьте min_engine_version и версию движка (onebase version).",
+			})
+		}
 	}
 
 	if proj, err := project.Load(dir); err == nil {
 		strictLexicalScope := appCfgErr == nil && appCfg != nil && appCfg.DSL != nil && appCfg.DSL.StrictLexicalScope
 		issues = append(issues, CheckQueries(proj)...)
+		issues = append(issues, CheckWidgetRefreshOn(proj)...)
+		issues = append(issues, CheckWidgetSource(proj)...)
+		issues = append(issues, CheckWidgetFilters(proj)...)
 		issues = append(issues, CheckReportComposition(proj)...)
 		issues = append(issues, CheckJournalConditional(proj)...)
 		issues = append(issues, CheckFormConditional(proj)...)
 		issues = append(issues, CheckFormElementKind(proj)...)
+		issues = append(issues, CheckFormChoiceFilter(proj)...)
+		issues = append(issues, CheckFormChoiceContext(proj)...)
+		issues = append(issues, CheckFormAdminOnly(proj)...)
+		issues = append(issues, CheckFormChoiceFolders(proj)...)
 		issues = append(issues, CheckFormVirtualColumns(proj)...)
+		issues = append(issues, CheckFormTablePartColumns(proj)...)
 		issues = append(issues, CheckReportOutputFormat(proj)...)
 		roles, rolesErr := auth.LoadRolesYAML(filepath.Join(dir, "roles"))
 		if rolesErr != nil && !AlreadyReported(issues, rolesErr.Error()) {
 			issues = append(issues, Issue{Message: "roles: " + rolesErr.Error()})
 		}
 		issues = append(issues, CheckCrossRefs(proj, roles)...)
+		issues = append(issues, CheckUserCardPolicies(dir, proj, roles)...)
 		warnings = append(warnings, CheckLayoutWarnings(proj)...)
 		warnings = append(warnings, CheckFormFieldFormat(proj)...)
+		warnings = append(warnings, CheckFormEventDispatch(proj)...)
 		warnings = append(warnings, CheckFormMask(proj)...)
+		warnings = append(warnings, CheckFormLayout(proj)...)
+		warnings = append(warnings, CheckFormKeyPlacement(proj)...)
+		warnings = append(warnings, CheckFormProps(proj)...)
+		warnings = append(warnings, CheckFormReadonlyConflict(proj)...)
+		warnings = append(warnings, CheckFormBackground(proj)...)
+		warnings = append(warnings, CheckFormOKPost(proj)...)
 		warnings = append(warnings, CheckFormPlacement(dir, proj)...)
 		warnings = append(warnings, CheckSecretHygiene(appCfg, proj)...)
 		warnings = append(warnings, CheckStages(proj)...)
+		warnings = append(warnings, CheckWidgetRefreshOnPublisherWarnings(proj)...)
 		issues = append(issues, CheckHTTPServices(proj)...)
 		warnings = append(warnings, CheckHTTPServiceAuthWarnings(proj)...)
 		issues = append(issues, CheckExchangePlans(proj)...)
@@ -166,6 +191,9 @@ func BuildSchemaDB(proj *project.Project) (*storage.DB, func(), error) {
 	}
 	closer := func() { db.Close(); oblog.RemoveQuiet("configcheck", path) }
 	steps := []func() error{
+		// System user references need the same auth schema as a running base.
+		// Create it before application tables, without seeding any user accounts.
+		func() error { return auth.NewRepo(db).EnsureSchema(ctx) },
 		func() error { return db.Migrate(ctx, proj.Entities) },
 		func() error { return db.MigrateRegisters(ctx, proj.Registers) },
 		func() error { return db.MigrateInfoRegisters(ctx, proj.InfoRegisters) },

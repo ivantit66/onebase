@@ -120,6 +120,12 @@ jobs:
           ldflags="-s -w"
           ldflags="$ldflags -X github.com/ivantit66/onebase/internal/version.Build=$BUILD_VER"
           ldflags="$ldflags -X github.com/ivantit66/onebase/internal/selfupdate.PublicKey=$RELEASE_PUBLIC_KEY"
+          # Жёсткий режим: релиз без .sig отвергается (#1195). Пока он был
+          # мягким, подпись обходилась её отсутствием — обладателю доступа к
+          # релизам не нужно подделывать подпись, достаточно не класть её.
+          # Без вшитого открытого ключа флаг не меняет ничего: проверка
+          # выключена целиком, и форк без ключей не задет.
+          ldflags="$ldflags -X github.com/ivantit66/onebase/internal/selfupdate.RequireSignature=1"
           go build "-ldflags=$ldflags" -o onebase${{ matrix.ext }} ./cmd/onebase
 
       # Гейт по goarch, а не только по goos: шаг требует CGO_ENABLED=1, то есть
@@ -137,6 +143,10 @@ jobs:
           $ldflags = "-s -w -H windowsgui"
           $ldflags += " -X github.com/ivantit66/onebase/internal/version.Build=$env:BUILD_VER"
           $ldflags += " -X github.com/ivantit66/onebase/internal/selfupdate.PublicKey=$env:RELEASE_PUBLIC_KEY"
+          # Тот же жёсткий режим, что и в CLI-бинаре (#1195). Оба обязаны идти
+          # с ним: на Windows лаунчер может быть запущен из любого из двух, и
+          # мягкий GUI-бинарь оставил бы дыру открытой на основной платформе.
+          $ldflags += " -X github.com/ivantit66/onebase/internal/selfupdate.RequireSignature=1"
           go build -tags webview "-ldflags=$ldflags" -o onebase-gui.exe ./cmd/onebase
 
       - name: Package (Windows)
@@ -306,11 +316,11 @@ jobs:
       - name: Sign checksums
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
-          # Открытый ключ передаётся не для подписи, а для сверки половин пары:
-          # приватный живёт в секретах, открытый в переменных, и перепутать их
-          # при ротации ничего не мешало. Рассинхрон давал зелёный релиз,
-          # который не принимает ни один установленный бинарь (#967).
-          RELEASE_PUBLIC_KEY: ${{ vars.RELEASE_PUBLIC_KEY }}
+          # Обычно подпись сверяется с тем же ключом, который вшит в бинарь.
+          # При плановой ротации переходный бинарь уже несёт новый ключ, но его
+          # архив обязан быть подписан старым: временная переменная отвязывает
+          # pair-check от ключа сборки без поддержки двух ключей в runtime.
+          RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.RELEASE_SIGNING_PUBLIC_KEY || vars.RELEASE_PUBLIC_KEY }}
         run: |
           set -euo pipefail
           if [ -z "${RELEASE_SIGNING_KEY:-}" ]; then
@@ -323,7 +333,7 @@ jobs:
             echo "::error::в dist нет ни одного файла .sha256 — подписывать нечего"
             exit 1
           fi
-          go run ./tools/relsign sign "${sums[@]}"
+          go run ./tools/relsign sign -pub "$RELEASE_SIGNING_PUBLIC_KEY" "${sums[@]}"
           ls -1 dist/*.sig
 
       - name: Compute commit subject
@@ -406,6 +416,15 @@ jobs:
       contents: write   # публикация релиза
     steps:
       - uses: actions/checkout@v4
+        with:
+          # releasecheck читает полный first-parent диапазон и предыдущий
+          # стабильный тег; shallow checkout теряет как раз начало диапазона.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+          cache: true
 
       - name: Resolve release body
         id: release_body
@@ -422,6 +441,7 @@ jobs:
           fi
           if [[ -f "$notes" ]]; then
             echo "path=$notes" >> "$GITHUB_OUTPUT"
+            echo "custom=true" >> "$GITHUB_OUTPUT"
           else
             cat > release-default.md <<'EOF'
           <!-- summary: Обновление OneBase с бинарными сборками для Windows, Linux и macOS. -->
@@ -455,7 +475,35 @@ jobs:
           - Для SQLite-режима дополнительных зависимостей нет
           EOF
             echo "path=release-default.md" >> "$GITHUB_OUTPUT"
+            # У дефолтного тела generate_release_notes ниже строит полный
+            # список сам; репозиторную проверку применяем только к своей заметке.
+            echo "custom=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Check release note completeness
+        if: steps.release_body.outputs.custom == 'true'
+        shell: bash
+        env:
+          NOTES_PATH: ${{ steps.release_body.outputs.path }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          stable_tags=$(git tag --merged "${RELEASE_TAG}^" --list 'v[0-9]*' --sort=-version:refname)
+          previous_tag=""
+          while IFS= read -r tag; do
+            if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              previous_tag=$tag
+              break
+            fi
+          done <<< "$stable_tags"
+          if [[ -z "$previous_tag" ]]; then
+            echo "::error::не найден предыдущий стабильный тег перед ${RELEASE_TAG}"
+            exit 1
+          fi
+          go run ./tools/releasecheck \
+            -from "$previous_tag" \
+            -to "$RELEASE_TAG" \
+            -notes "$NOTES_PATH"
 
       - uses: actions/download-artifact@v4
         with:
@@ -470,19 +518,14 @@ jobs:
       #
       # Без секрета шаг не падает, а пропускается: форк, у которого ключа нет,
       # обязан публиковать релизы как раньше.
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: '.go-version'
-          cache: true
-
       - name: Sign checksums
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
-          # Открытый ключ передаётся не для подписи, а для сверки половин пары:
-          # приватный живёт в секретах, открытый в переменных, и перепутать их
-          # при ротации ничего не мешало. Рассинхрон давал зелёный релиз,
-          # который не принимает ни один установленный бинарь (#967).
-          RELEASE_PUBLIC_KEY: ${{ vars.RELEASE_PUBLIC_KEY }}
+          # Обычно подпись сверяется с тем же ключом, который вшит в бинарь.
+          # При плановой ротации переходный бинарь уже несёт новый ключ, но его
+          # архив обязан быть подписан старым: временная переменная отвязывает
+          # pair-check от ключа сборки без поддержки двух ключей в runtime.
+          RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.RELEASE_SIGNING_PUBLIC_KEY || vars.RELEASE_PUBLIC_KEY }}
         run: |
           set -euo pipefail
           if [ -z "${RELEASE_SIGNING_KEY:-}" ]; then
@@ -495,7 +538,7 @@ jobs:
             echo "::error::в dist нет ни одного файла .sha256 — подписывать нечего"
             exit 1
           fi
-          go run ./tools/relsign sign "${sums[@]}"
+          go run ./tools/relsign sign -pub "$RELEASE_SIGNING_PUBLIC_KEY" "${sums[@]}"
           ls -1 dist/*.sig
 
       - name: Create Release

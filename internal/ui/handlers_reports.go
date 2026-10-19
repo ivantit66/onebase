@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -20,6 +19,7 @@ import (
 	reportpkg "github.com/ivantit66/onebase/internal/report"
 	"github.com/ivantit66/onebase/internal/report/compose"
 	"github.com/ivantit66/onebase/internal/runtime"
+	"github.com/ivantit66/onebase/internal/scheduler"
 	"github.com/ivantit66/onebase/internal/storage"
 )
 
@@ -37,7 +37,12 @@ func (s *Server) reportForm(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, s.errText(r, err), 400)
 			return
 		}
-		s.runReport(w, r, rep, reportParamValuesFromRequest(r, rep))
+		values, verr := reportParamValuesFromRequest(r, rep, s.constantResolver(r.Context()))
+		if verr != nil {
+			s.serverError(w, r, verr)
+			return
+		}
+		s.runReport(w, r, rep, values)
 		return
 	}
 	user := currentUserLogin(r)
@@ -59,10 +64,17 @@ func (s *Server) reportForm(w http.ResponseWriter, r *http.Request) {
 		s.runReport(w, r, rep, map[string]any{})
 		return
 	}
+	// Умолчания видны сразу при открытии отчёта: поле «На дату» заполнено, и его
+	// можно изменить до первого построения.
+	defaults, derr := reportParamDefaults(rep.Params, s.constantResolver(r.Context()))
+	if derr != nil {
+		s.serverError(w, r, derr)
+		return
+	}
 	s.render(w, r, "page-report", map[string]any{
 		"Report":         rep,
-		"ParamValues":    map[string]any{},
-		"ReportParams":   s.buildReportParams(r.Context(), s.resolveLang(r), rep.Params, map[string]any{}),
+		"ParamValues":    defaults,
+		"ReportParams":   s.buildReportParams(r.Context(), s.resolveLang(r), rep.Params, defaults),
 		"ActiveVariant":  r.FormValue("__variant"),
 		"ReportPresets":  presets,
 		"ActivePresetID": activePresetID,
@@ -83,20 +95,94 @@ func (s *Server) reportRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, s.errText(r, err), 400)
 		return
 	}
-	s.runReport(w, r, rep, reportParamValuesFromRequest(r, rep))
+	values, verr := reportParamValuesFromRequest(r, rep, s.constantResolver(r.Context()))
+	if verr != nil {
+		s.serverError(w, r, verr)
+		return
+	}
+	s.runReport(w, r, rep, values)
 }
 
-func reportParamValuesFromRequest(r *http.Request, rep *reportpkg.Report) map[string]any {
+// constantResolver — источник значений констант для подстановки
+// {{constant:Имя}} в умолчаниях параметров. Один на все пути отчёта, чтобы
+// экран, экспорт и REST не разошлись в том, что считают значением настройки.
+func (s *Server) constantResolver(ctx context.Context) scheduler.ConstantResolver {
+	return scheduler.NewConstantResolver(ctx, s.store, s.reg)
+}
+
+// reportParamDefault возвращает значение параметра по умолчанию с раскрытыми
+// подстановками ({{today}} и прочие) — той же грамматикой, что у виджетов и
+// регламентных заданий. Пусто, если умолчание не задано.
+func reportParamDefault(p reportpkg.Param, res scheduler.ConstantResolver) (string, error) {
+	return scheduler.ResolveParamTemplateText(p.Default, p.Type, res)
+}
+
+// reportParamDefaults — значения параметров для ПЕРВОГО показа формы, пока
+// пользователь ничего не выбирал. Без них поле с умолчанием стоит пустым до
+// первого построения, и умолчание видно только в форме на странице результата —
+// то есть ровно там, где оно уже не нужно.
+func reportParamDefaults(params []reportpkg.Param, res scheduler.ConstantResolver) (map[string]any, error) {
+	values := make(map[string]any, len(params))
+	for _, p := range params {
+		val, err := reportParamDefault(p, res)
+		if err != nil {
+			return nil, err
+		}
+		if val == "" {
+			continue
+		}
+		if p.Type == "bool" {
+			// Строка "false" в шаблоне истинна — флажок встал бы вопреки
+			// умолчанию, поэтому приводим к настоящему bool.
+			values[p.Name] = parseParamValue(val, "bool")
+			continue
+		}
+		values[p.Name] = val
+	}
+	return values, nil
+}
+
+// reportParamPresenceKey — имя скрытого поля-спутника флажка на форме
+// параметров. См. reportParamRequestValue.
+func reportParamPresenceKey(name string) string { return "__has." + name }
+
+// reportParamRequestValue возвращает значение параметра из запроса и признак
+// того, что параметр в запросе БЫЛ. Признак важнее значения: пустая строка от
+// очищенного поля — это выбор пользователя, и умолчание её не перебивает;
+// отсутствие ключа означает «не задавал», и только там подставляется умолчание.
+//
+// У флажка отсутствия ключа недостаточно: снятый checkbox браузер не отправляет
+// вовсе, поэтому форма шлёт рядом с ним скрытый маркер `__has.<имя>`. Без
+// маркера «снял галку» неотличимо от «не задавал», и умолчание true возвращало
+// бы галку на место сразу после того, как её сняли.
+func reportParamRequestValue(r *http.Request, p reportpkg.Param) (string, bool) {
+	if val, ok := requestFormValue(r, p.Name); ok {
+		return val, true
+	}
+	if _, ok := requestFormValue(r, reportParamPresenceKey(p.Name)); ok {
+		return "", true
+	}
+	return "", false
+}
+
+func reportParamValuesFromRequest(r *http.Request, rep *reportpkg.Report, res scheduler.ConstantResolver) (map[string]any, error) {
 	paramValues := make(map[string]any, len(rep.Params))
 	for _, p := range rep.Params {
-		val := r.FormValue(p.Name)
+		val, ok := reportParamRequestValue(r, p)
+		if !ok {
+			d, err := reportParamDefault(p, res)
+			if err != nil {
+				return nil, err
+			}
+			val = d
+		}
 		if val == "" {
 			paramValues[p.Name] = nil
 		} else {
 			paramValues[p.Name] = val
 		}
 	}
-	return paramValues
+	return paramValues, nil
 }
 
 func (s *Server) getReport(w http.ResponseWriter, r *http.Request) *reportpkg.Report {
@@ -139,24 +225,31 @@ func (s *Server) runReport(w http.ResponseWriter, r *http.Request, rep *reportpk
 	}
 	comp := effectiveComposition(rep, settings)
 	settingsJSON := reportSettingsPanelJSON(rep, settings)
-	// Build query params: convert date strings to time.Time for proper PG type inference.
+	// Restore query parameter types after the form's text representation:
+	// SQLite compares text and numbers differently; PostgreSQL needs type hints.
 	// Keep paramValues unchanged so the form repopulates with the original strings.
 	queryValues := make(map[string]any, len(paramValues))
 	for k, v := range paramValues {
 		queryValues[k] = v
 	}
 	for _, p := range rep.Params {
-		switch p.Type {
-		case "date":
-			if str, ok := queryValues[p.Name].(string); ok && str != "" {
-				if t, err2 := time.ParseInLocation("2006-01-02", str, time.Local); err2 == nil {
-					queryValues[p.Name] = t
-				}
+		// Числовые параметры констант сохраняют принятый тип и на экране:
+		// строка меняет сравнение на SQLite и не сравнима с числом на PG.
+		if p.Type == "number" {
+			if str, ok := queryValues[p.Name].(string); ok {
+				queryValues[p.Name] = parseParamValue(str, "number")
 			}
-		case "bool":
-			str, _ := queryValues[p.Name].(string)
-			queryValues[p.Name] = parseParamValue(str, "bool")
+			continue
 		}
+		str, _ := queryValues[p.Name].(string)
+		v, perr := reportpkg.ParseParamValue(str, p, reportpkg.ParamParseForm)
+		if perr != nil {
+			// Экран прощает негодное значение: поле остаётся строкой, человек
+			// правит его и строит снова. API на том же значении отвечает 400 —
+			// расхождение намеренное, см. report.ParamParseMode.
+			continue
+		}
+		queryValues[p.Name] = v
 	}
 	compiled, err := s.compileQueryWithRowAccess(opCtx, rep.Query, queryValues)
 	reportParams := s.buildReportParams(opCtx, s.resolveLang(r), rep.Params, paramValues)
@@ -446,16 +539,18 @@ func applyResolvedLabels(rows []map[string]any, uuidToLabel map[string]string, s
 
 // reportParamUI is a template-friendly wrapper around a report parameter.
 type reportParamUI struct {
-	Name    string
-	Label   string
-	Type    string // raw type string
-	IsDate  bool
-	IsNum   bool
-	IsBool  bool
-	IsSel   bool
-	IsRef   bool
-	Options []string         // for IsSel
-	Opts    []map[string]any // for IsRef: [{id, _label}]
+	Name   string
+	Label  string
+	Type   string // raw type string
+	IsDate bool
+	// IsDateTime — тип datetime: поле принимает время суток, а не только дату.
+	IsDateTime bool
+	IsNum      bool
+	IsBool     bool
+	IsSel      bool
+	IsRef      bool
+	Options    []string         // for IsSel
+	Opts       []map[string]any // for IsRef: [{id, _label}]
 	// RefEntity — имя сущности (для IsRef), используется на UI для лупы
 	// в picker'е (открытие карточки через /ui/_ref-open/<entity>/<id>).
 	RefEntity string
@@ -473,6 +568,8 @@ func (s *Server) buildReportParams(ctx context.Context, lang string, params []re
 		switch {
 		case p.Type == "date":
 			ui.IsDate = true
+		case p.Type == "datetime":
+			ui.IsDateTime = true
 		case p.Type == "number":
 			ui.IsNum = true
 		case p.Type == "bool":
@@ -561,23 +658,29 @@ func (s *Server) reportExportRowsWithContext(ctx context.Context, r *http.Reques
 	settings := s.reportSettingsForRequest(r, rep).Settings
 	comp := effectiveComposition(rep, settings)
 	paramValues := make(map[string]any, len(rep.Params))
+	// Ссылка выгрузки — снимок формы: reportParamQuery выкладывает в неё ВСЕ
+	// объявленные параметры, включая пустые. Поэтому здесь работает то же
+	// правило, что и на экране: умолчание подставляется, только если параметра в
+	// ссылке нет вовсе (прямой вызов /export/excel без параметров).
+	qs := r.URL.Query()
 	for _, p := range rep.Params {
-		val := r.URL.Query().Get(p.Name)
-		if p.Type == "bool" {
-			paramValues[p.Name] = parseParamValue(val, "bool")
+		val := qs.Get(p.Name)
+		if _, ok := qs[p.Name]; !ok {
+			d, derr := reportParamDefault(p, s.constantResolver(ctx))
+			if derr != nil {
+				return nil, nil, derr
+			}
+			val = d
+		}
+		if p.Type == "number" {
+			paramValues[p.Name] = parseParamValue(val, "number")
 			continue
 		}
-		if val == "" {
-			paramValues[p.Name] = nil
-		} else if p.Type == "date" {
-			if t, perr := time.ParseInLocation("2006-01-02", val, time.Local); perr == nil {
-				paramValues[p.Name] = t
-			} else {
-				paramValues[p.Name] = val
-			}
-		} else {
-			paramValues[p.Name] = val
+		v, perr := reportpkg.ParseParamValue(val, p, reportpkg.ParamParseForm)
+		if perr != nil {
+			v = val // как на экране: негодное значение остаётся строкой
 		}
+		paramValues[p.Name] = v
 	}
 	compiled, err := s.compileQueryWithRowAccess(ctx, rep.Query, paramValues)
 	if err != nil {

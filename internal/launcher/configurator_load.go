@@ -136,6 +136,7 @@ func (h *handler) loadCfgData(ctx context.Context, b *Base, tab string, lang ...
 			PostCaption:        e.PostCaption,
 			PostAndCloseHidden: e.PostAndCloseHidden,
 			Hierarchical:       e.Hierarchical,
+			Owner:              e.Owner,
 			BasedOn:            append([]string(nil), e.BasedOn...),
 			Source:             sources[strings.ToLower(e.Name)],
 			PostingSource:      postingSources[strings.ToLower(e.Name)],
@@ -165,8 +166,18 @@ func (h *handler) loadCfgData(ctx context.Context, b *Base, tab string, lang ...
 				HideFromChoice: e.Activity.HideFromChoice,
 			}
 		}
+		standardName, standardID := standardFieldIdentity(e.Kind, true)
 		for _, f := range e.Fields {
-			ev.Fields = append(ev.Fields, toCfgField(f))
+			view := toCfgField(f)
+			// Before numbering is first enabled, Код/Номер is still an ordinary
+			// field with its own ID. Pre-fill the numerator editor from that field
+			// so the form does not submit an empty title and erase its label.
+			if standardID != "" && (f.ID == standardID || e.Numerator == nil && strings.EqualFold(strings.TrimSpace(f.Name), standardName)) {
+				ev.StandardFieldTitle = f.Title
+				ev.StandardFieldTitles = f.Titles
+				view.Standard = e.Numerator != nil && f.ID == standardID
+			}
+			ev.Fields = append(ev.Fields, view)
 		}
 		for _, tp := range e.TableParts {
 			tpv := cfgTablePart{Name: tp.Name}

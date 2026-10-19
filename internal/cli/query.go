@@ -74,6 +74,8 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	jsonOut, _ := cmd.Flags().GetBool("json")
+	showSQL, _ := cmd.Flags().GetBool("sql")
 
 	ctx := context.Background()
 	db, err := bc.OpenDB(ctx)
@@ -97,17 +99,25 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		Dialect:     db.Dialect(),
 	})
 	if err != nil {
+		if showSQL {
+			return fmt.Errorf("compile query: SQL ещё не построен: %w", err)
+		}
 		return fmt.Errorf("compile query: %w", err)
 	}
 
 	limit, _ := cmd.Flags().GetInt("limit")
-	sqlText := compiled.SQL
 	if limit > 0 {
-		sqlText = "SELECT * FROM (" + sqlText + ") _onebase_q LIMIT " + fmt.Sprint(limit)
+		compiled.SQL = "SELECT * FROM (" + compiled.SQL + ") _onebase_q LIMIT " + fmt.Sprint(limit)
+	}
+	if showSQL && !jsonOut {
+		outf("SQL:\n%s\nARGS: %v\n\n", compiled.SQL, compiled.Args)
 	}
 	start := time.Now()
 	rows, cols, err := querylang.Run(ctx, db, &compiled)
 	if err != nil {
+		if showSQL && jsonOut {
+			return fmt.Errorf("SQL:\n%s\nARGS: %v\n\n%w", compiled.SQL, compiled.Args, err)
+		}
 		return err
 	}
 	if rows == nil {
@@ -118,8 +128,6 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	}
 	elapsed := time.Since(start).Round(time.Millisecond)
 
-	jsonOut, _ := cmd.Flags().GetBool("json")
-	showSQL, _ := cmd.Flags().GetBool("sql")
 	out := queryOutput{
 		Columns: cols,
 		Rows:    rows,
@@ -128,16 +136,13 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		Sources: toQuerySourceOutput(compiled.Sources),
 	}
 	if showSQL || jsonOut {
-		out.SQL = sqlText
+		out.SQL = compiled.SQL
 		out.Args = compiled.Args
 	}
 	if jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(out)
-	}
-	if showSQL {
-		outf("SQL:\n%s\nARGS: %v\n\n", sqlText, compiled.Args)
 	}
 	printRowsText(cols, rows)
 	outf("\n%d строк, %s\n", len(rows), elapsed)

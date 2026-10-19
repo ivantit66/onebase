@@ -72,6 +72,12 @@ func elWrapClass(base, nodeID, selectedID string) string {
 	return cls
 }
 
+// elCanvasClass — то же плюс класс растяжки для элемента с заданной высотой:
+// холст обязан показывать ту же геометрию, что нарисует рантайм (#1185).
+func elCanvasClass(base, nodeID, selectedID string, el *metadata.FormElement) string {
+	return elWrapClass(base, nodeID, selectedID) + layoutFillClass(el)
+}
+
 func renderCanvasElement(buf *bytes.Buffer, en *formdoc.ElementNode, selectedID string) {
 	if en == nil || en.El == nil {
 		return
@@ -87,14 +93,17 @@ func renderCanvasElement(buf *bytes.Buffer, en *formdoc.ElementNode, selectedID 
 		if strings.EqualFold(el.Orientation, "horizontal") {
 			groupClass += " fc-group-horizontal"
 		}
-		fmt.Fprintf(buf, `<fieldset class="%s" data-node-id="%s" data-kind="%s"><legend class="fc-pick">%s</legend>`,
-			elWrapClass(groupClass, id, selectedID), id, kind, title)
+		if el.UsesEqualColumns() {
+			groupClass += " ob-equal-columns"
+		}
+		fmt.Fprintf(buf, `<fieldset class="%s" data-node-id="%s" data-kind="%s"%s><legend class="fc-pick">%s</legend>`,
+			elWrapClass(groupClass, id, selectedID), id, kind, groupStyleAttr(el), title)
 		renderCanvasChildren(buf, id, en.Children, selectedID)
 		buf.WriteString(`</fieldset>`)
 
 	case metadata.FormElementPages:
-		fmt.Fprintf(buf, `<div class="%s" data-node-id="%s" data-kind="%s">`,
-			elWrapClass("fc-pages", id, selectedID), id, kind)
+		fmt.Fprintf(buf, `<div class="%s" data-node-id="%s" data-kind="%s"%s>`,
+			elWrapClass("fc-pages", id, selectedID), id, kind, layoutStyleAttr(el))
 		for i, p := range en.Children {
 			renderPageDropZone(buf, id, i)
 			if p == nil || p.El == nil {
@@ -108,8 +117,8 @@ func renderCanvasElement(buf *bytes.Buffer, en *formdoc.ElementNode, selectedID 
 				continue
 			}
 			ptitle := html.EscapeString(canvasTitle(p.El.Name, p.El.TitleMap, p.El.Title))
-			fmt.Fprintf(buf, `<div class="%s" data-node-id="%s" data-kind="%s"><div class="fc-tab fc-pick">%s</div>`,
-				elWrapClass("fc-page", p.NodeID, selectedID), p.NodeID, html.EscapeString(string(p.El.Kind)), ptitle)
+			fmt.Fprintf(buf, `<div class="%s" data-node-id="%s" data-kind="%s"%s><div class="fc-tab fc-pick">%s</div>`,
+				elWrapClass("fc-page", p.NodeID, selectedID), p.NodeID, html.EscapeString(string(p.El.Kind)), layoutStyleAttr(p.El), ptitle)
 			renderCanvasChildren(buf, p.NodeID, p.Children, selectedID)
 			buf.WriteString(`</div>`)
 		}
@@ -120,8 +129,8 @@ func renderCanvasElement(buf *bytes.Buffer, en *formdoc.ElementNode, selectedID 
 		// Отдельная страница (вне набора СтраницыФормы — редкий случай) рисуется
 		// как блок-вкладка со своими детьми, а не как «неизвестный» элемент.
 		// Страницы внутри СтраницыФормы рендерит ветка Pages выше.
-		fmt.Fprintf(buf, `<div class="%s" data-node-id="%s" data-kind="%s"><div class="fc-tab fc-pick">%s</div>`,
-			elWrapClass("fc-page", id, selectedID), id, kind, title)
+		fmt.Fprintf(buf, `<div class="%s" data-node-id="%s" data-kind="%s"%s><div class="fc-tab fc-pick">%s</div>`,
+			elWrapClass("fc-page", id, selectedID), id, kind, layoutStyleAttr(el), title)
 		renderCanvasChildren(buf, id, en.Children, selectedID)
 		buf.WriteString(`</div>`)
 
@@ -138,18 +147,18 @@ func renderCanvasElement(buf *bytes.Buffer, en *formdoc.ElementNode, selectedID 
 		if el.ReadOnly {
 			ro = " readonly"
 		}
-		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"><label>%s%s</label><input type="text" disabled%s placeholder="%s"></div>`,
-			elWrapClass("fc-field", id, selectedID), id, kind, title, req, ro, html.EscapeString(field))
+		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"%s><label>%s%s</label><input type="text" disabled%s placeholder="%s"></div>`,
+			elCanvasClass("fc-field", id, selectedID, el), id, kind, layoutStyleAttr(el), title, req, ro, html.EscapeString(field))
 
 	case metadata.FormElementCheckbox:
-		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"><input type="checkbox" disabled> <span>%s</span></div>`,
-			elWrapClass("fc-check", id, selectedID), id, kind, title)
+		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"%s><input type="checkbox" disabled> <span>%s</span></div>`,
+			elWrapClass("fc-check", id, selectedID), id, kind, layoutStyleAttr(el), title)
 
 	case metadata.FormElementSwitch:
 		// Переключатель: набор radio (или список) по Options/перечислению. Выбор
 		// кликом по обёртке; значения и представление правятся в панели свойств.
-		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"><label>%s</label><div class="fc-switch">`,
-			elWrapClass("fc-field", id, selectedID), id, kind, title)
+		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"%s><label>%s</label><div class="fc-switch">`,
+			elWrapClass("fc-field", id, selectedID), id, kind, layoutStyleAttr(el), title)
 		if len(el.Options) == 0 {
 			buf.WriteString(`<span class="fc-cols-empty">значения по перечислению (или задайте в свойствах)</span>`)
 		}
@@ -159,29 +168,43 @@ func renderCanvasElement(buf *bytes.Buffer, en *formdoc.ElementNode, selectedID 
 		buf.WriteString(`</div></div>`)
 
 	case metadata.FormElementLabel:
-		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s">%s</div>`,
-			elWrapClass("fc-label", id, selectedID), id, kind, title)
+		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"%s>%s</div>`,
+			elWrapClass("fc-label", id, selectedID), id, kind, layoutStyleAttr(el), title)
 
 	case metadata.FormElementButton:
-		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"><button type="button" disabled>%s</button></div>`,
-			elWrapClass("fc-btn", id, selectedID), id, kind, title)
+		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"%s><button type="button" disabled%s>%s</button></div>`,
+			elWrapClass("fc-btn", id, selectedID), id, kind, layoutStyleAttr(el), styleAttr(metadata.FormElementBackgroundCSS(el)), title)
 
 	case metadata.FormElementPicture:
-		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"><div class="fc-pic">&#x1F5BC; %s</div></div>`,
-			elWrapClass("fc-pic-wrap", id, selectedID), id, kind, title)
+		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"%s>`,
+			elWrapClass("fc-pic-wrap", id, selectedID), id, kind, alignStyleAttr(el))
+		if el.Picture != "" {
+			fmt.Fprintf(buf, `<img class="fc-pic-image" src="/static/forms/%s" alt="%s"%s>`,
+				html.EscapeString(el.Picture), title, pictureSizeStyleAttr(el))
+		} else {
+			fmt.Fprintf(buf, `<div class="fc-pic">&#x1F5BC; %s</div>`, title)
+		}
+		buf.WriteString(`</div>`)
 
 	case metadata.FormElementTable:
-		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"><div class="fc-tp">▦ %s</div></div>`,
-			elWrapClass("fc-table", id, selectedID), id, kind, title)
+		fmt.Fprintf(buf, `<div class="%s fc-pick" data-node-id="%s" data-kind="%s"%s><div class="fc-tp">▦ %s</div></div>`,
+			elWrapClass("fc-table", id, selectedID), id, kind, layoutStyleAttr(el), title)
 
 	case metadata.FormElementTablePart:
 		// Заголовок ТЧ (выбирается кликом) + колонки-дети kind:Колонка, каждая со
 		// своим node-id, чтобы их можно было выбирать/удалять/переставлять и
 		// редактировать состав (follow-up #164, слайсы D1/D2).
-		fmt.Fprintf(buf, `<div class="%s" data-node-id="%s" data-kind="%s"><div class="fc-tp fc-pick">▦ %s</div><div class="fc-cols">`,
-			elWrapClass("fc-table", id, selectedID), id, kind, title)
-		if len(en.Children) == 0 {
-			buf.WriteString(`<span class="fc-cols-empty">колонки не выбраны</span>`)
+		fmt.Fprintf(buf, `<div class="%s" data-node-id="%s" data-kind="%s"%s><div class="fc-tp fc-pick">▦ %s</div><div class="fc-cols">`,
+			elWrapClass("fc-table", id, selectedID), id, kind, layoutStyleAttr(el), title)
+		// Без явных колонок рантайм показывает ВСЕ реквизиты ТЧ
+		// (managedTPColumnPlan: «ничего не выбрано» = «показать всё»). Холст
+		// метаданных сущности не знает и перечислить их не может, но обязан
+		// назвать состояние верно: прежнее «колонки не выбраны» читалось как
+		// «ТЧ пустая» и толкало поставить галочку — а первая же галочка
+		// переключает смысл с «все» на «только отмеченные» и убирает
+		// остальные колонки (#1123).
+		if !hasColumnChild(en) {
+			buf.WriteString(`<span class="fc-cols-empty" title="Состав не задан: показываются все реквизиты табличной части. Задать состав явно можно галочками в свойствах.">все колонки (по умолчанию)</span>`)
 		}
 		for _, c := range en.Children {
 			if c == nil || c.El == nil {
@@ -198,15 +221,35 @@ func renderCanvasElement(buf *bytes.Buffer, en *formdoc.ElementNode, selectedID 
 	}
 }
 
+// hasColumnChild — есть ли у элемента хоть один ребёнок kind: Колонка. Считаем
+// именно их, а не всех детей: рантайм (managedTPColumnPlan) переходит в режим
+// «показать выбранное» тоже только по ним, и холст обязан говорить о том же
+// признаке, иначе состояния разъезжаются на ТЧ с посторонним ребёнком.
+func hasColumnChild(en *formdoc.ElementNode) bool {
+	for _, c := range en.Children {
+		if c != nil && c.El != nil && c.El.Kind == metadata.FormElementColumn {
+			return true
+		}
+	}
+	return false
+}
+
 // canvasElementInfo — редактируемые поля элемента для панели свойств клиента.
 // Плоская карта node-id → info отдаётся вместе с холстом, чтобы клик по элементу
 // открывал панель без повторного парсинга YAML в браузере.
 type canvasElementInfo struct {
-	NodeID    string `json:"nodeId"`
-	Kind      string `json:"kind"`
-	Name      string `json:"name"`
-	TitleRU   string `json:"titleRu"`
-	DataPath  string `json:"dataPath"`
+	NodeID   string `json:"nodeId"`
+	ID       string `json:"id"`
+	Kind     string `json:"kind"`
+	Name     string `json:"name"`
+	TitleRU  string `json:"titleRu"`
+	DataPath string `json:"dataPath"`
+	// Field — ключ `field:` элемента. Рантайм сопоставляет колонку реквизиту по
+	// data_path, field ИЛИ имени (managedTPFieldIndexForColumn), а в модель
+	// холста поле не попадало вовсе — поэтому колонка, объявленная как
+	// `field: Цена`, в рантайме была видна, а в панели свойств стояла без
+	// галочки (#1123).
+	Field     string `json:"field"`
 	Required  bool   `json:"required"`
 	ReadOnly  bool   `json:"readonly"`
 	Hint      string `json:"hint"`
@@ -216,22 +259,47 @@ type canvasElementInfo struct {
 	InputMask string `json:"inputMask"` // ПолеВвода: шаблон ввода (#763), подставляет разделители
 	FileType  bool   `json:"fileType"`  // ПолеВвода: Type == "file" (файловое поле)
 	Picture   string `json:"picture"`   // ПолеКартинки: путь к картинке
-	Width     int    `json:"width"`     // ПолеКартинки: ширина
-	Height    int    `json:"height"`    // ПолеКартинки: высота
-	NoGrid    bool   `json:"noGrid"`    // ТабличнаяЧасть: простая таблица вместо SlickGrid
+	// Раскладка элемента (#1185): размер внешнего блока в px и выравнивание в
+	// контейнере. У ПолеКартинки width/height по-прежнему означают размер самой
+	// картинки — панель свойств подписывает их там иначе.
+	Width   int    `json:"width"`
+	Height  int    `json:"height"`
+	HAlign  string `json:"halign"`
+	VAlign  string `json:"valign"`
+	NoGrid  bool   `json:"noGrid"`  // ТабличнаяЧасть: простая таблица вместо SlickGrid
+	AutoSum bool   `json:"autoSum"` // ТабличнаяЧасть: Сумма = Количество × Цена по именам колонок
 	// Orientation — раскладка детей контейнера: ""/"vertical" или "horizontal".
-	Orientation string `json:"orientation"`
+	Orientation  string `json:"orientation"`
+	EqualColumns bool   `json:"equalColumns"`
+	// Background — безопасный CSS-цвет фона ГруппаФормы и Кнопка. В модель передаётся
+	// исходное значение: панель редактирует YAML, а canvas/preview применяют
+	// его только через FormElementBackgroundCSS.
+	Background string `json:"background"`
 	// События элемента (batch B1): имя события → имя процедуры в .form.os.
 	Events map[string]string `json:"events"`
 	// Набор значений Переключателя/ПолеСписка (batch C1).
 	Options []canvasOption `json:"options"`
 	View    string         `json:"view"` // radio|select
+	// ChoiceFilter сохраняет порядок условий и тип boolean-литерала для
+	// визуального редактора plan 170/C. Указатель отличает value:false от
+	// отсутствующего value (режим from).
+	ChoiceFilter []canvasChoiceCondition `json:"choiceFilter"`
 }
 
 // canvasOption — значение набора Переключателя для редактора опций (C1).
 type canvasOption struct {
 	Value string `json:"value"`
 	Label string `json:"label"`
+}
+
+type canvasChoiceCondition struct {
+	Field string `json:"field"`
+	Op    string `json:"op"`
+	From  string `json:"from,omitempty"`
+	Value *bool  `json:"value,omitempty"`
+	// Ref — постоянная ссылка (UUID записи справочника), третий вид
+	// источника (#1820).
+	Ref string `json:"ref,omitempty"`
 }
 
 // canvasModel разворачивает дерево формы в плоскую карту node-id → редактируемые
@@ -247,23 +315,30 @@ func canvasModel(doc *formdoc.Doc) (map[string]canvasElementInfo, error) {
 		for _, en := range ens {
 			el := en.El
 			info := canvasElementInfo{
-				NodeID:      en.NodeID,
-				Kind:        string(el.Kind),
-				Name:        el.Name,
-				DataPath:    el.DataPath,
-				Required:    el.Required,
-				ReadOnly:    el.ReadOnly,
-				Hint:        el.Hint,
-				Container:   el.IsContainer(),
-				Mask:        el.Mask,
-				InputMask:   el.InputMask,
-				FileType:    el.Type == "file",
-				Picture:     el.Picture,
-				Width:       el.Width,
-				Height:      el.Height,
-				NoGrid:      el.NoGrid,
-				Orientation: el.Orientation,
-				View:        el.View,
+				NodeID:       en.NodeID,
+				ID:           el.ID,
+				Kind:         string(el.Kind),
+				Name:         el.Name,
+				DataPath:     el.DataPath,
+				Field:        el.FieldName,
+				Required:     el.Required,
+				ReadOnly:     el.ReadOnly,
+				Hint:         el.Hint,
+				Container:    el.IsContainer(),
+				Mask:         el.Mask,
+				InputMask:    el.InputMask,
+				FileType:     el.Type == "file",
+				Picture:      el.Picture,
+				Width:        el.Width,
+				Height:       el.Height,
+				HAlign:       el.HorizontalAlign,
+				VAlign:       el.VerticalAlign,
+				NoGrid:       el.NoGrid,
+				AutoSum:      el.AutoSum,
+				Orientation:  el.Orientation,
+				EqualColumns: el.EqualColumns,
+				Background:   el.Background,
+				View:         el.View,
 			}
 			if el.TitleMap != nil {
 				info.TitleRU = el.TitleMap["ru"]
@@ -276,6 +351,15 @@ func canvasModel(doc *formdoc.Doc) (map[string]canvasElementInfo, error) {
 			}
 			for _, o := range el.Options {
 				info.Options = append(info.Options, canvasOption{Value: o.ValueStr(), Label: o.Label()})
+			}
+			for _, condition := range el.ChoiceFilter {
+				info.ChoiceFilter = append(info.ChoiceFilter, canvasChoiceCondition{
+					Field: condition.Field,
+					Op:    string(condition.Op),
+					From:  condition.From,
+					Value: condition.Value,
+					Ref:   condition.Ref,
+				})
 			}
 			m[en.NodeID] = info
 			walk(en.Children)

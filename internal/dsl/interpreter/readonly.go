@@ -204,7 +204,7 @@ func protectReadOnlySeen(ec *execCtx, value any, traversal *readOnlyTraversal, d
 		if value == nil {
 			return value
 		}
-		return &Ref{UUID: value.UUID, Name: value.Name, Type: value.Type}
+		return &Ref{UUID: value.UUID, Name: value.Name, Type: value.Type, Kind: value.Kind}
 	case *DSLError:
 		if value == nil {
 			return value
@@ -307,6 +307,35 @@ func (r *readOnlyThis) Fields() []string {
 		return fields.Fields()
 	}
 	return nil
+}
+
+// GetDynamicField пропускает индексное чтение только для обёрнутых объектов,
+// которые сами дали opt-in DynamicFieldAccessor (#1560): в условии точки
+// останова ЭтотОбъект["Поле"] обязан работать так же, как чтение через точку,
+// иначе условие падает с «не поддерживает индексное чтение». Значение всё
+// равно проходит через мембрану, ok=false для неизвестного реквизита
+// сохраняется — вызывающий код отличит его от пустого известного.
+func (r *readOnlyThis) GetDynamicField(name string) (any, bool) {
+	if r == nil || r.inner == nil {
+		return nil, false
+	}
+	acc, ok := r.inner.(DynamicFieldAccessor)
+	if !ok {
+		return nil, false
+	}
+	value, ok := acc.GetDynamicField(name)
+	if !ok {
+		return nil, false
+	}
+	return protectReadOnly(r.ec, value), true
+}
+
+// SetDynamicField запись через мембрану не проводит — как Set: фиксирует
+// нарушение read-only и сообщает вызывающему коду об отказе. Оптимин на
+// индексное чтение не открывает путь к записи.
+func (r *readOnlyThis) SetDynamicField(name string, _ any) bool {
+	r.refuse("изменение реквизита «" + name + "» индексной записью")
+	return false
 }
 
 func (r *readOnlyThis) String() string {

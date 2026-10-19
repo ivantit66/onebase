@@ -1,0 +1,68 @@
+---
+name: merge-shepherd
+description: Безопасное слияние PR ivanarama/onebase через детерминированный pipelinectl с fallback для base-sync, конфликтов и recovery.
+---
+
+# MERGE
+
+Обрабатывай только PR с `ship` и без `hold`/`needs-decision`. Решение человека
+старше сохранённого состояния.
+
+## Обычный путь
+
+Если задача PromptPilot уже содержит команду `pipelinectl`, выполни её. При
+ручном запуске используй Python окружения PromptPilot:
+
+```powershell
+python -m promptpilot.project_pipeline --config pipelinectl.json next merge
+```
+
+Команду `next <stage>` запускай ровно один раз за прогон. Если средство
+исполнения вернуло идентификатор продолжающегося процесса (session/cell ID),
+исходный процесс уже работает: опрашивай/возобновляй только этот идентификатор
+до терминального результата. Пустой вывод или истечение локального окна ожидания
+не разрешают запускать второй `next` параллельно.
+
+Разбери поле `action`:
+
+- `merge` — выполни показанную команду `complete merge` с неизменённым `lease`;
+- `cleanup` — merge уже подтверждён GitHub; выполни показанную команду
+  `complete merge-cleanup` с неизменённым `lease`, не вызывая merge повторно;
+- `wait` или `empty` — ничего не меняй и закончи `ИТОГ: ПУСТО`;
+- `fallback` — полностью прочитай
+  [references/legacy-protocol.md](references/legacy-protocol.md) и продолжи по нему;
+- `error` — закончи `ИТОГ: НЕ СМОГ`, не обходя отказ вручную.
+
+`pipelinectl` берёт быстрый путь только для `CLEAN` PR с каноничным обычным
+review-proof, новым trusted `ship` и зелёными обязательными проверками. Перед
+compare-and-merge он повторяет стабильный GraphQL snapshot, HEAD/label/proof и
+CI-гейты. Base-sync, carry, legacy re-ship, конфликт и recovery всегда уходят в
+полную процедуру.
+
+До merge CLI публикует точный `pp:merge-cleanup-intent`. Если процесс оборвался
+после успешного merge, следующий запуск находит intent вне списка открытых PR и
+возвращает `action=cleanup`: проверяет серверный `MergedEvent`, снимает
+`in-work` только с закрытых same-repository issues, идемпотентно завершает
+PLAN-handoff, снимает `ship` и последним пишет `pp:merge-cleanup-done`.
+Обычная очередь не продолжается, пока самый ранний intent не завершён или не
+передан человеку как неоднозначный. Это recovery служебной транзакции, а не
+повторное содержательное ревью и не второй merge.
+
+После успешного merge `pipelinectl` также распознаёт plan-PR с соседними
+строками `Plan-Issue: #N` и `Plan-Path: Plans/NNN-slug.md`. Он проверяет, что
+issue открыта и сохраняет `approved` + `plan-in-review`, публикует
+`pp:plan-ready`, добавляет `ready-fix`, затем снимает `plan-in-review` и
+`needs-decision`. Это завершение уже одобренного PLAN-handoff, а не новое
+решение за человека. Если post-merge handoff не завершился, сообщи настоящий
+блокер: влитый план не даёт права молча оставить issue вне FIX.
+
+Только `action=completed` означает полезную мутацию и допускает
+`ИТОГ: ГОТОВО`. Наблюдение или ожидание без изменений — `ИТОГ: ПУСТО`.
+Узкий `ИТОГ: УСТАРЕЛО (gate-fallback: <точный error/reason>)` допустим только
+для trusted targeted-fallback envelope, где `next` уже выполнен, а единственный
+структурированный `gate-fallback` доказал смену exact target, HEAD,
+executable-позиции или истечение target lease **до первой внешней мутации**.
+Ошибка команды,
+авторизации, JSON, API/лимита, CI либо отказ после intent/другой начатой
+транзакции — это не `УСТАРЕЛО`; используй настоящий `НЕ СМОГ` или
+`НУЖЕН ЧЕЛОВЕК`.

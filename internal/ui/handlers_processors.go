@@ -37,12 +37,14 @@ func (s *Server) processorForm(w http.ResponseWriter, r *http.Request) {
 	if mf := proc.ManagedForm(); mf != nil {
 		virtEntity := processorVirtualEntity(proc)
 		paramValues := map[string]string{}
+		tablePartRows := map[string][]map[string]any{}
 		for _, p := range proc.Params {
 			if p.Default != nil {
 				paramValues[p.Name] = fmt.Sprintf("%v", paramDefaultValue(p.Default, p.Type))
 			}
 		}
 		refOpts, _ := s.loadInitialRefOptions(r.Context(), virtEntity, paramValues)
+		tpRefOpts, _ := s.loadInitialTPRefOptions(r.Context(), virtEntity, tablePartRows)
 		enumOpts := s.loadEnumOptions(virtEntity, s.resolveLang(r))
 		for k, v := range processorEnumOptions(proc) {
 			enumOpts[k] = v
@@ -54,13 +56,16 @@ func (s *Server) processorForm(w http.ResponseWriter, r *http.Request) {
 			"Values":        paramValues,
 			"RefOptions":    refOpts,
 			"EnumOptions":   enumOpts,
-			"TPRefOptions":  map[string]map[string][]map[string]any{},
+			"TPRefOptions":  tpRefOpts,
 			"TPEnumLabels":  map[string]map[string]map[string]string{},
 			"TPEnumOrder":   map[string]map[string][]string{},
 			"TPRefMeta":     map[string]map[string]any{},
-			"TablePartRows": map[string][]map[string]any{},
+			"TablePartRows": tablePartRows,
 		}
 		s.setProcessorManagedContext(r, data, proc)
+		// choice_filter полей формы обработки — тем же серверным путём, что у
+		// форм сущностей: отфильтрованный первый список и контекст подбора (#1840).
+		s.applyProcessorChoiceFilters(r.Context(), proc, data)
 		s.prepareManagedFormData(r.Context(), data, mf)
 		s.render(w, r, "page-managed-form", data)
 		return
@@ -101,6 +106,43 @@ func (s *Server) loadProcessorRefOpts(ctx context.Context, params []processorpkg
 		opts[p.Name] = rows
 	}
 	return opts
+}
+
+// missingRequiredParams возвращает подписи незаполненных обязательных
+// параметров через запятую (пусто — все на месте). Пустая строка и отсутствие
+// ключа равнозначны: файловый параметр после перезагрузки формы приходит именно
+// пустым.
+func missingRequiredParams(params []processorpkg.Param, values map[string]any) string {
+	var missing []string
+	for _, p := range params {
+		if !p.Required {
+			continue
+		}
+		v, ok := values[p.Name]
+		if !ok || paramValueBlank(v) {
+			label := p.Label
+			if label == "" {
+				label = p.Name
+			}
+			missing = append(missing, "«"+label+"»")
+		}
+	}
+	return strings.Join(missing, ", ")
+}
+
+// paramValueBlank — «значение не заполнено». Строка разбирается БЕЗ Sprintf:
+// у параметра типа file здесь лежит всё содержимое загруженного файла (до
+// предела вложений, полсотни мегабайт), и «%v» копировал бы его целиком ради
+// проверки на пустоту.
+func paramValueBlank(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(t) == ""
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", t)) == ""
+	}
 }
 
 func processorRefEntities(params []processorpkg.Param) map[string]string {
@@ -191,6 +233,34 @@ func (s *Server) processorRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Обязательные параметры проверяются ДО запуска. Атрибут required в форме
+	// останавливает обычного пользователя, но он же — подсказка, а не гарантия:
+	// запрос приходит и мимо браузера. Отказ здесь заодно даёт человеческий
+	// текст: прикладной модуль сообщал бы про ключ командной строки тому, кто
+	// стоит перед формой.
+	if missing := missingRequiredParams(proc.Params, paramValues); missing != "" {
+		opStatus = "error"
+		runErr := s.tr(s.resolveLang(r), "Заполните обязательные поля:") + " " + missing +
+			". " + s.tr(s.resolveLang(r), "Файл после запуска приходится прикладывать заново — вернуть его в поле браузер не позволяет.")
+		// Отказ рисуется ТОЙ ЖЕ формой, с которой пришли, — как и все прочие
+		// отказы запуска ниже. У обработки с управляемой формой page-processor
+		// не её страница: человек получил бы вместо своей формы автогенерённую,
+		// без введённых значений и без табличных частей.
+		if proc.ManagedForm() != nil {
+			s.renderProcessorManagedResult(w, r, proc, paramValues, nil, runErr)
+			return
+		}
+		refOpts := s.loadProcessorRefOpts(r.Context(), proc.Params, paramValues)
+		s.render(w, r, "page-processor", map[string]any{
+			"Processor":          proc,
+			"ParamValues":        paramValues,
+			"RefOptions":         refOpts,
+			"ProcessorRefEntity": processorRefEntities(proc.Params),
+			"RunError":           runErr,
+		})
+		return
+	}
+
 	procDecl := s.reg.GetProcedure(proc.Name, "Выполнить")
 	if procDecl == nil {
 		runErr := s.tr(s.resolveLang(r), "Процедура Выполнить() не найдена в src/") + strings.ToLower(string([]rune(proc.Name)[:1])) + string([]rune(proc.Name)[1:]) + ".proc.os"
@@ -256,11 +326,13 @@ func (s *Server) processorRun(w http.ResponseWriter, r *http.Request) {
 // renderProcessorManagedResult renders processor results via managed form template.
 func (s *Server) renderProcessorManagedResult(w http.ResponseWriter, r *http.Request, proc *processorpkg.Processor, paramValues map[string]any, messages []string, runErr string) {
 	virtEntity := processorVirtualEntity(proc)
+	tablePartRows := map[string][]map[string]any{}
 	strValues := make(map[string]string, len(paramValues))
 	for k, v := range paramValues {
 		strValues[k] = fmt.Sprintf("%v", v)
 	}
 	refOpts, _ := s.loadInitialRefOptions(r.Context(), virtEntity, strValues)
+	tpRefOpts, _ := s.loadInitialTPRefOptions(r.Context(), virtEntity, tablePartRows)
 	enumOpts := s.loadEnumOptions(virtEntity, s.resolveLang(r))
 	for k, v := range processorEnumOptions(proc) {
 		enumOpts[k] = v
@@ -272,16 +344,17 @@ func (s *Server) renderProcessorManagedResult(w http.ResponseWriter, r *http.Req
 		"Values":        strValues,
 		"RefOptions":    refOpts,
 		"EnumOptions":   enumOpts,
-		"TPRefOptions":  map[string]map[string][]map[string]any{},
+		"TPRefOptions":  tpRefOpts,
 		"TPEnumLabels":  map[string]map[string]map[string]string{},
 		"TPEnumOrder":   map[string]map[string][]string{},
 		"TPRefMeta":     map[string]map[string]any{},
-		"TablePartRows": map[string][]map[string]any{},
+		"TablePartRows": tablePartRows,
 		"Messages":      messages,
 		"RunError":      runErr,
 		"Ran":           true,
 	}
 	s.setProcessorManagedContext(r, data, proc)
+	s.applyProcessorChoiceFilters(r.Context(), proc, data)
 	s.prepareManagedFormData(r.Context(), data, proc.ManagedForm())
 	s.render(w, r, "page-managed-form", data)
 }
@@ -380,7 +453,16 @@ var processorServiceFields = []string{
 	"_event",
 	"_kind",
 	"_id",
+	"_close_intent_id",
+	"_close_epoch",
+	"_close_issued_at",
+	"_close_reason",
+	"_close_mode",
+	"_close_client",
+	"_close_schema",
 	"_pick_result",
+	"_pick_query",
+	"_pick_fields",
 	"_tp",
 	"_tp_selected",
 	"_tp_row",
@@ -752,43 +834,9 @@ func processorFormTableRowsFromRequest(
 
 // processorVirtualEntity создаёт виртуальную Entity из параметров обработки,
 // чтобы managed-форма могла рендерить поля через стандартный pipeline.
+// Построение — в processor.VirtualEntity: та же сущность нужна onebase check.
 func processorVirtualEntity(proc *processorpkg.Processor) *metadata.Entity {
-	fields := make([]metadata.Field, 0, len(proc.Params))
-	for _, p := range proc.Params {
-		f := metadata.Field{
-			Name:   p.Name,
-			Title:  p.Label,
-			Titles: p.Labels,
-		}
-		switch {
-		case p.Type == "string", p.Type == "text":
-			f.Type = metadata.FieldTypeString
-		case p.Type == "number":
-			f.Type = metadata.FieldTypeNumber
-		case p.Type == "date":
-			f.Type = metadata.FieldTypeDate
-		case p.Type == "bool":
-			f.Type = metadata.FieldTypeBool
-		case p.Type == "choice":
-			enumName := "_" + p.Name + "_choice"
-			f.Type = metadata.FieldType("enum:" + enumName)
-			f.EnumName = enumName
-		case strings.HasPrefix(p.Type, "reference:"):
-			f.Type = metadata.FieldType("reference:" + strings.TrimPrefix(p.Type, "reference:"))
-			f.RefEntity = strings.TrimPrefix(p.Type, "reference:")
-		default:
-			f.Type = metadata.FieldTypeString
-		}
-		fields = append(fields, f)
-	}
-	return &metadata.Entity{
-		Name:       proc.Name,
-		Title:      proc.Title,
-		Titles:     proc.Titles,
-		Kind:       metadata.KindCatalog,
-		Fields:     fields,
-		TableParts: proc.TableParts,
-	}
+	return proc.VirtualEntity()
 }
 
 // processorEnumOptions возвращает synthetic enum options для choice-параметров
@@ -807,10 +855,29 @@ func processorEnumOptions(proc *processorpkg.Processor) map[string][]EnumOption 
 	return opts
 }
 
+// boolParamTrue — значения параметра `bool`, читаемые как истина.
+//
+// Регистр не важен и русские литералы обязательны: параметр приходит не только
+// из чекбокса формы, но и из `procrun --set Флаг=Истина`, а «Истина» — самое
+// естественное значение для русскоязычного DSL. Раньше набор был `true`, `on`,
+// `1` и `да`, поэтому `--set Флаг=Истина` молча давал Ложь, и обработка
+// пропускала ветку, которую человек включал (#1437).
+//
+// Всё остальное, включая произвольный текст, по-прежнему ложь: строгий отказ на
+// нераспознанное значение меняет поведение существующих конфигураций и вынесен
+// в отдельное продуктовое решение.
+var boolParamTrue = map[string]bool{
+	"true":   true,
+	"on":     true,
+	"1":      true,
+	"да":     true,
+	"истина": true,
+}
+
 func parseParamValue(s, typ string) any {
 	if typ == "bool" {
 		// Чекбокс: значение приходит в форме только когда флажок установлен.
-		return s == "true" || s == "on" || s == "1" || strings.EqualFold(s, "да")
+		return boolParamTrue[strings.ToLower(s)]
 	}
 	if s == "" {
 		return nil

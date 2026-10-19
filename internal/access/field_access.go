@@ -98,6 +98,25 @@ func FieldDecisions(u *auth.User, kind, entity string, meta *metadata.Entity) ma
 			}
 		}
 	}
+	// Реквизит с признаком ПДн (pii: true) — кандидат ВСЕГДА, даже если ни одна
+	// роль про него ничего не сказала. Признак ставит конфигуратор у самого поля,
+	// и роль, которая промолчала, должна получить маску, а не полное значение:
+	// иначе новый реквизит с телефоном открыт всем, пока про него не вспомнили в
+	// каждой роли по отдельности. Явный `read: full` в роли по-прежнему открывает
+	// значение — это осознанное решение, а не умолчание.
+	pii := map[string]bool{}
+	if meta != nil {
+		for _, f := range meta.Fields {
+			if !f.PII {
+				continue
+			}
+			k := fieldKey(f.Name)
+			pii[k] = true
+			if _, ok := candidates[k]; !ok {
+				candidates[k] = f.Name
+			}
+		}
+	}
 	out := map[string]FieldDecision{}
 	for k, name := range candidates {
 		var best *FieldDecision
@@ -105,6 +124,17 @@ func FieldDecisions(u *auth.User, kind, entity string, meta *metadata.Entity) ma
 		for _, role := range readingRoles {
 			pol, ok := lookupFieldPolicy(role.Permissions.FieldAccess.Policies(kind, entity), k)
 			if !ok {
+				if pii[k] {
+					// Роль читает объект и НЕ высказалась о ПДн-поле: маска по
+					// умолчанию (mask_all — не раскрывает ни значения, ни длины).
+					// Роль голосует «маскировать», а не «показать целиком».
+					dec := FieldDecision{Strategy: FieldMaskAll}
+					if best == nil || lessRestrictive(dec, *best) {
+						d := dec
+						best = &d
+					}
+					continue
+				}
 				full = true
 				break
 			}
@@ -338,6 +368,35 @@ func toDisplayString(v any) string {
 	default:
 		return fmt.Sprintf("%v", v)
 	}
+}
+
+// MaskedEmptyFillable reports whether a write may fill a protected field whose
+// stored value the user sees as empty. Under a mask_* strategy an empty value
+// is shown empty, so it hides nothing: accepting the user's value discloses
+// nothing and lets a masked role fill a field of an already saved object (a
+// document created by code and opened for completion). A filled value is never
+// writable. hide is excluded: a hidden field shows nothing either way, so
+// accepting the write would tell the role whether it was empty.
+//
+// A submitted value that carries the mask bullet is the mask the form showed,
+// not data: it never fills anything (otherwise the literal "••••••" would be
+// stored once a form round-trip had masked a value the user typed).
+func MaskedEmptyFillable(decision FieldDecision, stored, submitted any) bool {
+	if LooksMasked(submitted) {
+		return false
+	}
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(decision.Strategy)), "mask_") {
+		return false
+	}
+	shown := MaskValue(decision.Strategy, decision.Keep, stored)
+	return shown == nil || shown == ""
+}
+
+// LooksMasked reports whether a value carries the mask bullet, i.e. it is (or
+// contains) a mask produced by MaskValue rather than user data.
+func LooksMasked(v any) bool {
+	s, ok := v.(string)
+	return ok && strings.Contains(s, maskBullet)
 }
 
 func maskTail(s string, keep int) string {

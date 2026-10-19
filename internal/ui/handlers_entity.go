@@ -21,11 +21,43 @@ import (
 	"github.com/ivantit66/onebase/internal/dsl/interpreter"
 	"github.com/ivantit66/onebase/internal/entityservice"
 	"github.com/ivantit66/onebase/internal/exchange"
+	"github.com/ivantit66/onebase/internal/i18n/i18nerr"
 	"github.com/ivantit66/onebase/internal/metadata"
 	"github.com/ivantit66/onebase/internal/runtime"
 	"github.com/ivantit66/onebase/internal/storage"
 	"github.com/ivantit66/onebase/internal/webhook"
 )
+
+type basedOnAction struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
+
+// basedOnActions returns only receivers the current user may create. The
+// browser gets ready-to-use relative URLs, but the selected source ID stays in
+// the row and is appended only when the user invokes the command.
+func (s *Server) basedOnActions(r *http.Request, source *metadata.Entity, lang string) []basedOnAction {
+	if source == nil {
+		return nil
+	}
+	receivers := s.reg.ReceiversOf(source.Name)
+	actions := make([]basedOnAction, 0, len(receivers))
+	for _, receiver := range receivers {
+		if receiver == nil || !s.can(r, string(receiver.Kind), receiver.Name, "write") {
+			continue
+		}
+		actions = append(actions, basedOnAction{
+			Label: receiver.DisplayName(lang),
+			URL: fmt.Sprintf(
+				"/ui/%s/%s/new?based_on=%s",
+				strings.ToLower(string(receiver.Kind)),
+				url.PathEscape(strings.ToLower(receiver.Name)),
+				url.QueryEscape(source.Name),
+			),
+		})
+	}
+	return actions
+}
 
 func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	entity := s.getEntity(w, r)
@@ -43,6 +75,23 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	}
 
 	view := r.URL.Query().Get("view")
+	// tree проходит мимо нормализации: иерархический вид открывается по
+	// ?view=tree, но персистентно не сохраняется — его выбирают заново.
+	if view != "list" && view != "tiles" && view != "tree" {
+		view = "" // неизвестное значение трактуем как отсутствие выбора
+	}
+	// Явный выбор вида запоминается по пользователю и сущности (#1485);
+	// открытие без параметра восстанавливает сохранённый вид. Иерархический
+	// вид (tree) персистентно не сохраняется — это отдельный контракт.
+	viewUser := auth.UserFromContext(r.Context())
+	if viewUser != nil && viewUser.Login != "" && (view == "list" || view == "tiles") {
+		_ = s.store.SaveListViewUserSettings(r.Context(), entity.Name, viewUser.Login, view)
+	}
+	if view == "" && viewUser != nil && viewUser.Login != "" {
+		if saved, err := s.store.GetListViewUserSettings(r.Context(), entity.Name, viewUser.Login); err == nil {
+			view = saved
+		}
+	}
 	treeView := entity.Hierarchical && view == "tree"
 	tilesView := view == "tiles"
 	feed := !treeView && s.resolveListMode(w, r, entity)
@@ -73,6 +122,14 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	}
 
 	total, _ := s.store.CountList(r.Context(), entity.Name, entity, params)
+	// Deletions can remove the current page while its URL remains open.
+	// Keep a paginated list usable when its last page disappears.
+	if !feed && params.Limit > 0 && params.Offset >= total {
+		params.Offset = 0
+		if total > 0 {
+			params.Offset = ((total - 1) / params.Limit) * params.Limit
+		}
+	}
 
 	rows, err := s.store.List(r.Context(), entity.Name, entity, params)
 	if err != nil {
@@ -139,6 +196,8 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 		"PrevPage":         page - 1,
 		"NextPage":         page + 1,
 		"EnumLabels":       s.buildEnumLabels(entity, lang),
+		"BasedOnActions":   s.basedOnActions(r, entity, lang),
+		"RequestURI":       r.URL.RequestURI(),
 	})
 }
 
@@ -333,7 +392,7 @@ func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 		folderOpts = s.loadFolderOptions(r.Context(), entity, values["parent_id"])
 	}
 	refOptions, _ := s.loadInitialRefOptions(r.Context(), entity, values)
-	tpRefOpts, _ := s.loadInitialTPRefOptions(r.Context(), entity, tablePartRows)
+	tpRefOpts, _ := s.loadInitialTPRefOptions(r.Context(), entity, tablePartRows, values)
 	s.renderEntityForm(w, r, "object", map[string]any{
 		"Entity":        entity,
 		"IsNew":         true,
@@ -517,6 +576,13 @@ func fieldKeyForForm(entity *metadata.Entity, lowerKey string) string {
 	return lowerKey
 }
 
+// dateInputLayout — значение поля <input type="datetime-local"> вместе с
+// секундами (поле рисуется со step="1"). Без секунд форма держала дату с
+// точностью до минуты: «Записать» молча отрезал секунды от даты документа,
+// переставляя документы внутри минуты (МоментВремени, ФИФО, остатки на момент),
+// а сверка формы с базой считала только что открытую форму изменённой.
+const dateInputLayout = "2006-01-02T15:04:05"
+
 // formatFieldValueForInput приводит значение к браузерному представлению с
 // учётом типа метаданных. SQLite возвращает bool как int64 и date как string,
 // поэтому fmt.Sprint без типа превращал true в "1" и ломал datetime-local.
@@ -538,7 +604,7 @@ func formatUntypedValueForInput(v any) string {
 		return ""
 	}
 	if t, ok := v.(time.Time); ok {
-		return t.In(time.Local).Format("2006-01-02T15:04")
+		return t.In(time.Local).Format(dateInputLayout)
 	}
 	if ref, ok := v.(interface{ GetRefUUID() string }); ok {
 		if s := ref.GetRefUUID(); s != "" {
@@ -553,7 +619,7 @@ func formatDateValueForInput(v any) string {
 		return ""
 	}
 	if t, ok := v.(time.Time); ok {
-		return t.In(time.Local).Format("2006-01-02T15:04")
+		return t.In(time.Local).Format(dateInputLayout)
 	}
 	raw, ok := v.(string)
 	if !ok || strings.TrimSpace(raw) == "" {
@@ -568,12 +634,12 @@ func formatDateValueForInput(v any) string {
 		"2006-01-02T15:04", "2006-01-02",
 	} {
 		if parsed, err := time.Parse(layout, raw); err == nil {
-			return parsed.In(time.Local).Format("2006-01-02T15:04")
+			return parsed.In(time.Local).Format(dateInputLayout)
 		}
 	}
 	if len(raw) >= 10 {
 		if parsed, err := time.ParseInLocation("2006-01-02", raw[:10], time.Local); err == nil {
-			return parsed.Format("2006-01-02T15:04")
+			return parsed.Format(dateInputLayout)
 		}
 	}
 	return raw
@@ -590,6 +656,107 @@ func formatDateValueForInput(v any) string {
 //
 // Возвращает (nil,...,false) если запрос отклонён (нет прав / ошибка парсинга);
 // в этом случае ответ уже записан в w.
+// dropAdminOnlyFields убирает из присланных значений поля, которые форма
+// объявила editable_admin_only, когда запись ведёт не администратор.
+// Возвращает имена отброшенных полей — по ним удобно писать тесты и, при
+// необходимости, журналировать попытку.
+func dropAdminOnlyFields(form *metadata.FormModule, fields map[string]any, admin bool) []string {
+	if form == nil || admin {
+		return nil
+	}
+	var dropped []string
+	form.Walk(func(el *metadata.FormElement) bool {
+		if el == nil || !el.EditableAdminOnly {
+			return true
+		}
+		name := formElementFieldName(el.DataPath)
+		if name == "" {
+			return true
+		}
+		found := false
+		for key := range fields {
+			if strings.EqualFold(key, name) {
+				delete(fields, key)
+				dropped = append(dropped, key)
+				found = true
+			}
+		}
+		// Служебный ключ объекта (parent_id, is_folder) в entity.Fields не
+		// объявлен: formToFields его не приносит, и удалять в карте нечего.
+		// Вернуть его всё равно обязаны — иначе подделанное значение доедет до
+		// объекта следующим mergeSubmittedEntityServiceFields, и запрет, который
+		// форма показала запертым контролом, снимался бы обычным POST
+		// неадминистратора. Запрет серверный: disabled в браузере защитой не
+		// считается.
+		if !found && isEntityServiceFormKey(name) {
+			dropped = append(dropped, name)
+		}
+		return true
+	})
+	return dropped
+}
+
+// entityServiceFormKeys — служебные ключи объекта, которые submit принимает из
+// формы помимо entity.Fields: их переносит mergeSubmittedEntityServiceFields.
+// Список один и тот же для переноса и для серверного запрета — иначе
+// editable_admin_only разъехался бы с тем, что форма реально принимает, и
+// запрет на одном ключе молча не действовал бы.
+var entityServiceFormKeys = []string{"parent_id", "is_folder"}
+
+// isEntityServiceFormKey — имя элемента формы совпало со служебным ключом
+// объекта. Регистронезависимо: data_path пишут и «Объект.parent_id», и
+// «Объект.Parent_ID».
+func isEntityServiceFormKey(name string) bool {
+	for _, key := range entityServiceFormKeys {
+		if strings.EqualFold(key, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// removeSubmittedFormFields removes rejected values from every parsed POST map.
+// Default restoration must treat these fields as absent, including multipart
+// form events, rather than interpreting a forged value as an explicit submit.
+func removeSubmittedFormFields(r *http.Request, names []string) {
+	for _, name := range names {
+		for key := range r.Form {
+			if strings.EqualFold(key, name) {
+				delete(r.Form, key)
+			}
+		}
+		for key := range r.PostForm {
+			if strings.EqualFold(key, name) {
+				delete(r.PostForm, key)
+			}
+		}
+		if r.MultipartForm != nil {
+			for key := range r.MultipartForm.Value {
+				if strings.EqualFold(key, name) {
+					delete(r.MultipartForm.Value, key)
+				}
+			}
+			for key := range r.MultipartForm.File {
+				if strings.EqualFold(key, name) {
+					delete(r.MultipartForm.File, key)
+				}
+			}
+		}
+	}
+}
+
+// formElementFieldName — реквизит записи из двухсегментного data_path
+// «Объект.<Реквизит>». Для пути другой формы возвращает пустую строку:
+// колонку табличной части и реквизит формы этот путь не запирает, и check
+// такое сочетание отклоняет.
+func formElementFieldName(path string) string {
+	parts := strings.Split(strings.TrimSpace(path), ".")
+	if len(parts) != 2 || !strings.EqualFold(strings.TrimSpace(parts[0]), "Объект") {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
+}
+
 func (s *Server) parseSubmitForm(w http.ResponseWriter, r *http.Request, entity *metadata.Entity, existingID *uuid.UUID) (
 	obj *runtime.Object, fields map[string]any, tpRows map[string][]map[string]any, action string, ok bool,
 ) {
@@ -613,7 +780,7 @@ func (s *Server) parseSubmitForm(w http.ResponseWriter, r *http.Request, entity 
 		var parseErr error
 		tpRows, parseErr = parseTablePartRowsForManagedForm(r, entity, form, true)
 		if parseErr != nil {
-			s.renderObjectFormBadRequest(w, r, entity, existingID == nil, parseErr.Error(), tpRows)
+			s.renderObjectFormBadRequest(w, r, entity, existingID == nil, s.errText(r, parseErr), tpRows)
 			return
 		}
 		// ValueTable attributes are form-local and are not persisted by
@@ -622,7 +789,7 @@ func (s *Server) parseSubmitForm(w http.ResponseWriter, r *http.Request, entity 
 		// through the hooks; Save still writes only entity.TableParts.
 		valueTables, parseErr := parseValueTableRowsForManagedForm(r, form, entity, true)
 		if parseErr != nil {
-			s.renderObjectFormBadRequest(w, r, entity, existingID == nil, parseErr.Error(), tpRows)
+			s.renderObjectFormBadRequest(w, r, entity, existingID == nil, s.errText(r, parseErr), tpRows)
 			return
 		}
 		for name, rows := range valueTables {
@@ -632,7 +799,7 @@ func (s *Server) parseSubmitForm(w http.ResponseWriter, r *http.Request, entity 
 		var parseErr error
 		tpRows, parseErr = parseTablePartRows(r, entity)
 		if parseErr != nil {
-			s.renderObjectFormBadRequest(w, r, entity, existingID == nil, parseErr.Error(), tpRows)
+			s.renderObjectFormBadRequest(w, r, entity, existingID == nil, s.errText(r, parseErr), tpRows)
 			return
 		}
 	}
@@ -646,21 +813,14 @@ func (s *Server) parseSubmitForm(w http.ResponseWriter, r *http.Request, entity 
 		s.renderObjectFormBadRequest(w, r, entity, existingID == nil, fieldsErr.Error(), tpRows)
 		return
 	}
+	// editable_admin_only: значения запертых полей отбрасываем ЗДЕСЬ, на сервере.
+	// Разметка запрета — подсказка интерфейсу, а не защита: POST её не
+	// спрашивает, и без этого запрет снимался бы подделанной формой или любым
+	// клиентом. Удаляем ключ и из полей объекта, и из признаков отправки:
+	// у существующей записи остаётся прежнее значение, у новой — умолчание.
+	removeSubmittedFormFields(r, dropAdminOnlyFields(form, fields, s.isAdmin(r)))
 
-	if entity.Hierarchical {
-		// Только если ключи реально пришли в теле. Авто-форма их рендерит
-		// (templates.go), управляемая — нет: безусловное чтение выбрасывало
-		// элемент в корень и снимало признак группы при каждой записи из
-		// managed-формы. Не пришли — восстановятся из БД вместе с прочими
-		// неприсланными полями.
-		submitted := submittedFormKeys(r)
-		if formKeySubmitted(submitted, "parent_id") {
-			fields["parent_id"] = r.FormValue("parent_id") //nolint:gosec // G120: предел тела ставит вызывающий обработчик; gosec видит только присваивание r.Body в той же функции
-		}
-		if formKeySubmitted(submitted, "is_folder") {
-			fields["is_folder"] = r.FormValue("is_folder") == "true" //nolint:gosec // G120: предел тела ставит вызывающий обработчик; gosec видит только присваивание r.Body в той же функции
-		}
-	}
+	mergeSubmittedEntityServiceFields(r, entity, fields)
 
 	// Объект для new строится через NewObject+Set (ключи нормализуются в lowercase
 	// — историческое поведение submit). Для existing — прямое присваивание Fields,
@@ -672,6 +832,17 @@ func (s *Server) parseSubmitForm(w http.ResponseWriter, r *http.Request, entity 
 			obj.Set(k, v)
 		}
 		obj.TablePartRows = tpRows
+		// Реквизиты, которых на управляемой форме не было, до сюда не доходят
+		// вовсе — их значением обязано стать то, что вычислил GET (#1189).
+		newRes, err := s.applyDefaultsToUnsubmittedFields(r, entity, form, obj)
+		if err != nil {
+			s.renderObjectFormError(w, r, entity, true, err.Error(), newRes.DSLMessages, tpRows)
+			return
+		}
+		if newRes.DSLError != "" {
+			s.renderObjectFormError(w, r, entity, true, newRes.DSLError, newRes.DSLMessages, tpRows)
+			return
+		}
 	} else {
 		obj = &runtime.Object{
 			Type:          entity.Name,
@@ -691,14 +862,58 @@ func (s *Server) parseSubmitForm(w http.ResponseWriter, r *http.Request, entity 
 	return
 }
 
+// mergeSubmittedEntityServiceFields keeps the HTML-submit and close-intent
+// object builders in parity for platform-owned fields which are not declared
+// in entity.Fields. Missing keys remain missing and are restored from storage
+// for an existing partial managed form.
+func mergeSubmittedEntityServiceFields(r *http.Request, entity *metadata.Entity, fields map[string]any) {
+	if r == nil || entity == nil || fields == nil || !entity.Hierarchical {
+		return
+	}
+	submitted := submittedFormKeys(r)
+	for _, key := range entityServiceFormKeys {
+		if !formKeySubmitted(submitted, key) {
+			continue
+		}
+		switch key {
+		case "parent_id":
+			fields[key] = r.FormValue(key) //nolint:gosec // caller applies the entity-specific body limit
+		case "is_folder":
+			fields[key] = r.FormValue(key) == "true" //nolint:gosec // caller applies the entity-specific body limit
+		}
+	}
+}
+
 // renderObjectFormError перерисовывает форму объекта с баннером ошибки — когда
 // серверный хук формы (ПередЗаписью/ПриЗаписи) отклонил запись через
 // ВызватьИсключение. Контекст совпадает с веткой DSLError в submit/submitEdit.
 func (s *Server) renderObjectFormError(w http.ResponseWriter, r *http.Request, entity *metadata.Entity, isNew bool, errMsg string, msgs []string, tpRows map[string][]map[string]any) {
 	values := formValues(r, entity)
-	tablePartRows := serializeTablePartRowsForEntity(tpRows, entity, pickManagedForm(entity, "object"))
+	managedForm := pickManagedForm(entity, "object")
+	// Form attributes are not entity fields, so formValues deliberately omits
+	// them. On a validation error keep every posted scalar attribute for the
+	// retry instead of clearing unrelated user input from the rendered form.
+	submitted := submittedFormKeys(r)
+	if managedForm != nil {
+		for _, attr := range managedForm.Attributes {
+			if !formAttrIsScalar(attr) || !formKeySubmitted(submitted, attr.Name) {
+				continue
+			}
+			if _, isEntityField := entityFieldByName(entity, attr.Name); isEntityField {
+				continue
+			}
+			values[attr.Name] = r.FormValue(attr.Name) //nolint:gosec // G120: предел тела ставит вызывающий обработчик; gosec видит только присваивание r.Body в той же функции
+		}
+	}
+	if !isNew {
+		// A failed edit remains the same edit. Preserve the optimistic-lock
+		// token and object identity so a retry cannot silently degrade to an
+		// unversioned write and managed events keep their document context.
+		values["_version"] = r.FormValue("_version") //nolint:gosec // G120: предел тела ставит вызывающий обработчик; gosec видит только присваивание r.Body в той же функции
+	}
+	tablePartRows := serializeTablePartRowsForEntity(tpRows, entity, managedForm)
 	refOptions, _ := s.loadInitialRefOptions(r.Context(), entity, values)
-	tpRefOpts, _ := s.loadInitialTPRefOptions(r.Context(), entity, tablePartRows)
+	tpRefOpts, _ := s.loadInitialTPRefOptions(r.Context(), entity, tablePartRows, values)
 	lang := s.resolveLang(r)
 	data := map[string]any{
 		"Entity":        entity,
@@ -714,12 +929,18 @@ func (s *Server) renderObjectFormError(w http.ResponseWriter, r *http.Request, e
 		"TPRefMeta":     tpRefMeta(entity),
 		"TablePartRows": tablePartRows,
 		"CopySourceID":  copySourceIDForRender(r),
+		// A failed native submit renders a new document, but its values are still
+		// unsaved. Bootstrap the managed dirty guard so Close cannot discard them
+		// silently merely because the browser navigation reset JS state.
+		"InitialDirty": true,
 	}
 	if entity.Hierarchical {
 		data["FolderOptions"] = s.loadFolderOptions(r.Context(), entity, values["parent_id"])
 	}
 	if isNew {
 		data["IsPopup"] = r.FormValue("_popup") == "1" //nolint:gosec // G120: предел тела ставит вызывающий обработчик; gosec видит только присваивание r.Body в той же функции
+	} else {
+		data["ID"] = chi.URLParam(r, "id")
 	}
 	s.renderEntityForm(w, r, "object", data)
 }
@@ -730,6 +951,34 @@ func (s *Server) renderObjectFormBadRequest(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadRequest)
 	s.renderObjectFormError(w, r, entity, isNew, errMsg, nil, tpRows)
+}
+
+// An ownership refusal concerns the submitted data, so keep the current attempt
+// for retry instead of reloading the persisted object like a version conflict.
+func (s *Server) renderObjectFormConflict(w http.ResponseWriter, r *http.Request, entity *metadata.Entity, isNew bool, message string, messages []string, tpRows map[string][]map[string]any) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusConflict)
+	s.renderObjectFormError(w, r, entity, isNew, message, messages, tpRows)
+}
+
+func (s *Server) renderManagedObjectSaveFailure(w http.ResponseWriter, r *http.Request, entity *metadata.Entity, isNew bool, obj *runtime.Object, messages []string, saveErr error) {
+	var failure *managedCloseSaveError
+	if !errors.As(saveErr, &failure) {
+		s.serverError(w, r, saveErr)
+		return
+	}
+	switch failure.kind {
+	case managedSaveForbidden:
+		s.renderForbidden(w, r)
+	case managedSaveConflict:
+		s.renderVersionConflict(w, r, entity, obj.ID)
+	case managedSaveOwnershipConflict:
+		s.renderObjectFormConflict(w, r, entity, isNew, failure.message, messages, obj.TablePartRows)
+	case managedSaveValidation:
+		s.renderObjectFormBadRequest(w, r, entity, isNew, failure.message, obj.TablePartRows)
+	default:
+		s.renderObjectFormError(w, r, entity, isNew, failure.message, messages, obj.TablePartRows)
+	}
 }
 
 func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
@@ -745,19 +994,42 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if form := pickManagedForm(entity, "object"); form != nil {
+	managedForm := pickManagedForm(entity, "object")
+	if managedForm != nil {
+		s.mergeFormAttrValues(r.Context(), r, managedForm, entity, obj)
 		if strings.TrimSpace(r.FormValue(copySourceFormField)) != "" {
 			if failed := s.restoreManagedCopyState(
-				w, r, entity, form, fields, obj.Fields, obj.TablePartRows,
+				w, r, entity, managedForm, fields, obj.Fields, obj.TablePartRows,
 			); failed {
 				return
 			}
 		} else {
-			if err := s.restoreUneditableTableParts(r.Context(), entity, form, uuid.Nil, obj.TablePartRows, true); err != nil {
+			if err := s.restoreUneditableTableParts(r.Context(), r, entity, managedForm, uuid.Nil, obj.TablePartRows, true); err != nil {
 				s.serverError(w, r, err)
 				return
 			}
 		}
+		// Managed HTML submit and close-intent share one result-returning save
+		// layer. Transport differs (redirect/render vs JSON), write semantics do not.
+		hookMsgs, _, saveErr := s.saveManagedObject(r, entity, managedForm, obj, true, action, false, nil)
+		if saveErr != nil {
+			s.renderManagedObjectSaveFailure(w, r, entity, true, obj, hookMsgs, saveErr)
+			return
+		}
+		if r.FormValue("_popup") == "1" {
+			s.renderPopupSaved(w, obj.ID.String(), firstStringField(fields, entity))
+			return
+		}
+		if action == "post_and_close" {
+			http.Redirect(w, r, listURL(entity), http.StatusSeeOther)
+			return
+		}
+		http.Redirect(w, r, "/ui/"+strings.ToLower(string(entity.Kind))+"/"+entity.Name+"/"+obj.ID.String(), http.StatusSeeOther)
+		return
+	}
+	if err := s.validateManagedFormRequired(r, entity, managedForm, obj.Fields); err != nil {
+		s.renderObjectFormBadRequest(w, r, entity, true, err.Error(), obj.TablePartRows)
+		return
 	}
 	var hookMsgs []string
 	var formHookErr error
@@ -800,6 +1072,14 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 			s.renderObjectFormError(w, r, entity, true, formHookErr.Error(), hookMsgs, obj.TablePartRows)
 			return
 		}
+		if errors.Is(err, storage.ErrInfoRegOwnershipConflict) {
+			s.renderObjectFormConflict(w, r, entity, true, s.errText(r, err), hookMsgs, obj.TablePartRows)
+			return
+		}
+		if errors.Is(err, storage.ErrCodeDuplicate) {
+			s.renderObjectFormBadRequest(w, r, entity, true, s.errText(r, err), obj.TablePartRows)
+			return
+		}
 		s.serverError(w, r, err)
 		return
 	}
@@ -807,7 +1087,7 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		values := formValues(r, entity)
 		tablePartRows := serializeTablePartRowsForEntity(tpRows, entity, pickManagedForm(entity, "object"))
 		refOptions, _ := s.loadInitialRefOptions(r.Context(), entity, values)
-		tpRefOpts, _ := s.loadInitialTPRefOptions(r.Context(), entity, tablePartRows)
+		tpRefOpts, _ := s.loadInitialTPRefOptions(r.Context(), entity, tablePartRows, values)
 		langErr := s.resolveLang(r)
 		var fOpts []map[string]any
 		if entity.Hierarchical {
@@ -905,6 +1185,11 @@ func (s *Server) refOptionsJSON(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	choice, err := s.resolveChoiceRequest(r, ent)
+	if err != nil {
+		http.Error(w, "invalid choice context: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	limit := refPickerDefaultLimit
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		n, err := strconv.Atoi(raw)
@@ -926,18 +1211,57 @@ func (s *Server) refOptionsJSON(w http.ResponseWriter, r *http.Request) {
 		}
 		offset = n
 	}
-	items, total, err := s.referenceOptionsPage(r.Context(), ent, r.URL.Query().Get("q"), limit, offset)
-	if err != nil {
-		s.serverError(w, r, err)
-		return
+	// Отбор подбора подчинённого справочника: «реквизит → значение» приезжает
+	// параметром flt от клиента (см. data-ref-filter в разметке). У подчинённого
+	// справочника без владельца выдача ПУСТА — и это ответ, а не ошибка: сначала
+	// контрагент, потом договор. Связи параметров выбора (план 170) едут своим
+	// контрактом choice и в flt не попадают.
+	base, fltOK := refOptionsFilters(ent, r.URL.Query().Get("flt"), storage.ListParams{})
+	items := make([]map[string]any, 0)
+	total := 0
+	if fltOK && (choice == nil || !choice.Empty) {
+		extra := base
+		if choice != nil {
+			extra.ChoicePredicates = choice.Predicates
+			extra.IncludeFolders = choice.Folders
+		}
+		items, total, err = s.referenceOptionsPageWithParams(r.Context(), ent, r.URL.Query().Get("q"), limit, offset, extra)
+		if err != nil {
+			s.serverError(w, r, err)
+			return
+		}
 	}
+	// Тексты просмотра, зависящие от КОНТЕКСТА подбора (choice_preview_proc):
+	// вызывающая форма прислала, например, филиал звонка, и памятка по
+	// направлению собирается уже под него. Ошибка процедуры не валит подбор:
+	// выбирать элемент оператору нужно в любом случае, а текст справа —
+	// вспомогательный (что сломалось, видно в логе сервера).
+	// Динамический preview (choice_preview_proc) обслуживается POST /page:
+	// GET остаётся статическим и обратно совместимым (план 168, инвариант 1).
+	previewField := canonicalChoicePreviewField(ent)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	response := map[string]any{
 		"items":  items,
 		"total":  total,
 		"limit":  limit,
 		"offset": offset,
-	})
+	}
+	response["preview"] = previewField
+	if choice != nil && choice.Selected != nil {
+		allowed := false
+		if !choice.Empty && fltOK {
+			check := base
+			check.ChoicePredicates = choice.Predicates
+			check.IncludeFolders = choice.Folders
+			allowed, err = s.choiceSelectedAllowedWithParams(r.Context(), ent, *choice.Selected, check)
+			if err != nil {
+				s.serverError(w, r, err)
+				return
+			}
+		}
+		response["selected_allowed"] = allowed
+	}
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 type treeChildrenResponse struct {
@@ -1220,7 +1544,7 @@ func (s *Server) formEdit(w http.ResponseWriter, r *http.Request) {
 		}
 		if f.Type == metadata.FieldTypeDate {
 			if t, ok := v.(time.Time); ok {
-				vals[f.Name] = t.In(time.Local).Format("2006-01-02T15:04")
+				vals[f.Name] = t.In(time.Local).Format(dateInputLayout)
 				continue
 			}
 			// SQLite returns dates as strings — parse and reformat for <input type="datetime-local">
@@ -1235,7 +1559,7 @@ func (s *Server) formEdit(w http.ResponseWriter, r *http.Request) {
 					"2006-01-02T15:04", "2006-01-02",
 				} {
 					if t, err2 := time.Parse(layout, s2); err2 == nil {
-						vals[f.Name] = t.In(time.Local).Format("2006-01-02T15:04")
+						vals[f.Name] = t.In(time.Local).Format(dateInputLayout)
 						parsed = true
 						break
 					}
@@ -1243,7 +1567,7 @@ func (s *Server) formEdit(w http.ResponseWriter, r *http.Request) {
 				// Last resort: extract just the date prefix
 				if !parsed && len(s2) >= 10 {
 					if t, err2 := time.ParseInLocation("2006-01-02", s2[:10], time.Local); err2 == nil {
-						vals[f.Name] = t.Format("2006-01-02T15:04")
+						vals[f.Name] = t.Format(dateInputLayout)
 					}
 				}
 				continue
@@ -1310,7 +1634,7 @@ func (s *Server) formEdit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	refOptions, _ := s.loadInitialRefOptions(r.Context(), entity, vals)
-	tpRefOpts, _ := s.loadInitialTPRefOptions(r.Context(), entity, tpRows)
+	tpRefOpts, _ := s.loadInitialTPRefOptions(r.Context(), entity, tpRows, vals)
 
 	editUser := auth.UserFromContext(r.Context())
 	editIsAdmin := editUser == nil || editUser.IsAdmin
@@ -1350,10 +1674,9 @@ func (s *Server) formEdit(w http.ResponseWriter, r *http.Request) {
 		// nil, если этапы не объявлены или поле-этап под маской ПДн.
 		"StageRoute": s.buildStageRoute(r, entity, stageCurrentValue(entity, vals)),
 		"Error":      buildEditError(r),
-		// Receivers — список сущностей, у которых в based_on указан текущий
-		// объект. Шаблон рисует выпадающую кнопку «Ввести на основании ▾» —
-		// аналог одноимённой команды в 1С:Предприятие.
-		"Receivers": s.reg.ReceiversOf(entity.Name),
+		// BasedOnActions — только доступные по write сущности-приёмники.
+		// Тот же серверный фильтр используется списком источника.
+		"BasedOnActions": s.basedOnActions(r, entity, langEdit),
 	})
 }
 
@@ -1399,16 +1722,28 @@ func (s *Server) submitEdit(w http.ResponseWriter, r *http.Request) {
 	// Строго до маскирования, проверок построчного доступа и хуков формы: и
 	// предикаты, и DSL должны видеть реальные данные, а ПередЗаписью — иметь
 	// возможность перекрыть восстановленное значение.
-	if form := pickManagedForm(entity, "object"); form != nil {
-		if err := s.restoreUnsubmittedFields(r.Context(), r, entity, form, id, obj.Fields); err != nil {
+	managedForm := pickManagedForm(entity, "object")
+	if managedForm != nil {
+		if err := s.restoreUnsubmittedFields(r.Context(), r, entity, managedForm, id, obj.Fields); err != nil {
 			s.serverError(w, r, err)
 			return
 		}
-		if err := s.restoreUneditableTableParts(r.Context(), entity, form, id, obj.TablePartRows, true); err != nil {
+		if err := s.restoreUneditableTableParts(r.Context(), r, entity, managedForm, id, obj.TablePartRows, true); err != nil {
 			s.serverError(w, r, err)
 			return
 		}
-		tpRows = obj.TablePartRows
+		s.mergeFormAttrValues(r.Context(), r, managedForm, entity, obj)
+		hookMsgs, _, saveErr := s.saveManagedObject(r, entity, managedForm, obj, false, action, false, nil)
+		if saveErr != nil {
+			s.renderManagedObjectSaveFailure(w, r, entity, false, obj, hookMsgs, saveErr)
+			return
+		}
+		if action == "post_and_close" {
+			http.Redirect(w, r, listURL(entity), http.StatusSeeOther)
+			return
+		}
+		http.Redirect(w, r, "/ui/"+strings.ToLower(string(entity.Kind))+"/"+entity.Name+"/"+id.String(), http.StatusSeeOther)
+		return
 	}
 	// План 88: не дать пользователю, видящему поле лишь замаскированным,
 	// перезаписать реальное значение маской/подделкой — восстанавливаем
@@ -1421,6 +1756,10 @@ func (s *Server) submitEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if entity.Posting && (action == "post" || action == "post_and_close") && !s.rowAllowedUpdate(w, r, entity, "post", id, obj.Fields) {
+		return
+	}
+	if err := s.validateManagedFormRequired(r, entity, managedForm, obj.Fields); err != nil {
+		s.renderObjectFormBadRequest(w, r, entity, false, err.Error(), obj.TablePartRows)
 		return
 	}
 
@@ -1458,6 +1797,14 @@ func (s *Server) submitEdit(w http.ResponseWriter, r *http.Request) {
 			s.renderVersionConflict(w, r, entity, id)
 			return
 		}
+		if errors.Is(err, storage.ErrInfoRegOwnershipConflict) {
+			s.renderObjectFormConflict(w, r, entity, false, s.errText(r, err), hookMsgs, obj.TablePartRows)
+			return
+		}
+		if errors.Is(err, storage.ErrCodeDuplicate) {
+			s.renderObjectFormBadRequest(w, r, entity, false, s.errText(r, err), obj.TablePartRows)
+			return
+		}
 		s.serverError(w, r, err)
 		return
 	}
@@ -1465,7 +1812,8 @@ func (s *Server) submitEdit(w http.ResponseWriter, r *http.Request) {
 		values := formValues(r, entity)
 		tablePartRows := serializeTablePartRowsForEntity(tpRows, entity, pickManagedForm(entity, "object"))
 		refOptions, _ := s.loadInitialRefOptions(r.Context(), entity, values)
-		tpRefOpts2, _ := s.loadInitialTPRefOptions(r.Context(), entity, tablePartRows)
+		tpRefOpts2, _ := s.loadInitialTPRefOptions(r.Context(), entity, tablePartRows, values)
+		values["_version"] = r.FormValue("_version")
 		langSubmit := s.resolveLang(r)
 		var fOpts []map[string]any
 		if entity.Hierarchical {
@@ -1473,6 +1821,7 @@ func (s *Server) submitEdit(w http.ResponseWriter, r *http.Request) {
 		}
 		s.renderEntityForm(w, r, "object", map[string]any{
 			"Entity":       entity,
+			"ID":           id.String(),
 			"IsNew":        false,
 			"Error":        result.DSLError,
 			"Values":       values,
@@ -1548,7 +1897,7 @@ func (s *Server) postDocument(w http.ResponseWriter, r *http.Request) {
 	// the document through ЭтотОбъект.Ссылка. Reassert both reserved aliases
 	// after copying metadata fields; legacy configurations may contain a field
 	// with the same spelling, and it must not replace the platform pseudo-field.
-	selfRef := &interpreter.Ref{UUID: id.String(), Type: entity.Name}
+	selfRef := &interpreter.Ref{UUID: id.String(), Type: entity.Name, Kind: entity.Kind}
 	obj.Set("Ссылка", selfRef)
 	obj.Set("reference", selfRef)
 	tpRows := make(map[string][]map[string]any)
@@ -1579,7 +1928,7 @@ func (s *Server) postDocument(w http.ResponseWriter, r *http.Request) {
 	// берёт pg_advisory_xact_lock до чтения остатков — раньше хук работал вне
 	// транзакции и блокировки вырождались в no-op. Коллектор освобождает
 	// внутрипроцессные мьютексы после коммита/отката.
-	lockCollector := runtime.NewLockCollector()
+	lockCollector := runtime.NewLockCollectorIn(r.Context())
 	defer lockCollector.ReleaseAll()
 	var hookErrMsg string
 	if err := s.store.WithTxScope(r.Context(), func(ctx context.Context) error {
@@ -1624,6 +1973,10 @@ func (s *Server) postDocument(w http.ResponseWriter, r *http.Request) {
 		// Регистрация изменения в планах обмена (план 86) — в той же транзакции.
 		return exchange.RegisterOnSave(ctx, s.store, s.reg.ExchangePlans(), entity, id, false)
 	}); err != nil {
+		if errors.Is(err, storage.ErrInfoRegOwnershipConflict) {
+			http.Redirect(w, r, docURL+"?posting_error="+url.QueryEscape(s.errText(r, err)), http.StatusSeeOther)
+			return
+		}
 		if hookErrMsg != "" {
 			http.Redirect(w, r, docURL+"?posting_error="+url.QueryEscape(hookErrMsg), http.StatusSeeOther)
 			return
@@ -1673,35 +2026,46 @@ func (s *Server) clearMovements(ctx context.Context, entityName string, id uuid.
 // markForDeletion помечает/снимает пометку на удаление. При пометке проведённого
 // документа сперва отменяет проведение (чистит движения по всем регистрам и
 // снимает posted) — пометка и проведённость взаимоисключающи (как в 1С). Снятие
-// пометки проведение НЕ возвращает. Транзакцию метод не открывает: HTTP-вызовы
-// оборачивают его в store.WithTx, DSL-путь использует живой ctx (как DeleteRef).
+// пометки проведение НЕ возвращает. Весь переход, точный version token и
+// отложенные уведомления объединены WithTxScope: открытая DSL-транзакция
+// переиспользуется, а автономный HTTP/DSL-вызов получает собственную.
 func (s *Server) markForDeletion(ctx context.Context, entity *metadata.Entity, id uuid.UUID, mark bool) error {
-	if mark && entity.Posting {
-		row, err := s.store.GetByID(ctx, entity.Name, id, entity)
+	return s.store.WithTxScope(ctx, func(txCtx context.Context) error {
+		if mark && entity.Posting {
+			row, err := s.store.GetByID(txCtx, entity.Name, id, entity)
+			if err != nil {
+				return err
+			}
+			if asBool(row["posted"]) {
+				if err := s.clearMovements(txCtx, entity.Name, id); err != nil {
+					return err
+				}
+				if err := s.store.SetPosted(txCtx, entity.Name, id, false); err != nil {
+					return err
+				}
+			}
+		}
+		if err := s.store.MarkForDeletion(txCtx, entity.Name, id, mark); err != nil {
+			return err
+		}
+		// Read and publish the token in the same transaction as the mutation.
+		// A post-commit SELECT could observe an unrelated writer and turn its
+		// version into authority for this stale lifecycle.
+		version, err := s.store.EntityVersion(txCtx, entity.Name, id)
 		if err != nil {
 			return err
 		}
-		if asBool(row["posted"]) {
-			if err := s.clearMovements(ctx, entity.Name, id); err != nil {
-				return err
-			}
-			if err := s.store.SetPosted(ctx, entity.Name, id, false); err != nil {
-				return err
-			}
+		entityservice.NotifySaveObserver(txCtx, entity, entityservice.SaveResult{ID: id, Version: version})
+		// Регистрация изменения для планов обмена (план 86): пометка/снятие пометки
+		// на удаление — изменение объекта, распространяем его узлам-получателям.
+		if err := exchange.RegisterOnSave(txCtx, s.store, s.reg.ExchangePlans(), entity, id, mark); err != nil {
+			return err
 		}
-	}
-	if err := s.store.MarkForDeletion(ctx, entity.Name, id, mark); err != nil {
-		return err
-	}
-	// Регистрация изменения для планов обмена (план 86): пометка/снятие пометки
-	// на удаление — изменение объекта, распространяем его узлам-получателям.
-	if err := exchange.RegisterOnSave(ctx, s.store, s.reg.ExchangePlans(), entity, id, mark); err != nil {
-		return err
-	}
-	// Живой список (план 87): пометка меняет вид строки (зачёркивание) → список
-	// перечитывается. Смены владельца нет, before не нужен.
-	s.publishDocChange(ctx, entity, id, "записан", nil)
-	return nil
+		// Живой список (план 87): пометка меняет вид строки (зачёркивание) → список
+		// перечитывается. Смены владельца нет, before не нужен.
+		s.publishDocChange(txCtx, entity, id, "записан", nil)
+		return nil
+	})
 }
 
 // unpostDocument clears movements, sets posted=false and runs
@@ -2090,27 +2454,11 @@ func (s *Server) saveMovements(ctx context.Context, docType string, docID uuid.U
 	return nil
 }
 
-// setPeriodFromFields sets the movements period from the first date field of the document.
+// setPeriodFromFields ставит период движений по дате документа — тем же
+// правилом, что entityservice: у DSL-пути и списка своей копии больше нет,
+// иначе правило «какая дата — дата документа» разъехалось бы между путями.
 func setPeriodFromFields(mc *runtime.MovementsCollector, entity *metadata.Entity, fields map[string]any) {
-	for _, f := range entity.Fields {
-		if f.Type != metadata.FieldTypeDate {
-			continue
-		}
-		// Регистронезависимый поиск: ключи Fields бывают и в PascalCase
-		// (formToFields / GetByID), и в lower-case (после Object.Set).
-		// Прямой fields[f.Name] промахивался на пути submit → period = time.Now().
-		low := strings.ToLower(f.Name)
-		for k, v := range fields {
-			if strings.ToLower(k) != low {
-				continue
-			}
-			if t := runtime.AsTime(v); !t.IsZero() {
-				mc.SetPeriod(t)
-			}
-			break
-		}
-		return
-	}
+	entityservice.SetPeriodFromFields(mc, entity, fields)
 }
 
 // saveTablePartsDirect persists tablepart rows from the provided map (possibly modified by DSL).
@@ -2287,7 +2635,7 @@ func parseManagedTablePartRows(
 func tablePartFieldValue(f metadata.Field, raw string) (any, error) {
 	value, err := typedFormFieldValue(f, raw)
 	if err != nil {
-		return nil, fmt.Errorf("реквизит %q: %v", f.Name, err)
+		return nil, i18nerr.Wrapf(err, "реквизит %q", f.Name)
 	}
 	return value, nil
 }
@@ -2307,7 +2655,15 @@ func typedFormFieldValue(f metadata.Field, raw string) (any, error) {
 		}
 		return number, nil
 	case metadata.FieldTypeBool:
-		return raw == "true", nil
+		switch raw {
+		case "true", "1":
+			return true, nil
+		case "false", "0", "":
+			// Missing unchecked checkboxes are still false.
+			return false, nil
+		default:
+			return nil, i18nerr.Errorf("%q не булево значение", raw)
+		}
 	case metadata.FieldTypeDate:
 		if raw == "" {
 			return nil, nil
@@ -2371,7 +2727,7 @@ func convertManagedTablePartRows(rows []map[string]any, tablePart metadata.Table
 			}
 			value, err := tablePartFieldValue(field, raw)
 			if err != nil {
-				return nil, fmt.Errorf("таблица %q: %w", tablePart.Name, err)
+				return nil, i18nerr.Wrapf(err, "таблица %q", tablePart.Name)
 			}
 			converted[field.Name] = value
 		}
@@ -2475,7 +2831,7 @@ func parseLegacyTablePartRows(r *http.Request, entity *metadata.Entity) (map[str
 					}
 					value, convErr := tablePartFieldValue(f, raw)
 					if convErr != nil {
-						return nil, fmt.Errorf("таблица %q: %w", tp.Name, convErr)
+						return nil, i18nerr.Wrapf(convErr, "таблица %q", tp.Name)
 					}
 					converted[f.Name] = value
 				}
