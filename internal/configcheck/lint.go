@@ -419,6 +419,10 @@ func entityYAMLSchema() *yamlLintSchema {
 		"presentation", "order_by", "choice_preview", "choice_preview_proc",
 		"list_form", "item_form", "based_on", "list_mode", "notify_changes", "list_refresh_on",
 		"fulltext", "search_fields", "detail_panel",
+		// Оба ключа загрузчик читает (metadata.Entity.ListFilters и
+		// NoInteractiveCreate, yaml.go), а в белом списке их не было —
+		// --lint ложно объявлял их неизвестными и «игнорируемыми».
+		"list_filters", "interactive_create",
 	), map[string]*yamlLintSchema{
 		"titles": freeMap(),
 		// item_form принимает и строку (имя реквизита), и запись
