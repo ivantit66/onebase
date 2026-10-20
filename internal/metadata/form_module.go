@@ -734,6 +734,35 @@ type FormListCondition struct {
 	// ролей; пусто — для всех. «Мои записи» нужны оператору, а сотрудник
 	// контроля качества разбирает весь список: одна форма, разный отбор.
 	Roles []string `yaml:"roles,omitempty"`
+	// Query — условие запросом вместо Field/Value: первая колонка результата —
+	// ссылки на записи этой сущности, список показывает только их. Правило
+	// «чьи записи» бывает сложнее одного поля — например, менеджеру задачи по
+	// направлениям из его карточки, остальным — по подразделению. Параметры
+	// &ТекущийПользователь (идентификатор учётки) и &ТекущийЛогин подставляются
+	// сами; как и у @ТекущийПользователь, администратора условие не касается.
+	Query string `yaml:"query,omitempty"`
+	// Removable — отбор по умолчанию: над списком переключатель с подписью
+	// Label, снятый переключатель отключает условие (как «Только активные» в
+	// рабочем списке задач 1С). Без Removable условие снять нельзя.
+	Removable bool              `yaml:"removable,omitempty"`
+	Label     map[string]string `yaml:"label,omitempty"`
+}
+
+// DisplayLabel — подпись переключателя снимаемого отбора на языке lang
+// (ru — запасной), без подписи — «Отбор».
+func (c FormListCondition) DisplayLabel(lang string) string {
+	if v := strings.TrimSpace(c.Label[lang]); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(c.Label["ru"]); v != "" {
+		return v
+	}
+	for _, v := range c.Label {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return "Отбор"
 }
 
 // ListFilterCurrentUser — подстановка «тот, кто смотрит» в значении условия.
