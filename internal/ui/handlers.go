@@ -316,6 +316,7 @@ func (s *Server) loadRefOptionsWithMode(ctx context.Context, entity *metadata.En
 
 func (s *Server) loadInitialRefOptions(ctx context.Context, entity *metadata.Entity, values map[string]string) (map[string][]map[string]any, error) {
 	opts := make(map[string][]map[string]any)
+	dropdown := refDropdownFields(entity)
 	for _, f := range entity.Fields {
 		if f.RefEntity == "" {
 			continue
@@ -326,6 +327,11 @@ func (s *Server) loadInitialRefOptions(ctx context.Context, entity *metadata.Ent
 		}
 		refEntity := s.reg.GetEntity(f.RefEntity)
 		if refEntity == nil {
+			continue
+		}
+		// Список не нужен — нужна только подпись текущего значения (поиск по id).
+		if dropdown != nil && !dropdown[strings.ToLower(f.Name)] {
+			opts[f.Name] = s.appendSelectedRefOptions(ctx, nil, refEntity, []string{values[f.Name]})
 			continue
 		}
 		// Подчинённый справочник (owner:) показывает только элементы своего
@@ -343,6 +349,53 @@ func (s *Server) loadInitialRefOptions(ctx context.Context, entity *metadata.Ent
 		opts[f.Name] = rows
 	}
 	return opts, nil
+}
+
+// refDropdownFields — реквизиты сущности (в нижнем регистре), которые
+// управляемая форма объекта рисует выпадающим списком. nil — управляемой формы
+// нет: авто-форма рисует списком каждое ссылочное поле, предзагрузка нужна всем.
+//
+// Остальным ссылочным реквизитам первая страница справочника не нужна: элемент
+// с choice_dropdown: false шаблон всё равно сводит к текущему значению
+// (selectedRefOptionsOnly), а реквизит без элемента на форме не рисуется вовсе.
+// При этом первая страница большого справочника — полный проход таблицы с
+// сортировкой: сортировка order_by строится через CASE и индекс не использует.
+// У заявки колл-центра поле «Дом» смотрит в адресный классификатор на 2 млн
+// строк, и каждое открытие формы сортировало его ради списка, который тут же
+// выбрасывался, — десятки секунд на холодном кэше.
+//
+// Не нужна она и элементу с id и choice_filter/choice_folders: его варианты
+// считает initialChoiceOptions по id элемента (ManagedChoiceOptions), и шаблон
+// намеренно не откатывается на нефильтрованный справочник. Адрес заявки —
+// ровно такой случай: дом отбирается по улице, улица и город — по филиалу.
+//
+// Поле считается нарисованным общим списком, если хоть один элемент с таким
+// последним сегментом data_path рисует выпадающий список без своего отбора.
+// Сравнение по последнему сегменту, как у шаблона (dpField), — заведомо с
+// запасом: колонка ТЧ с тем же именем лишь сохранит прежнюю предзагрузку.
+func refDropdownFields(entity *metadata.Entity) map[string]bool {
+	form := pickManagedForm(entity, "object")
+	if form == nil {
+		return nil
+	}
+	fields := make(map[string]bool)
+	var walk func([]*metadata.FormElement)
+	walk = func(elements []*metadata.FormElement) {
+		for _, el := range elements {
+			if el == nil {
+				continue
+			}
+			dropdown := el.ChoiceDropdown == nil || *el.ChoiceDropdown
+			// Условие — то же, что у applyChoiceFilters.
+			scoped := strings.TrimSpace(el.ID) != "" && (len(el.ChoiceFilter) > 0 || el.ChoiceFolders)
+			if el.DataPath != "" && dropdown && !scoped {
+				fields[strings.ToLower(formDataPathFieldName(el.DataPath))] = true
+			}
+			walk(el.Children)
+		}
+	}
+	walk(form.Elements)
+	return fields
 }
 
 // loadInitialRefFilterOptions — варианты ссылочных полей панели «Отбор». fields —
